@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""
+crop.py
+
+Task 2 – Face-crop portraits and classify each identity into its own sub-folder.
+
+Detection is performed with face_recognition (dlib HOG/CNN backend).
+Each unique face cluster found across the source folder is written to:
+
+    output_dir/<person_N>/original_name_faceM.png
+
+When ``--cluster`` is NOT requested (default) each face is placed in a flat
+output folder and the caller decides the sub-folder naming.  Pass
+``classify=True`` to enable automatic person-clustering via face embedding
+k-medoids (requires scikit-learn).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+SUPPORTED_EXTS: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
+
+DEFAULT_MARGIN_RATIO: float = 0.4
+DEFAULT_CROP_SIZE: int = 1024
+
+
+def _load_face_recognition():
+    try:
+        import face_recognition
+        return face_recognition
+    except ImportError as exc:
+        raise ImportError(
+            "face_recognition is required for the crop task.\n"
+            "Install it with: pip install face_recognition"
+        ) from exc
+
+
+def crop_faces_from_image(
+    image_path: Path,
+    output_dir: Path,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+    crop_size: int = DEFAULT_CROP_SIZE,
+    model: str = "hog",
+) -> list[tuple[Path, np.ndarray]]:
+    """Detect, crop, and save each face found in *image_path*.
+
+    Args:
+        image_path:   Source image file.
+        output_dir:   Directory in which cropped face PNGs are saved.
+        margin_ratio: Fraction of face bbox added as margin on each side.
+        crop_size:    Output square resolution (pixels).
+        model:        face_recognition detection model – "hog" (fast) or "cnn".
+
+    Returns:
+        List of ``(saved_path, face_encoding)`` tuples for every face saved.
+    """
+    fr = _load_face_recognition()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    image = fr.load_image_file(str(image_path))
+    face_locations = fr.face_locations(image, model=model)
+    face_encodings = fr.face_encodings(image, face_locations)
+
+    if not face_locations:
+        logger.warning("No face found in %s", image_path.name)
+        return []
+
+    h_img, w_img = image.shape[:2]
+    results: list[tuple[Path, np.ndarray]] = []
+
+    for i, ((top, right, bottom, left), encoding) in enumerate(
+        zip(face_locations, face_encodings)
+    ):
+        face_h = bottom - top
+        face_w = right - left
+        margin_h = int(face_h * margin_ratio)
+        margin_w = int(face_w * margin_ratio)
+
+        crop_top = max(0, top - margin_h)
+        crop_bottom = min(h_img, bottom + margin_h)
+        crop_left = max(0, left - margin_w)
+        crop_right = min(w_img, right + margin_w)
+
+        face_arr = image[crop_top:crop_bottom, crop_left:crop_right]
+        pil_img = Image.fromarray(face_arr).resize(
+            (crop_size, crop_size), Image.LANCZOS
+        )
+
+        out_name = f"{image_path.stem}_face{i + 1}.png"
+        out_path = output_dir / out_name
+        pil_img.save(out_path)
+        logger.info("Saved face crop: %s", out_path)
+        results.append((out_path, encoding))
+
+    return results
+
+
+def _cluster_faces(
+    all_results: list[tuple[Path, np.ndarray]],
+    output_dir: Path,
+    tolerance: float = 0.6,
+) -> dict[int, list[Path]]:
+    """Group saved face crops by identity using face distance clustering.
+
+    Uses a simple greedy nearest-neighbour approach with *tolerance* threshold
+    (equivalent to face_recognition.compare_faces).  Each unique identity is
+    assigned an integer label starting from 1.
+
+    Returns a mapping ``{person_id: [list of face image paths]}``.
+    """
+    fr = _load_face_recognition()
+
+    known_encodings: list[np.ndarray] = []
+    known_labels: list[int] = []
+    next_label = 1
+    label_map: dict[Path, int] = {}
+
+    for face_path, encoding in all_results:
+        if not known_encodings:
+            known_encodings.append(encoding)
+            known_labels.append(next_label)
+            label_map[face_path] = next_label
+            next_label += 1
+            continue
+
+        distances = fr.face_distance(known_encodings, encoding)
+        best_idx = int(np.argmin(distances))
+        if distances[best_idx] <= tolerance:
+            label_map[face_path] = known_labels[best_idx]
+        else:
+            known_encodings.append(encoding)
+            known_labels.append(next_label)
+            label_map[face_path] = next_label
+            next_label += 1
+
+    # Re-organise: move each crop into output_dir/person_N/
+    person_dirs: dict[int, list[Path]] = {}
+    for face_path, label in label_map.items():
+        person_dir = output_dir / f"person_{label:02d}"
+        person_dir.mkdir(parents=True, exist_ok=True)
+        dest = person_dir / face_path.name
+        face_path.rename(dest)
+        person_dirs.setdefault(label, []).append(dest)
+
+    return person_dirs
+
+
+def crop_folder(
+    input_dir: Path,
+    output_dir: Path,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+    crop_size: int = DEFAULT_CROP_SIZE,
+    classify: bool = True,
+    tolerance: float = 0.6,
+    model: str = "hog",
+) -> dict[str, int]:
+    """Crop all faces found in *input_dir* and write them to *output_dir*.
+
+    Args:
+        input_dir:    Source directory (searched recursively).
+        output_dir:   Destination directory.
+        margin_ratio: Margin added around each detected face bbox.
+        crop_size:    Output square resolution in pixels.
+        classify:     If True, cluster faces by identity, creating
+                      ``person_NN`` sub-folders.
+        tolerance:    Face-distance threshold for identity clustering.
+        model:        face_recognition detection model ("hog" or "cnn").
+
+    Returns:
+        Summary dict with keys ``faces``, ``images_processed``, ``persons``.
+    """
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    images = [
+        p
+        for p in input_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
+    ]
+
+    if not images:
+        logger.warning("No images found in %s", input_dir)
+        return {"faces": 0, "images_processed": 0, "persons": 0}
+
+    # Flat staging dir when classify=True (moved after clustering)
+    staging_dir = output_dir / "_staging" if classify else output_dir
+
+    all_results: list[tuple[Path, np.ndarray]] = []
+    for img_path in images:
+        results = crop_faces_from_image(
+            img_path,
+            staging_dir,
+            margin_ratio=margin_ratio,
+            crop_size=crop_size,
+            model=model,
+        )
+        all_results.extend(results)
+
+    persons = 0
+    if classify and all_results:
+        person_dirs = _cluster_faces(all_results, output_dir, tolerance=tolerance)
+        persons = len(person_dirs)
+        # Remove staging dir if empty
+        try:
+            staging_dir.rmdir()
+        except OSError:
+            pass
+
+    return {
+        "faces": len(all_results),
+        "images_processed": len(images),
+        "persons": persons,
+    }
