@@ -19,8 +19,13 @@ cache it under ``~/.cache/huggingface/``.
 from __future__ import annotations
 
 import csv
+import json
 import logging
+import shutil
+import tempfile
+import urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import cv2
 import numpy as np
@@ -399,3 +404,221 @@ def _describe_folder_impl(
         described += 1
 
     return {"described": described, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# YouTube support
+# ---------------------------------------------------------------------------
+
+
+def extract_youtube_video_id(youtube_url: str) -> str | None:
+    """Extract the video ID from a YouTube URL.
+
+    Supports the following URL formats:
+
+    * ``https://www.youtube.com/watch?v=VIDEO_ID``
+    * ``https://youtu.be/VIDEO_ID``
+    * ``https://www.youtube.com/shorts/VIDEO_ID``
+    * ``https://www.youtube.com/live/VIDEO_ID``
+
+    Returns:
+        The video ID string, or ``None`` if extraction fails.
+    """
+    try:
+        parsed = urlparse(youtube_url)
+        if parsed.hostname == "youtu.be":
+            return parsed.path.lstrip("/") or None
+        if parsed.hostname and (
+            parsed.hostname == "youtube.com"
+            or parsed.hostname.endswith(".youtube.com")
+        ):
+            if parsed.path == "/watch":
+                return parse_qs(parsed.query).get("v", [None])[0]
+            if parsed.path.startswith("/shorts/"):
+                return parsed.path.split("/shorts/", 1)[1].split("/", 1)[0] or None
+            if parsed.path.startswith("/live/"):
+                return parsed.path.split("/live/", 1)[1].split("/", 1)[0] or None
+        return None
+    except Exception:
+        return None
+
+
+def _validate_youtube_video(api_key: str, video_id: str) -> dict | None:
+    """Validate a YouTube video using the YouTube Data API v3.
+
+    Args:
+        api_key:  YouTube Data API v3 key.
+        video_id: YouTube video ID.
+
+    Returns:
+        A dict with ``snippet`` and ``contentDetails`` keys on success,
+        or ``None`` if the video cannot be found or the request fails.
+    """
+    if not api_key or not video_id:
+        return None
+    api_url = (
+        "https://www.googleapis.com/youtube/v3/videos"
+        f"?part=snippet,contentDetails&id={video_id}&key={api_key}"
+    )
+    try:
+        with urllib.request.urlopen(api_url, timeout=10) as response:
+            payload = response.read().decode("utf-8")
+        data = json.loads(payload)
+        items = data.get("items") or []
+        if not items:
+            return None
+        item = items[0]
+        return {
+            "snippet": item.get("snippet", {}),
+            "contentDetails": item.get("contentDetails", {}),
+        }
+    except Exception as exc:
+        logger.warning("YouTube API validation failed: %s", exc)
+        return None
+
+
+def _download_youtube_video(youtube_url: str, tmp_dir: Path) -> Path | None:
+    """Download a YouTube video to *tmp_dir* using yt-dlp.
+
+    Args:
+        youtube_url: YouTube video URL.
+        tmp_dir:     Temporary directory for the downloaded file.
+
+    Returns:
+        Path to the downloaded video file, or ``None`` on failure.
+
+    Raises:
+        ImportError: If ``yt-dlp`` is not installed.
+    """
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError as exc:
+        raise ImportError(
+            "yt-dlp is required for YouTube input.\n"
+            "Install with: pip install yt-dlp"
+        ) from exc
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        # Prefer mp4 video + m4a audio merged into mp4; fall back to best mp4;
+        # then fall back to any best format (may produce non-mp4 but is still
+        # scanned by suffix in SUPPORTED_VIDEO_EXTS).
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "noplaylist": True,
+        "outtmpl": str(tmp_dir / "%(id)s.%(ext)s"),
+    }
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=True)
+        if not info:
+            return None
+        video_id = info.get("id", "")
+        # Try to find the downloaded file by video ID stem first
+        if video_id:
+            for path in tmp_dir.iterdir():
+                if (
+                    path.is_file()
+                    and path.stem == video_id
+                    and path.suffix.lower() in SUPPORTED_VIDEO_EXTS
+                ):
+                    return path
+        # Fallback: return the first supported video file in tmp_dir
+        for path in tmp_dir.iterdir():
+            if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTS:
+                return path
+        return None
+    except Exception as exc:
+        logger.error("yt-dlp failed to download video: %s", exc)
+        return None
+
+
+def describe_youtube(
+    youtube_url: str,
+    youtube_api_key: str,
+    output_dir: Path | None = None,
+    every_n: int = DEFAULT_EVERY_N_FRAMES,
+    max_frames: int = DEFAULT_MAX_FRAMES,
+    prefix: str = "",
+    threshold: float = DEFAULT_THRESHOLD,
+    model_repo: str = DEFAULT_MODEL_REPO,
+    include_ratings: bool = False,
+    skip_existing: bool = True,
+) -> dict[str, int]:
+    """Download a YouTube video and generate a WD14-based text description.
+
+    The video is validated via the YouTube Data API v3, downloaded to a
+    temporary directory using yt-dlp, described using the same WD14 tagging
+    pipeline as :func:`describe_video`, and the temporary file is cleaned up
+    afterwards.  The output ``.txt`` file is named after the YouTube video ID.
+
+    Args:
+        youtube_url:     YouTube video URL (watch, shorts, or live format).
+        youtube_api_key: YouTube Data API v3 key for video validation.
+        output_dir:      Where to write the ``.txt`` file.  Defaults to the
+                         current working directory.
+        every_n:         Extract one frame every N frames.
+        max_frames:      Maximum key frames to process per video.
+        prefix:          Token(s) prepended to the description, e.g. ``"ohwx man"``.
+        threshold:       Minimum WD14 tag confidence to include (default: 0.35).
+        model_repo:      HuggingFace repo ID for the WD14 ONNX model.
+        include_ratings: Include rating tags (safe / questionable / explicit).
+        skip_existing:   Skip if the ``.txt`` file already exists.
+
+    Returns:
+        Dict with keys ``described`` (0 or 1) and ``skipped`` (0 or 1).
+    """
+    try:
+        import onnxruntime as ort
+    except ImportError as exc:
+        raise ImportError(
+            "onnxruntime is required for videsc.\n"
+            "Install with: pip install onnxruntime"
+        ) from exc
+
+    video_id = extract_youtube_video_id(youtube_url)
+    if not video_id:
+        logger.error("Could not extract video ID from URL: %s", youtube_url)
+        return {"described": 0, "skipped": 1}
+
+    meta = _validate_youtube_video(youtube_api_key, video_id)
+    if meta is None:
+        logger.error(
+            "YouTube video not found or API key invalid (video_id=%s)", video_id
+        )
+        return {"described": 0, "skipped": 1}
+
+    title = meta.get("snippet", {}).get("title", "")
+    logger.info("Processing YouTube video: %s (%s)", title, video_id)
+
+    out_dir = output_dir.resolve() if output_dir is not None else Path.cwd()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    txt_path = out_dir / f"{video_id}.txt"
+
+    if skip_existing and txt_path.exists():
+        logger.debug("Skipping (exists): %s", txt_path)
+        return {"described": 0, "skipped": 1}
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
+    try:
+        logger.info("Downloading YouTube video %s …", video_id)
+        video_path = _download_youtube_video(youtube_url, tmp_dir)
+        if video_path is None:
+            logger.error("Failed to download YouTube video: %s", youtube_url)
+            return {"described": 0, "skipped": 1}
+
+        return _describe_video_impl(
+            ort=ort,
+            video_path=video_path,
+            output_dir=out_dir,
+            every_n=every_n,
+            max_frames=max_frames,
+            prefix=prefix,
+            threshold=threshold,
+            model_repo=model_repo,
+            include_ratings=include_ratings,
+            skip_existing=False,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

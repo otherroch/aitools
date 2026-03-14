@@ -23,6 +23,9 @@ from videsc.describe import (
     _build_caption,
     _describe_video_impl,
     _describe_folder_impl,
+    extract_youtube_video_id,
+    _validate_youtube_video,
+    describe_youtube,
 )
 
 
@@ -586,3 +589,282 @@ class TestDescribeFolderImpl:
                     )
 
         assert (out / "clip.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# extract_youtube_video_id
+# ---------------------------------------------------------------------------
+
+
+class TestExtractYoutubeVideoId:
+    def test_standard_watch_url(self):
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        assert extract_youtube_video_id(url) == "dQw4w9WgXcQ"
+
+    def test_youtu_be_short_url(self):
+        url = "https://youtu.be/dQw4w9WgXcQ"
+        assert extract_youtube_video_id(url) == "dQw4w9WgXcQ"
+
+    def test_shorts_url(self):
+        url = "https://www.youtube.com/shorts/dQw4w9WgXcQ"
+        assert extract_youtube_video_id(url) == "dQw4w9WgXcQ"
+
+    def test_live_url(self):
+        url = "https://www.youtube.com/live/dQw4w9WgXcQ"
+        assert extract_youtube_video_id(url) == "dQw4w9WgXcQ"
+
+    def test_invalid_url_returns_none(self):
+        assert extract_youtube_video_id("https://example.com/video") is None
+
+    def test_non_youtube_hostname_returns_none(self):
+        assert extract_youtube_video_id("https://vimeo.com/123456") is None
+
+    def test_empty_string_returns_none(self):
+        assert extract_youtube_video_id("") is None
+
+
+# ---------------------------------------------------------------------------
+# _validate_youtube_video
+# ---------------------------------------------------------------------------
+
+
+class TestValidateYoutubeVideo:
+    def _api_response(self, title="Test Video"):
+        import json
+
+        payload = json.dumps(
+            {
+                "items": [
+                    {
+                        "snippet": {"title": title},
+                        "contentDetails": {"duration": "PT3M33S"},
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        mock_response = MagicMock()
+        mock_response.read.return_value = payload
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        return mock_response
+
+    def test_returns_metadata_on_success(self):
+        with patch(
+            "videsc.describe.urllib.request.urlopen",
+            return_value=self._api_response(),
+        ):
+            result = _validate_youtube_video("fake_key", "dQw4w9WgXcQ")
+        assert result is not None
+        assert result["snippet"]["title"] == "Test Video"
+
+    def test_returns_none_when_no_items(self):
+        import json
+
+        payload = json.dumps({"items": []}).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = payload
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("videsc.describe.urllib.request.urlopen", return_value=mock_resp):
+            result = _validate_youtube_video("fake_key", "nonexistent")
+        assert result is None
+
+    def test_returns_none_on_missing_api_key(self):
+        assert _validate_youtube_video("", "dQw4w9WgXcQ") is None
+
+    def test_returns_none_on_missing_video_id(self):
+        assert _validate_youtube_video("fake_key", "") is None
+
+    def test_returns_none_on_network_error(self):
+        with patch(
+            "videsc.describe.urllib.request.urlopen",
+            side_effect=Exception("network error"),
+        ):
+            result = _validate_youtube_video("fake_key", "dQw4w9WgXcQ")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# describe_youtube
+# ---------------------------------------------------------------------------
+
+
+class TestDescribeYoutube:
+    def _make_ort(self, tag_probs: np.ndarray):
+        ort = MagicMock()
+        session = MagicMock()
+        session.get_inputs.return_value = [MagicMock(name="input")]
+        session.run.return_value = [tag_probs[np.newaxis, :]]
+        ort.InferenceSession.return_value = session
+        return ort
+
+    def _meta(self, title="Test Video"):
+        return {"snippet": {"title": title}, "contentDetails": {}}
+
+    def test_writes_txt_named_by_video_id(self, tmp_path):
+        import sys
+        from contextlib import ExitStack
+
+        out = tmp_path / "out"
+        video_id = "dQw4w9WgXcQ"
+        fake_video = tmp_path / f"{video_id}.mp4"
+        fake_video.write_bytes(b"fake")
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("videsc.describe.extract_youtube_video_id", return_value=video_id)
+            )
+            stack.enter_context(
+                patch("videsc.describe._validate_youtube_video", return_value=self._meta())
+            )
+            stack.enter_context(
+                patch("videsc.describe._download_youtube_video", return_value=fake_video)
+            )
+            stack.enter_context(patch("videsc.describe.shutil.rmtree"))
+            stack.enter_context(
+                patch("videsc.describe.tempfile.mkdtemp", return_value=str(tmp_path))
+            )
+            stack.enter_context(
+                patch(
+                    "videsc.describe._describe_video_impl",
+                    return_value={"described": 1, "skipped": 0},
+                )
+            )
+            stack.enter_context(patch.dict(sys.modules, {"onnxruntime": MagicMock()}))
+            stats = describe_youtube(
+                f"https://www.youtube.com/watch?v={video_id}",
+                "fake_api_key",
+                output_dir=out,
+                skip_existing=False,
+            )
+
+        assert stats["described"] == 1
+        assert stats["skipped"] == 0
+
+    def test_skips_when_txt_exists(self, tmp_path):
+        out = tmp_path / "out"
+        out.mkdir()
+        video_id = "dQw4w9WgXcQ"
+        (out / f"{video_id}.txt").write_text("existing")
+
+        with patch("videsc.describe.extract_youtube_video_id", return_value=video_id):
+            with patch(
+                "videsc.describe._validate_youtube_video", return_value=self._meta()
+            ):
+                with patch(
+                    "videsc.describe._download_youtube_video"
+                ) as mock_dl:
+                    stats = describe_youtube(
+                        f"https://www.youtube.com/watch?v={video_id}",
+                        "fake_api_key",
+                        output_dir=out,
+                        skip_existing=True,
+                    )
+        assert stats["skipped"] == 1
+        assert stats["described"] == 0
+        mock_dl.assert_not_called()
+
+    def test_returns_skipped_on_invalid_url(self, tmp_path):
+        with patch("videsc.describe.extract_youtube_video_id", return_value=None):
+            stats = describe_youtube(
+                "https://example.com/not-youtube",
+                "fake_api_key",
+                output_dir=tmp_path,
+            )
+        assert stats["skipped"] == 1
+        assert stats["described"] == 0
+
+    def test_returns_skipped_on_validation_failure(self, tmp_path):
+        with patch(
+            "videsc.describe.extract_youtube_video_id", return_value="dQw4w9WgXcQ"
+        ):
+            with patch(
+                "videsc.describe._validate_youtube_video", return_value=None
+            ):
+                stats = describe_youtube(
+                    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    "bad_key",
+                    output_dir=tmp_path,
+                )
+        assert stats["skipped"] == 1
+        assert stats["described"] == 0
+
+    def test_returns_skipped_on_download_failure(self, tmp_path):
+        with patch(
+            "videsc.describe.extract_youtube_video_id", return_value="dQw4w9WgXcQ"
+        ):
+            with patch(
+                "videsc.describe._validate_youtube_video", return_value=self._meta()
+            ):
+                with patch(
+                    "videsc.describe._download_youtube_video", return_value=None
+                ):
+                    with patch("videsc.describe.shutil.rmtree"):
+                        with patch(
+                            "videsc.describe.tempfile.mkdtemp",
+                            return_value=str(tmp_path),
+                        ):
+                            stats = describe_youtube(
+                                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                                "fake_key",
+                                output_dir=tmp_path,
+                                skip_existing=False,
+                            )
+        assert stats["skipped"] == 1
+        assert stats["described"] == 0
+
+
+# ---------------------------------------------------------------------------
+# CLI argument parsing
+# ---------------------------------------------------------------------------
+
+
+class TestCLIParsing:
+    def test_input_dir_parsed(self, tmp_path):
+        from videsc.cli import parse_args
+
+        args = parse_args(["--input-dir", str(tmp_path)])
+        assert args.input_dir == tmp_path
+        assert args.youtube_url is None
+
+    def test_youtube_url_with_api_key(self):
+        from videsc.cli import parse_args
+
+        args = parse_args(
+            [
+                "--youtube-url",
+                "https://www.youtube.com/watch?v=abc123",
+                "--youtube-api-key",
+                "MY_KEY",
+            ]
+        )
+        assert args.youtube_url == "https://www.youtube.com/watch?v=abc123"
+        assert args.youtube_api_key == "MY_KEY"
+        assert args.input_dir is None
+
+    def test_youtube_url_without_api_key_errors(self):
+        from videsc.cli import parse_args
+
+        with pytest.raises(SystemExit):
+            parse_args(["--youtube-url", "https://www.youtube.com/watch?v=abc123"])
+
+    def test_input_dir_and_youtube_url_are_mutually_exclusive(self, tmp_path):
+        from videsc.cli import parse_args
+
+        with pytest.raises(SystemExit):
+            parse_args(
+                [
+                    "--input-dir",
+                    str(tmp_path),
+                    "--youtube-url",
+                    "https://www.youtube.com/watch?v=abc123",
+                    "--youtube-api-key",
+                    "MY_KEY",
+                ]
+            )
+
+    def test_no_input_source_errors(self):
+        from videsc.cli import parse_args
+
+        with pytest.raises(SystemExit):
+            parse_args([])

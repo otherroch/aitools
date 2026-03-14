@@ -17,6 +17,10 @@ videsc --input-dir ./videos --prefix "ohwx man" --threshold 0.25
 
 # Sample more frames for a more thorough description
 videsc --input-dir ./videos --max-frames 20 --every-n 15
+
+# Describe a YouTube video (API key required)
+videsc --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \\
+       --youtube-api-key "YOUR_API_KEY" --output-dir ./captions
 """
 
 from __future__ import annotations
@@ -44,11 +48,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
-    parser.add_argument(
+    # Mutually exclusive input sources
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
         "--input-dir",
         type=Path,
-        required=True,
         help="Directory containing video files (searched recursively).",
+    )
+    input_group.add_argument(
+        "--youtube-url",
+        type=str,
+        help="YouTube video URL to download and describe.",
+    )
+
+    parser.add_argument(
+        "--youtube-api-key",
+        type=str,
+        default=None,
+        help="YouTube Data API v3 key (required when using --youtube-url).",
     )
     parser.add_argument(
         "--output-dir",
@@ -56,7 +73,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Where to write .txt description files.\n"
-            "Defaults to alongside each video file."
+            "Defaults to alongside each video file (--input-dir mode) or the\n"
+            "current working directory (--youtube-url mode)."
         ),
     )
     parser.add_argument(
@@ -100,26 +118,49 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Re-describe videos whose .txt file already exists.",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    if args.youtube_url and not args.youtube_api_key:
+        parser.error("--youtube-url requires --youtube-api-key")
+
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
-    from videsc.describe import describe_folder
+    if args.youtube_url:
+        from videsc.describe import describe_youtube
 
-    logger.info("videsc: processing videos in %s", args.input_dir)
-    stats = describe_folder(
-        args.input_dir,
-        output_dir=args.output_dir,
-        every_n=args.every_n,
-        max_frames=args.max_frames,
-        prefix=args.prefix,
-        threshold=args.threshold,
-        model_repo=args.model_repo,
-        include_ratings=args.include_ratings,
-        skip_existing=not args.no_skip_existing,
-    )
+        logger.info("videsc: processing YouTube video %s", args.youtube_url)
+        stats = describe_youtube(
+            args.youtube_url,
+            args.youtube_api_key,
+            output_dir=args.output_dir,
+            every_n=args.every_n,
+            max_frames=args.max_frames,
+            prefix=args.prefix,
+            threshold=args.threshold,
+            model_repo=args.model_repo,
+            include_ratings=args.include_ratings,
+            skip_existing=not args.no_skip_existing,
+        )
+    else:
+        from videsc.describe import describe_folder
+
+        logger.info("videsc: processing videos in %s", args.input_dir)
+        stats = describe_folder(
+            args.input_dir,
+            output_dir=args.output_dir,
+            every_n=args.every_n,
+            max_frames=args.max_frames,
+            prefix=args.prefix,
+            threshold=args.threshold,
+            model_repo=args.model_repo,
+            include_ratings=args.include_ratings,
+            skip_existing=not args.no_skip_existing,
+        )
+
     logger.info(
         "videsc: %d described, %d skipped",
         stats["described"],
