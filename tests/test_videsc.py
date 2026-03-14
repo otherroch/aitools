@@ -23,8 +23,10 @@ from videsc.describe import (
     _build_caption,
     _describe_video_impl,
     _describe_folder_impl,
+    _download_youtube_video,
     extract_youtube_video_id,
     _validate_youtube_video,
+    describe_video,
     describe_youtube,
 )
 
@@ -868,3 +870,241 @@ class TestCLIParsing:
 
         with pytest.raises(SystemExit):
             parse_args([])
+
+    def test_defaults_applied(self, tmp_path):
+        from videsc.cli import parse_args
+
+        args = parse_args(["--input-dir", str(tmp_path)])
+        assert args.every_n == 30
+        assert args.max_frames == 10
+        assert args.prefix == ""
+        assert args.threshold == 0.35
+        assert args.include_ratings is False
+        assert args.no_skip_existing is False
+
+    def test_output_dir_parsed(self, tmp_path):
+        from videsc.cli import parse_args
+
+        out = tmp_path / "out"
+        args = parse_args(["--input-dir", str(tmp_path), "--output-dir", str(out)])
+        assert args.output_dir == out
+
+    def test_include_ratings_flag(self, tmp_path):
+        from videsc.cli import parse_args
+
+        args = parse_args(["--input-dir", str(tmp_path), "--include-ratings"])
+        assert args.include_ratings is True
+
+    def test_no_skip_existing_flag(self, tmp_path):
+        from videsc.cli import parse_args
+
+        args = parse_args(["--input-dir", str(tmp_path), "--no-skip-existing"])
+        assert args.no_skip_existing is True
+
+
+# ---------------------------------------------------------------------------
+# _download_youtube_video
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadYoutubeVideo:
+    def _make_yt_dlp_module(self, video_id: str, ext: str, tmp_dir: Path):
+        """Return a mock yt_dlp module whose YoutubeDL creates a fake video file."""
+        import sys
+
+        fake_file = tmp_dir / f"{video_id}.{ext}"
+        fake_file.write_bytes(b"fake video")
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {"id": video_id}
+        mock_ydl.__enter__ = lambda s: s
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+
+        mock_module = MagicMock()
+        mock_module.YoutubeDL.return_value = mock_ydl
+        return mock_module
+
+    def test_returns_path_for_matching_video_id(self, tmp_path):
+        import sys
+
+        video_id = "dQw4w9WgXcQ"
+        mock_module = self._make_yt_dlp_module(video_id, "mp4", tmp_path)
+
+        with patch.dict(sys.modules, {"yt_dlp": mock_module}):
+            result = _download_youtube_video(
+                f"https://www.youtube.com/watch?v={video_id}", tmp_path
+            )
+
+        assert result is not None
+        assert result.stem == video_id
+        assert result.suffix == ".mp4"
+
+    def test_fallback_returns_first_supported_video(self, tmp_path):
+        """When the video_id stem doesn't match, return the first supported file."""
+        import sys
+
+        (tmp_path / "OTHER_ID.mp4").write_bytes(b"fake video")
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {"id": "dQw4w9WgXcQ"}
+        mock_ydl.__enter__ = lambda s: s
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_module = MagicMock()
+        mock_module.YoutubeDL.return_value = mock_ydl
+
+        with patch.dict(sys.modules, {"yt_dlp": mock_module}):
+            result = _download_youtube_video(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path
+            )
+
+        assert result is not None
+        assert result.suffix == ".mp4"
+
+    def test_returns_none_when_no_video_in_dir(self, tmp_path):
+        import sys
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {"id": "abc123"}
+        mock_ydl.__enter__ = lambda s: s
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_module = MagicMock()
+        mock_module.YoutubeDL.return_value = mock_ydl
+
+        with patch.dict(sys.modules, {"yt_dlp": mock_module}):
+            result = _download_youtube_video(
+                "https://www.youtube.com/watch?v=abc123", tmp_path
+            )
+
+        assert result is None
+
+    def test_returns_none_when_extract_info_returns_none(self, tmp_path):
+        import sys
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = None
+        mock_ydl.__enter__ = lambda s: s
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_module = MagicMock()
+        mock_module.YoutubeDL.return_value = mock_ydl
+
+        with patch.dict(sys.modules, {"yt_dlp": mock_module}):
+            result = _download_youtube_video(
+                "https://www.youtube.com/watch?v=abc123", tmp_path
+            )
+
+        assert result is None
+
+    def test_returns_none_on_ydl_exception(self, tmp_path):
+        import sys
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.side_effect = Exception("download error")
+        mock_ydl.__enter__ = lambda s: s
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_module = MagicMock()
+        mock_module.YoutubeDL.return_value = mock_ydl
+
+        with patch.dict(sys.modules, {"yt_dlp": mock_module}):
+            result = _download_youtube_video(
+                "https://www.youtube.com/watch?v=abc123", tmp_path
+            )
+
+        assert result is None
+
+    def test_raises_import_error_without_yt_dlp(self, tmp_path):
+        import sys
+
+        with patch.dict(sys.modules, {"yt_dlp": None}):
+            with pytest.raises(ImportError, match="yt-dlp"):
+                _download_youtube_video(
+                    "https://www.youtube.com/watch?v=abc123", tmp_path
+                )
+
+    def test_ignores_non_video_files(self, tmp_path):
+        import sys
+
+        (tmp_path / "dQw4w9WgXcQ.txt").write_text("not a video")
+        (tmp_path / "dQw4w9WgXcQ.mp4").write_bytes(b"fake video")
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {"id": "dQw4w9WgXcQ"}
+        mock_ydl.__enter__ = lambda s: s
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_module = MagicMock()
+        mock_module.YoutubeDL.return_value = mock_ydl
+
+        with patch.dict(sys.modules, {"yt_dlp": mock_module}):
+            result = _download_youtube_video(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path
+            )
+
+        assert result is not None
+        assert result.suffix == ".mp4"
+
+
+# ---------------------------------------------------------------------------
+# describe_video (public API)
+# ---------------------------------------------------------------------------
+
+
+class TestDescribeVideo:
+    def _make_sys_with_ort(self, tag_probs: np.ndarray):
+        """Return a sys.modules patch dict that includes a mock onnxruntime."""
+        import sys
+
+        ort = MagicMock()
+        session = MagicMock()
+        session.get_inputs.return_value = [MagicMock(name="input")]
+        session.run.return_value = [tag_probs[np.newaxis, :]]
+        ort.InferenceSession.return_value = session
+        return ort
+
+    def test_delegates_to_impl_and_returns_stats(self, tmp_path):
+        import sys
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"fake")
+        frame = _dummy_frame()
+        probs = np.array([0.9])
+        ort = self._make_sys_with_ort(probs)
+
+        with patch.dict(sys.modules, {"onnxruntime": ort}):
+            with patch("videsc.describe.extract_keyframes", return_value=[frame]):
+                with patch(
+                    "videsc.describe._download_model",
+                    return_value=(tmp_path / "m.onnx", tmp_path / "t.csv"),
+                ):
+                    with patch(
+                        "videsc.describe._load_labels",
+                        return_value=(["tag_a"], [], [0]),
+                    ):
+                        stats = describe_video(video, output_dir=tmp_path)
+
+        assert stats["described"] == 1
+        assert stats["skipped"] == 0
+        assert (tmp_path / "clip.txt").exists()
+
+    def test_raises_if_onnxruntime_missing(self, tmp_path):
+        import sys
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"fake")
+
+        with patch.dict(sys.modules, {"onnxruntime": None}):
+            with pytest.raises(ImportError, match="onnxruntime"):
+                describe_video(video)
+
+    def test_skips_existing_when_skip_existing_true(self, tmp_path):
+        import sys
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"fake")
+        (tmp_path / "clip.txt").write_text("existing")
+
+        ort = MagicMock()
+        with patch.dict(sys.modules, {"onnxruntime": ort}):
+            stats = describe_video(video, skip_existing=True)
+
+        assert stats["skipped"] == 1
+        assert stats["described"] == 0
+        assert (tmp_path / "clip.txt").read_text() == "existing"
