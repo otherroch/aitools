@@ -3,13 +3,13 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "portrait-prep"
+name = "aitools"
 version = "0.1.0"
-description = "Portrait dataset preparation toolkit for diffusion model LoRA training"
+description = "AI dataset preparation toolkit: portrait prep, video face-crop, and video description"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-keywords = ["diffusion", "lora", "dataset", "portrait", "augmentation", "captioning"]
+keywords = ["diffusion", "lora", "dataset", "portrait", "video", "augmentation", "captioning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -39,18 +39,20 @@ dev = ["pytest>=8.0", "pytest-cov"]
 
 [project.scripts]
 portrait-prep = "portrait_prep.cli:main"
+vicrop = "vicrop.cli:main"
+videsc = "videsc.cli:main"
 
 [project.urls]
-Repository = "https://github.com/yourname/portrait-prep"
+Repository = "https://github.com/otherroch/aitools"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["portrait_prep*"]
+include = ["portrait_prep*", "vicrop*", "videsc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v"
 
 [tool.coverage.run]
-source = ["portrait_prep"]
+source = ["portrait_prep", "vicrop", "videsc"]
 omit = ["tests/*"]
