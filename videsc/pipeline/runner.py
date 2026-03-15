@@ -205,11 +205,13 @@ def run_single_video(args, model, processor) -> int:
                     gen_ids = model.generate(
                         **inputs,
                         max_new_tokens=args.max_new_tokens,
+                        repetition_penalty=args.rep_pen,
                     )
             else:
                 gen_ids = model.generate(
                     **inputs,
                     max_new_tokens=args.max_new_tokens,
+                    repetition_penalty=args.rep_pen,
                 )
             print("after generate, before trim")
             generated_ids_trimmed = [

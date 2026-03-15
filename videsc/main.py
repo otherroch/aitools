@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_vl(args) -> int:
     """Run Qwen3-VL vision-language pipeline."""
+    import tempfile
+    import shutil
     from videsc.model.loader import load_model_and_processor, load_omni_model_and_processor
     from videsc.pipeline.runner import run_batch, run_single_video
 
@@ -48,11 +50,33 @@ def _run_vl(args) -> int:
     if is_batch:
         return run_batch(args)
 
-    if args.omni:
-        model, processor = load_omni_model_and_processor(args)
-    else:
-        model, processor = load_model_and_processor(args)
-    return run_single_video(args, model, processor)
+    # Handle YouTube URL: download to a temp dir and set args.video
+    tmp_dir = None
+    if args.youtube_url:
+        from videsc.describe import _download_youtube_video
+
+        if not args.youtube_api_key:
+            logger.error("videsc: --youtube-url requires --youtube-api-key")
+            return 1
+
+        tmp_dir = tempfile.mkdtemp(prefix="videsc_yt_")
+        logger.info("Downloading YouTube video %s …", args.youtube_url)
+        video_path = _download_youtube_video(args.youtube_url, __import__("pathlib").Path(tmp_dir))
+        if video_path is None:
+            logger.error("Failed to download YouTube video: %s", args.youtube_url)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 1
+        args.video = video_path
+
+    try:
+        if args.omni:
+            model, processor = load_omni_model_and_processor(args)
+        else:
+            model, processor = load_model_and_processor(args)
+        return run_single_video(args, model, processor)
+    finally:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _run_wd14(args) -> int:

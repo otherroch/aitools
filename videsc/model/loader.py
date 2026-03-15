@@ -78,8 +78,7 @@ def load_model_and_processor(args):
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path_local,
         device_map="auto",
-        dtype="auto",
-        repetition_penalty=args.rep_pen,
+        torch_dtype="auto",
         attn_implementation=args.attn,
         quantization_config=quant_cfg,
     )

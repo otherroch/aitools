@@ -56,7 +56,7 @@ def build_messages(
     content: List[Dict[str, Any]] = [
         {
             "type": "video",
-            "video": video_path,
+            "video": str(video_path),
             "total_pixels": tot_pixels,
             "nframes": nframes,
         }
@@ -65,7 +65,7 @@ def build_messages(
         content = [
             {
                 "type": "video",
-                "video": video_path,
+                "video": str(video_path),
             }
         ]
 
