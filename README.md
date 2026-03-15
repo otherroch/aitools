@@ -2,13 +2,14 @@
 
 **AI dataset preparation toolkit for diffusion model LoRA training.**
 
-`aitools` provides three command-line tools and Python APIs for preparing image and video datasets:
+`aitools` provides four command-line tools and Python APIs for preparing image and video datasets:
 
 | Tool | Command | Description |
 |------|---------|-------------|
 | Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (convert → crop → caption → augment) |
 | Video Crop | `vicrop` | Extract face-cropped PNG frames from video files |
-| Video Description | `videsc` | Generate AI-powered text descriptions for video files |
+| Video Description (WD14) | `videsc` | Generate tag-based text descriptions for video files using the WD14 tagger |
+| Video Description (VL) | `videsc-vl` | Generate natural-language video descriptions using a Qwen3-VL vision-language model |
 
 ---
 
@@ -19,6 +20,7 @@
 - [portrait-prep](#portrait-prep)
 - [vicrop](#vicrop)
 - [videsc](#videsc)
+- [videsc-vl](#videsc-vl)
 - [Python API](#python-api)
 - [Running tests](#running-tests)
 
@@ -32,6 +34,9 @@ pip install -e .
 
 # With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
 pip install -e ".[gpu]"
+
+# With Qwen3-VL support for videsc-vl (adds PyTorch, transformers, and related dependencies)
+pip install -e ".[vl]"
 
 # With YouTube download support (adds yt-dlp)
 pip install -e ".[youtube]"
@@ -58,6 +63,12 @@ pip install -e ".[dev]"
 > YouTube Data API v3 key. Install `yt-dlp` with `pip install -e ".[youtube]"` or
 > `pip install yt-dlp`.
 
+> **Note – videsc-vl support:** The `videsc-vl` command requires PyTorch, the
+> Transformers library, and related dependencies. Install them with
+> `pip install -e ".[vl]"`. A CUDA-capable GPU with sufficient VRAM is strongly
+> recommended (8 GB+ for the default 8B model; use `--quant 4bit` or `--quant 8bit`
+> to reduce VRAM requirements).
+
 ---
 
 ## Project structure
@@ -78,8 +89,24 @@ aitools/
 │   └── cli.py            # vicrop entry point
 ├── videsc/
 │   ├── __init__.py
-│   ├── describe.py       # Video description logic
-│   └── cli.py            # videsc entry point
+│   ├── describe.py       # WD14-based video description logic
+│   ├── wd_cli.py         # videsc entry point (WD14 tagger)
+│   ├── main.py           # videsc-vl entry point (Qwen3-VL)
+│   ├── config.py         # Model directory configuration
+│   ├── cli/
+│   │   └── args.py       # CLI argument parsing for videsc-vl
+│   ├── audio/
+│   │   └── transcription.py  # Whisper-based audio transcription
+│   ├── model/
+│   │   └── loader.py     # Qwen3-VL / Qwen3-Omni model loading
+│   ├── pipeline/
+│   │   └── runner.py     # Batch & single-video runner for videsc-vl
+│   ├── video/
+│   │   ├── info.py       # Video metadata extraction
+│   │   ├── messages.py   # LLM message construction
+│   │   └── sampling.py   # Frame sampling logic
+│   └── utils/
+│       └── helpers.py    # Shared utility functions
 ├── tests/
 │   ├── test_convert.py
 │   ├── test_crop.py
@@ -87,7 +114,8 @@ aitools/
 │   ├── test_augment.py
 │   ├── test_cpcap.py
 │   ├── test_vicrop.py
-│   └── test_videsc.py
+│   ├── test_videsc.py
+│   └── test_videsc_main.py
 ├── main.py               # Thin shim for portrait-prep
 ├── pyproject.toml
 ├── LICENSE
@@ -353,6 +381,154 @@ videsc --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
 
 ---
 
+## videsc-vl
+
+Generate rich, natural-language text descriptions for video files using a
+[Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) vision-language
+model (or its Qwen3-Omni multimodal variant).
+
+### videsc vs videsc-vl
+
+| | `videsc` | `videsc-vl` |
+|---|---|---|
+| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni (LLM) |
+| **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
+| **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
+| **Audio support** | No | Yes (Whisper ASR integration) |
+| **Custom prompts** | No | Yes (`--prompt` / `--system`) |
+| **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling |
+
+Use `videsc` when you need quick, reproducible tag-based captions that work on any hardware. Use `videsc-vl` when you need detailed, human-readable descriptions — for example to create training captions that capture narrative context, character actions, or dialogue.
+
+### Installation
+
+```bash
+pip install -e ".[vl]"
+```
+
+A CUDA-capable GPU is strongly recommended. For lower VRAM use `--quant 4bit` or `--quant 8bit`.
+
+### Usage
+
+```bash
+# Describe a single video (output written to <video_dir>/desc-Qwen3-VL-8B-Instruct/)
+videsc-vl --video ./interview.mp4
+
+# Describe a single video with a custom prompt
+videsc-vl --video ./interview.mp4 \
+          --prompt "Describe the scene, characters, and key actions in detail."
+
+# Describe all .mp4 and .mov files in a directory
+videsc-vl --indir ./videos --ext .mp4 .mov
+
+# Describe videos matching a glob pattern, writing results to a specific directory
+videsc-vl --videos "./footage/**/*.mp4" --outdir ./captions
+
+# Use a text file listing one video path per line
+videsc-vl --filelist ./my_videos.txt --outdir ./captions
+
+# Use 4-bit quantisation for lower VRAM consumption
+videsc-vl --video ./clip.mp4 --quant 4bit
+
+# Enable audio transcription (requires soundfile and a Whisper model)
+videsc-vl --video ./clip.mp4 --audio
+
+# Use a locally downloaded model
+videsc-vl --video ./clip.mp4 --model /path/to/Qwen3-VL-8B-Instruct --model_full
+
+# Use Qwen3-Omni for multimodal (audio + video) understanding
+videsc-vl --video ./clip.mp4 --omni --model Qwen/Qwen3-Omni-8B --model_hf
+```
+
+Output `.txt` files are placed alongside each video in a `desc-<model>` subdirectory by default, or in the directory specified by `--outdir`.
+
+### CLI reference
+
+#### Input / output
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--video` | — | Path to a single input video file |
+| `--videos` | — | One or more glob patterns matching video files *(mutually exclusive with --indir / --filelist)* |
+| `--indir` | — | Directory to scan recursively for video files *(mutually exclusive with --videos / --filelist)* |
+| `--filelist` | — | Text file containing one video path per line *(mutually exclusive with --videos / --indir)* |
+| `--ext` | *(all)* | File extensions to match when using `--indir` (e.g. `.mp4 .mov`) |
+| `--outdir` | `<video_dir>/desc-<model>` | Directory for output `.txt` description files |
+
+#### Batch processing
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--workers` | `2` | Number of videos to process in parallel |
+| `--batch-mode` | `threads` | `threads` – one shared model process; `subprocess` – one process per video |
+| `--sleep` | `0.25` | Polling interval in seconds for job supervision |
+| `--dry-run` | — | Print resolved commands without running them |
+
+#### Prompt
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prompt` | `"First, list all distinct characters, actions, and any important visuals in several long, comprehensive paragraphs."` | User prompt sent to the model |
+| `--system` | `"You are a helpful assistant that writes clear, concise video descriptions."` | System prompt |
+
+#### Model / runtime
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `Qwen/Qwen3-VL-8B-Instruct` | Model name (looked up under model_dir) or HF id / local path |
+| `--model_hf` | — | Treat `--model` as a HuggingFace model id or local directory |
+| `--model_full` | — | Treat `--model` as a full filesystem path |
+| `--omni` | — | Load as Qwen3-Omni (multimodal audio + video model) |
+| `--attn` | `flash_attention_2` | Attention implementation: `flash_attention_2`, `sdpa`, or `eager` |
+| `--quant` | `none` | Weight quantisation: `none`, `8bit`, or `4bit` |
+| `--max-new-tokens` | `8192` | Maximum tokens to generate |
+| `--optimize` | — | Compile the model with `torch.compile` for faster inference |
+
+#### Video decoding & frame sampling
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--reader` | `decord` | Video reader backend: `auto`, `torchvision`, `decord`, or `torchcodec` |
+| `--spf` | `4.0` | Sampling interval in seconds per frame |
+| `--fps` | `1.0` | Approximate sampling frame rate |
+| `--num-frames` | `256` | Maximum frames to sample (the loader may adapt) |
+| `--stride` | `1` | Take 1 of every N frames after initial sampling |
+| `--clip-start` | `0.0` | Start time in seconds |
+| `--clip-end` | `-1.0` | End time in seconds (`-1` = full video) |
+
+#### Pixel / token budget
+
+These values are *edge multipliers*: the actual pixel count per frame is `value × 28 × 28` (e.g. `--max-pixels 1280` → 1 003 520 pixels per frame). Adjust them to trade off detail against VRAM usage and throughput.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--min-pixels` | `128` | Per-frame minimum token budget as an edge multiplier (128 × 28² ≈ 100 K pixels) |
+| `--max-pixels` | `1280` | Per-frame maximum token budget as an edge multiplier (1280 × 28² ≈ 1 M pixels) |
+| `--total-pixels` | `24000` | Total token budget across the whole video as an edge multiplier (24000 × 28² ≈ 19 M pixels) |
+
+#### Audio transcription
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--audio` | — | Enable Whisper-based audio transcription |
+| `--asr-model` | `openai/whisper-large-v3-turbo` | HuggingFace ASR model id |
+| `--max-audio-seconds` | `0.0` | Limit transcription to this many seconds from the start (`0` = no limit) |
+| `--no-save-transcript` | — | Do not write a separate `*.transcript.txt` file |
+
+#### Miscellaneous
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--no-think-trim` | — | Keep `<think>…</think>` reasoning tokens in the output |
+| `--cont_prompt` | — | Append a continuation prompt to generate longer output |
+| `--no_meta` | — | Skip metadata from `process_vision_info` |
+| `--rep_pen` | `1.05` | Repetition penalty |
+| `--seed` | `4051888` | Random seed |
+| `--half_cpu` | — | Limit PyTorch to half the available CPU cores |
+| `--dry` | — | Load the model but skip generation (for testing) |
+
+---
+
 ## Python API
 
 ### portrait-prep
@@ -458,8 +634,11 @@ pytest tests/test_augment.py
 # vicrop
 pytest tests/test_vicrop.py
 
-# videsc
+# videsc (WD14)
 pytest tests/test_videsc.py
+
+# videsc-vl
+pytest tests/test_videsc_main.py
 ```
 
 Generate a coverage report:
