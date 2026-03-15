@@ -33,6 +33,9 @@ pip install -e .
 # With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
 pip install -e ".[gpu]"
 
+# With YouTube download support (adds yt-dlp)
+pip install -e ".[youtube]"
+
 # Including dev / test dependencies
 pip install -e ".[dev]"
 ```
@@ -50,6 +53,10 @@ pip install -e ".[dev]"
 
 > **Note – GPU inference:** Install the `[gpu]` extra (see above) to use
 > `onnxruntime-gpu` for significantly faster WD14 captioning on CUDA devices.
+
+> **Note – YouTube support:** The `--youtube-url` flag requires `yt-dlp` and a
+> YouTube Data API v3 key. Install `yt-dlp` with `pip install -e ".[youtube]"` or
+> `pip install yt-dlp`.
 
 ---
 
@@ -322,14 +329,20 @@ videsc --input-dir ./videos --prefix "ohwx man" --threshold 0.25
 
 # Sample more frames for a more thorough description
 videsc --input-dir ./videos --max-frames 20 --every-n 15
+
+# Describe a YouTube video (YouTube Data API v3 key required)
+videsc --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
+       --youtube-api-key "YOUR_API_KEY" --output-dir ./captions
 ```
 
 ### CLI reference
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--input-dir` | *(required)* | Directory containing video files |
-| `--output-dir` | alongside videos | Where to write `.txt` description files |
+| `--input-dir` | *(mutually exclusive with --youtube-url)* | Directory containing video files |
+| `--youtube-url` | *(mutually exclusive with --input-dir)* | YouTube video URL to download and describe |
+| `--youtube-api-key` | — | YouTube Data API v3 key (required with `--youtube-url`) |
+| `--output-dir` | alongside videos / cwd | Where to write `.txt` description files |
 | `--every-n` | `30` | Extract one frame every N frames |
 | `--max-frames` | `10` | Maximum key frames to process per video |
 | `--prefix` | `""` | Token(s) prepended to every description |
@@ -392,7 +405,7 @@ stats = crop_folder(Path("videos"), Path("frames"))
 
 ```python
 from pathlib import Path
-from videsc.describe import describe_folder, describe_video
+from videsc.describe import describe_folder, describe_video, describe_youtube
 
 # Describe a single video
 stats = describe_video(
@@ -408,6 +421,15 @@ stats = describe_folder(
     output_dir=Path("captions"),
     prefix="ohwx man",
 )
+
+# Describe a YouTube video (YouTube Data API v3 key required; yt-dlp must be installed)
+stats = describe_youtube(
+    "https://www.youtube.com/watch?v=VIDEO_ID",
+    youtube_api_key="YOUR_API_KEY",
+    output_dir=Path("captions"),
+    prefix="ohwx man",
+)
+print(stats)  # {'described': 1, 'skipped': 0}
 ```
 
 ---

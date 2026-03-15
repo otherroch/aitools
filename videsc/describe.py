@@ -569,14 +569,6 @@ def describe_youtube(
     Returns:
         Dict with keys ``described`` (0 or 1) and ``skipped`` (0 or 1).
     """
-    try:
-        import onnxruntime as ort
-    except ImportError as exc:
-        raise ImportError(
-            "onnxruntime is required for videsc.\n"
-            "Install with: pip install onnxruntime"
-        ) from exc
-
     video_id = extract_youtube_video_id(youtube_url)
     if not video_id:
         logger.error("Could not extract video ID from URL: %s", youtube_url)
@@ -607,6 +599,14 @@ def describe_youtube(
         if video_path is None:
             logger.error("Failed to download YouTube video: %s", youtube_url)
             return {"described": 0, "skipped": 1}
+
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise ImportError(
+                "onnxruntime is required for videsc.\n"
+                "Install with: pip install onnxruntime"
+            ) from exc
 
         return _describe_video_impl(
             ort=ort,
