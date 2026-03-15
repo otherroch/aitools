@@ -36,12 +36,24 @@ dependencies = [
 [project.optional-dependencies]
 gpu = ["onnxruntime-gpu>=1.17.0"]
 youtube = ["yt-dlp"]
+vl = [
+    "torch",
+    "torchvision",
+    "transformers>=4.57.3",
+    "accelerate",
+    "bitsandbytes",
+    "soundfile",
+    "qwen-vl-utils",
+    "qwen-omni-utils",
+    "torchsummary",
+]
 dev = ["pytest>=8.0", "pytest-cov"]
 
 [project.scripts]
 portrait-prep = "portrait_prep.cli:main"
 vicrop = "vicrop.cli:main"
-videsc = "videsc.cli:main"
+videsc = "videsc.wd_cli:main"
+videsc-vl = "videsc.main:main"
 
 [project.urls]
 Repository = "https://github.com/otherroch/aitools"
