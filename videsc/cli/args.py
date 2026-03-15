@@ -1,30 +1,136 @@
 import argparse
+from pathlib import Path
 from typing import Optional
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Generate descriptive text for a video using Qwen3-VL."
+        prog="videsc",
+        description=(
+            "Generate AI-powered text descriptions for video files.\n\n"
+            "By default uses the WD14 ONNX tagger for fast, tag-based captions.\n"
+            "Pass --vl to use a Qwen3-VL vision-language model for rich,\n"
+            "natural-language descriptions instead."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
     )
-    # I/O
-    p.add_argument("--video", help="Path to input video (mp4, etc.)")
-    group = p.add_mutually_exclusive_group()
-    group.add_argument("--videos", nargs="+", help="One or more glob patterns for videos")
-    group.add_argument("--indir", help="Directory to scan recursively for videos")
-    group.add_argument("--filelist", help="Text file with one video path per line")
-    p.add_argument("--ext", nargs="+", default=[], help="File extensions for --indir (e.g. .mp4 .mov)")
-    p.add_argument("--workers", type=int, default=2, help="How many videos to process in parallel")
-    p.add_argument("--sleep", type=float, default=0.25, help="Polling interval (seconds) for job supervision")
-    p.add_argument("--dry-run", action="store_true", help="Print the resolved commands without running them")
 
+    # ── Mode selection ────────────────────────────────────────────────────────
     p.add_argument(
+        "--vl",
+        action="store_true",
+        help="Use Qwen3-VL vision-language model instead of the WD14 tagger.",
+    )
+
+    # =========================================================================
+    # WD14 mode arguments (active when --vl is NOT set)
+    # =========================================================================
+    wd14 = p.add_argument_group(
+        "WD14 mode (default) — fast, tag-based descriptions",
+        "Used when --vl is not set. Requires --input-dir or --youtube-url.",
+    )
+    wd14_input = wd14.add_mutually_exclusive_group()
+    wd14_input.add_argument(
+        "--input-dir",
+        type=Path,
+        help="Directory containing video files (searched recursively).",
+    )
+    wd14_input.add_argument(
+        "--youtube-url",
+        type=str,
+        help="YouTube video URL to download and describe.",
+    )
+    wd14.add_argument(
+        "--youtube-api-key",
+        type=str,
+        default=None,
+        help="YouTube Data API v3 key (required when using --youtube-url).",
+    )
+    wd14.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Where to write .txt description files.\n"
+            "Defaults to alongside each video file (--input-dir mode) or the\n"
+            "current working directory (--youtube-url mode)."
+        ),
+    )
+    wd14.add_argument(
+        "--every-n",
+        type=int,
+        default=30,
+        help="Extract one frame every N frames (default: 30).",
+    )
+    wd14.add_argument(
+        "--max-frames",
+        type=int,
+        default=10,
+        help="Maximum key frames to process per video (default: 10).",
+    )
+    wd14.add_argument(
+        "--prefix",
+        type=str,
+        default="",
+        help="Token(s) prepended to every description, e.g. 'ohwx man'.",
+    )
+    wd14.add_argument(
+        "--threshold",
+        type=float,
+        default=0.35,
+        help="Minimum WD14 tag confidence to include (default: 0.35).",
+    )
+    wd14.add_argument(
+        "--model-repo",
+        type=str,
+        default="SmilingWolf/wd-v1-4-convnextv2-tagger-v2",
+        help="HuggingFace repo ID for the WD14 ONNX model.",
+    )
+    wd14.add_argument(
+        "--include-ratings",
+        action="store_true",
+        help="Include WD14 rating tags (safe/questionable/explicit) in descriptions.",
+    )
+    wd14.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Re-describe videos whose .txt file already exists.",
+    )
+
+    # =========================================================================
+    # VL mode arguments (active when --vl IS set)
+    # =========================================================================
+    vl = p.add_argument_group(
+        "VL mode (--vl) — rich, natural-language descriptions",
+        "Used when --vl is set. Requires --video, --videos, --indir, or --filelist.",
+    )
+
+    # Input / output
+    vl.add_argument("--video", help="Path to input video (mp4, etc.)")
+    vl_input = vl.add_mutually_exclusive_group()
+    vl_input.add_argument("--videos", nargs="+", help="One or more glob patterns for videos")
+    vl_input.add_argument("--indir", help="Directory to scan recursively for videos")
+    vl_input.add_argument("--filelist", help="Text file with one video path per line")
+    vl.add_argument("--ext", nargs="+", default=[], help="File extensions for --indir (e.g. .mp4 .mov)")
+    vl.add_argument(
+        "--outdir",
+        default=None,
+        help="Optional output directory for .txt results; defaults to <video_dir>/desc-<model>",
+    )
+
+    # Batch processing
+    vl.add_argument("--workers", type=int, default=2, help="How many videos to process in parallel")
+    vl.add_argument("--sleep", type=float, default=0.25, help="Polling interval (seconds) for job supervision")
+    vl.add_argument("--dry-run", action="store_true", help="Print the resolved commands without running them")
+    vl.add_argument(
         "--batch-mode",
         choices=["threads", "subprocess"],
         default="threads",
         help="Batch mode: 'threads' shares one model in a single process; 'subprocess' spawns one process per video.",
     )
 
-    p.add_argument(
+    # Prompt
+    vl.add_argument(
         "--prompt",
         default=(
             "First, list all distinct characters, actions, and any important visuals "
@@ -32,78 +138,73 @@ def parse_args() -> argparse.Namespace:
         ),
         help="User prompt.",
     )
-
-    p.add_argument(
+    vl.add_argument(
         "--system",
         default="You are a helpful assistant that writes clear, concise video descriptions.",
         help="Optional system prompt.",
     )
-    p.add_argument(
-        "--outdir",
-        default=None,
-        help="Optional output directory for .txt results; defaults to <video_dir>/desc-<model>",
-    )
 
     # Model / runtime
-    p.add_argument("--omni", action="store_true", help="model is qwen3-omni")
-    p.add_argument(
+    vl.add_argument("--omni", action="store_true", help="model is qwen3-omni")
+    vl.add_argument(
         "--model",
         default="Qwen/Qwen3-VL-8B-Instruct",
         help="Model name or directory; used under model_dir unless --model_hf/--model_full.",
     )
-    p.add_argument(
+    vl.add_argument(
         "--model_hf",
         action="store_true",
         help="Model is a HF model id (e.g. Qwen/Qwen3-VL-4B-Thinking) or local dir",
     )
-    p.add_argument("--model_full", action="store_true", help="Model is a full path")
-    p.add_argument(
+    vl.add_argument("--model_full", action="store_true", help="Model is a full path")
+    vl.add_argument(
         "--attn",
         choices=["flash_attention_2", "sdpa", "eager"],
         default="flash_attention_2",
         help="Attention implementation.",
     )
-    p.add_argument(
+    vl.add_argument(
         "--quant",
         choices=["none", "8bit", "4bit"],
         default="none",
         help="Load quantized weights for lower VRAM and better speed.",
     )
-    p.add_argument("--max-new-tokens", type=int, default=8192)
+    vl.add_argument("--max-new-tokens", type=int, default=8192)
+    vl.add_argument("--optimize", action="store_true", help="Compile model with torch.compile for faster inference.")
 
     # Video decoding backend + sampling
-    p.add_argument(
+    vl.add_argument(
         "--reader",
         choices=["auto", "torchvision", "decord", "torchcodec"],
         default="decord",
         help="Select the video reader. 'auto' keeps upstream default.",
     )
-    p.add_argument("--spf", type=float, default=4.0, help="Sampling seconds per frame or sampling interval.")
-    p.add_argument("--fps", type=float, default=1.0, help="Sampling FPS (approx).")
-    p.add_argument(
+    vl.add_argument("--spf", type=float, default=4.0, help="Sampling seconds per frame or sampling interval.")
+    vl.add_argument("--fps", type=float, default=1.0, help="Sampling FPS (approx).")
+    vl.add_argument(
         "--num-frames",
         type=int,
         default=256,
         help="Max frames to sample (the loader may adapt).",
     )
-    p.add_argument("--stride", type=int, default=1, help="Take 1 of every N frames after initial sampling.")
-    p.add_argument("--clip-start", type=float, default=0.0, help="Start time (sec).")
-    p.add_argument("--clip-end", type=float, default=-1.0, help="End time (sec, -1 = full).")
+    vl.add_argument("--stride", type=int, default=1, help="Take 1 of every N frames after initial sampling.")
+    vl.add_argument("--clip-start", type=float, default=0.0, help="Start time (sec).")
+    vl.add_argument("--clip-end", type=float, default=-1.0, help="End time (sec, -1 = full).")
 
     # Token/pixel limits (edge-style, converted internally)
-    p.add_argument(
+    vl.add_argument(
         "--min-pixels",
         type=int,
         default=128,
         help="Per-frame min tokens as an edge multiplier (×28×28 or ×32×32).",
     )
-    p.add_argument(
+    vl.add_argument(
         "--max-pixels",
         type=int,
         default=1280,
         help="Per-frame max tokens as an edge multiplier (×28×28 or ×32×32).",
     )
-    p.add_argument(
+    vl.add_argument(
         "--total-pixels",
         type=int,
         default=24000,
@@ -111,32 +212,31 @@ def parse_args() -> argparse.Namespace:
     )
 
     # Audio transcription
-    p.add_argument("--audio", action="store_true", help="Enable audio transcription.")
-    p.add_argument(
+    vl.add_argument("--audio", action="store_true", help="Enable audio transcription.")
+    vl.add_argument(
         "--asr-model",
         default="openai/whisper-large-v3-turbo",
         help="HF ASR model id for audio transcription (e.g. 'openai/whisper-small'). Empty disables.",
     )
-    p.add_argument(
+    vl.add_argument(
         "--max-audio-seconds",
         type=float,
         default=0.0,
         help="If > 0, limit audio transcription to this many seconds from the start of the video.",
     )
-    p.add_argument(
+    vl.add_argument(
         "--no-save-transcript",
         action="store_true",
         help="Do not save the raw audio transcript to a separate *.transcript.txt file.",
     )
 
     # Misc
-    p.add_argument("--no-think-trim", action="store_true", help="Do not trim '<think>...</think>' if present.")
-    p.add_argument("--half_cpu", action="store_true", help="Use half of the CPU cores")
-    p.add_argument("--dry", action="store_true", help="Dry run. Load model and processor but do not generate.")
-    p.add_argument("--cont_prompt", action="store_true", help="Add a continue prompt to generate more.")
-    p.add_argument("--no_meta", action="store_true", help="Do not use metadata from process_vision_info.")
-    p.add_argument("--seed", type=int, default=4051888)
-    p.add_argument("--rep_pen", type=float, default=1.05, help="repetition penalty. Default is 1.0")
-    p.add_argument("--optimize", action="store_true", help="Compile model with torch.compile for faster inference.")
+    vl.add_argument("--no-think-trim", action="store_true", help="Do not trim '<think>...</think>' if present.")
+    vl.add_argument("--half_cpu", action="store_true", help="Use half of the CPU cores")
+    vl.add_argument("--dry", action="store_true", help="Dry run. Load model and processor but do not generate.")
+    vl.add_argument("--cont_prompt", action="store_true", help="Add a continue prompt to generate more.")
+    vl.add_argument("--no_meta", action="store_true", help="Do not use metadata from process_vision_info.")
+    vl.add_argument("--seed", type=int, default=4051888)
+    vl.add_argument("--rep_pen", type=float, default=1.05, help="repetition penalty. Default is 1.0")
 
-    return p.parse_args()
+    return p.parse_args(argv)

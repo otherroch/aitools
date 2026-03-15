@@ -2,14 +2,13 @@
 
 **AI dataset preparation toolkit for diffusion model LoRA training.**
 
-`aitools` provides four command-line tools and Python APIs for preparing image and video datasets:
+`aitools` provides three command-line tools and Python APIs for preparing image and video datasets:
 
 | Tool | Command | Description |
 |------|---------|-------------|
 | Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (convert → crop → caption → augment) |
 | Video Crop | `vicrop` | Extract face-cropped PNG frames from video files |
-| Video Description (WD14) | `videsc` | Generate tag-based text descriptions for video files using the WD14 tagger |
-| Video Description (VL) | `videsc-vl` | Generate natural-language video descriptions using a Qwen3-VL vision-language model |
+| Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL (`--vl`) |
 
 ---
 
@@ -20,7 +19,6 @@
 - [portrait-prep](#portrait-prep)
 - [vicrop](#vicrop)
 - [videsc](#videsc)
-- [videsc-vl](#videsc-vl)
 - [Python API](#python-api)
 - [Running tests](#running-tests)
 
@@ -35,7 +33,7 @@ pip install -e .
 # With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
 pip install -e ".[gpu]"
 
-# With Qwen3-VL support for videsc-vl (adds PyTorch, transformers, and related dependencies)
+# With Qwen3-VL support for videsc --vl (adds PyTorch, transformers, and related dependencies)
 pip install -e ".[vl]"
 
 # With YouTube download support (adds yt-dlp)
@@ -63,7 +61,7 @@ pip install -e ".[dev]"
 > YouTube Data API v3 key. Install `yt-dlp` with `pip install -e ".[youtube]"` or
 > `pip install yt-dlp`.
 
-> **Note – videsc-vl support:** The `videsc-vl` command requires PyTorch, the
+> **Note – videsc VL mode:** The `--vl` flag requires PyTorch, the
 > Transformers library, and related dependencies. Install them with
 > `pip install -e ".[vl]"`. A CUDA-capable GPU with sufficient VRAM is strongly
 > recommended (8 GB+ for the default 8B model; use `--quant 4bit` or `--quant 8bit`
@@ -90,17 +88,17 @@ aitools/
 ├── videsc/
 │   ├── __init__.py
 │   ├── describe.py       # WD14-based video description logic
-│   ├── wd_cli.py         # videsc entry point (WD14 tagger)
-│   ├── main.py           # videsc-vl entry point (Qwen3-VL)
+│   ├── wd_cli.py         # Legacy WD14 CLI module (superseded by main.py)
+│   ├── main.py           # Unified videsc entry point (WD14 + VL modes)
 │   ├── config.py         # Model directory configuration
 │   ├── cli/
-│   │   └── args.py       # CLI argument parsing for videsc-vl
+│   │   └── args.py       # Unified CLI argument parsing
 │   ├── audio/
 │   │   └── transcription.py  # Whisper-based audio transcription
 │   ├── model/
 │   │   └── loader.py     # Qwen3-VL / Qwen3-Omni model loading
 │   ├── pipeline/
-│   │   └── runner.py     # Batch & single-video runner for videsc-vl
+│   │   └── runner.py     # Batch & single-video runner for VL mode
 │   ├── video/
 │   │   ├── info.py       # Video metadata extraction
 │   │   ├── messages.py   # LLM message construction
@@ -337,13 +335,38 @@ frames/
 
 ## videsc
 
-Generate AI-powered text descriptions for video files using the WD14 tagger.
+Generate AI-powered text descriptions for video files.
 
-Key frames are extracted from each video, tagged individually with WD14, and the tags are aggregated across all frames (union of tags ranked by mean confidence). The result is written to a `.txt` file alongside the video (or in a specified output directory).
+`videsc` supports two modes selectable via the `--vl` flag:
+
+| | WD14 mode (default) | VL mode (`--vl`) |
+|---|---|---|
+| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni (LLM) |
+| **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
+| **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
+| **Audio support** | No | Yes (Whisper ASR integration) |
+| **Custom prompts** | No | Yes (`--prompt` / `--system`) |
+| **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling |
+
+Use the default WD14 mode when you need quick, reproducible tag-based captions that work on any hardware. Use `--vl` when you need detailed, human-readable descriptions — for example to create training captions that capture narrative context, character actions, or dialogue.
+
+### Installation
+
+```bash
+# Standard (WD14 mode, CPU inference)
+pip install -e .
+
+# With Qwen3-VL support for --vl mode
+pip install -e ".[vl]"
+```
+
+A CUDA-capable GPU is strongly recommended for VL mode. For lower VRAM use `--quant 4bit` or `--quant 8bit`.
+
+### WD14 mode usage
+
+Key frames are extracted from each video, tagged individually with the WD14 ONNX model, and the tags are aggregated across all frames (union of tags ranked by mean confidence). The result is written to a `.txt` file alongside the video (or in a specified output directory).
 
 The first run downloads the WD14 ONNX model from HuggingFace (~350 MB) and caches it under `~/.cache/huggingface/`.
-
-### Usage
 
 ```bash
 # Describe all videos in a directory (captions written alongside each video)
@@ -363,7 +386,49 @@ videsc --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
        --youtube-api-key "YOUR_API_KEY" --output-dir ./captions
 ```
 
+### VL mode usage (`--vl`)
+
+```bash
+# Describe a single video (output written to <video_dir>/desc-Qwen3-VL-8B-Instruct/)
+videsc --vl --video ./interview.mp4
+
+# Describe a single video with a custom prompt
+videsc --vl --video ./interview.mp4 \
+       --prompt "Describe the scene, characters, and key actions in detail."
+
+# Describe all .mp4 and .mov files in a directory
+videsc --vl --indir ./videos --ext .mp4 .mov
+
+# Describe videos matching a glob pattern, writing results to a specific directory
+videsc --vl --videos "./footage/**/*.mp4" --outdir ./captions
+
+# Use a text file listing one video path per line
+videsc --vl --filelist ./my_videos.txt --outdir ./captions
+
+# Use 4-bit quantisation for lower VRAM consumption
+videsc --vl --video ./clip.mp4 --quant 4bit
+
+# Enable audio transcription (requires soundfile and a Whisper model)
+videsc --vl --video ./clip.mp4 --audio
+
+# Use a locally downloaded model
+videsc --vl --video ./clip.mp4 --model /path/to/Qwen3-VL-8B-Instruct --model_full
+
+# Use Qwen3-Omni for multimodal (audio + video) understanding
+videsc --vl --video ./clip.mp4 --omni --model Qwen/Qwen3-Omni-8B --model_hf
+```
+
+Output `.txt` files are placed alongside each video in a `desc-<model>` subdirectory by default, or in the directory specified by `--outdir`.
+
 ### CLI reference
+
+#### Mode
+
+| Flag | Description |
+|------|-------------|
+| `--vl` | Use Qwen3-VL vision-language model instead of the WD14 tagger |
+
+#### WD14 mode arguments
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -379,72 +444,9 @@ videsc --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
 | `--include-ratings` | — | Include rating tags (safe/questionable/explicit) |
 | `--no-skip-existing` | — | Re-describe videos whose `.txt` already exists |
 
----
+#### VL mode arguments (`--vl`)
 
-## videsc-vl
-
-Generate rich, natural-language text descriptions for video files using a
-[Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) vision-language
-model (or its Qwen3-Omni multimodal variant).
-
-### videsc vs videsc-vl
-
-| | `videsc` | `videsc-vl` |
-|---|---|---|
-| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni (LLM) |
-| **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
-| **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
-| **Audio support** | No | Yes (Whisper ASR integration) |
-| **Custom prompts** | No | Yes (`--prompt` / `--system`) |
-| **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling |
-
-Use `videsc` when you need quick, reproducible tag-based captions that work on any hardware. Use `videsc-vl` when you need detailed, human-readable descriptions — for example to create training captions that capture narrative context, character actions, or dialogue.
-
-### Installation
-
-```bash
-pip install -e ".[vl]"
-```
-
-A CUDA-capable GPU is strongly recommended. For lower VRAM use `--quant 4bit` or `--quant 8bit`.
-
-### Usage
-
-```bash
-# Describe a single video (output written to <video_dir>/desc-Qwen3-VL-8B-Instruct/)
-videsc-vl --video ./interview.mp4
-
-# Describe a single video with a custom prompt
-videsc-vl --video ./interview.mp4 \
-          --prompt "Describe the scene, characters, and key actions in detail."
-
-# Describe all .mp4 and .mov files in a directory
-videsc-vl --indir ./videos --ext .mp4 .mov
-
-# Describe videos matching a glob pattern, writing results to a specific directory
-videsc-vl --videos "./footage/**/*.mp4" --outdir ./captions
-
-# Use a text file listing one video path per line
-videsc-vl --filelist ./my_videos.txt --outdir ./captions
-
-# Use 4-bit quantisation for lower VRAM consumption
-videsc-vl --video ./clip.mp4 --quant 4bit
-
-# Enable audio transcription (requires soundfile and a Whisper model)
-videsc-vl --video ./clip.mp4 --audio
-
-# Use a locally downloaded model
-videsc-vl --video ./clip.mp4 --model /path/to/Qwen3-VL-8B-Instruct --model_full
-
-# Use Qwen3-Omni for multimodal (audio + video) understanding
-videsc-vl --video ./clip.mp4 --omni --model Qwen/Qwen3-Omni-8B --model_hf
-```
-
-Output `.txt` files are placed alongside each video in a `desc-<model>` subdirectory by default, or in the directory specified by `--outdir`.
-
-### CLI reference
-
-#### Input / output
+##### Input / output
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -455,7 +457,7 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--ext` | *(all)* | File extensions to match when using `--indir` (e.g. `.mp4 .mov`) |
 | `--outdir` | `<video_dir>/desc-<model>` | Directory for output `.txt` description files |
 
-#### Batch processing
+##### Batch processing
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -464,14 +466,14 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--sleep` | `0.25` | Polling interval in seconds for job supervision |
 | `--dry-run` | — | Print resolved commands without running them |
 
-#### Prompt
+##### Prompt
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--prompt` | `"First, list all distinct characters, actions, and any important visuals in several long, comprehensive paragraphs."` | User prompt sent to the model |
 | `--system` | `"You are a helpful assistant that writes clear, concise video descriptions."` | System prompt |
 
-#### Model / runtime
+##### Model / runtime
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -484,7 +486,7 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--max-new-tokens` | `8192` | Maximum tokens to generate |
 | `--optimize` | — | Compile the model with `torch.compile` for faster inference |
 
-#### Video decoding & frame sampling
+##### Video decoding & frame sampling
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -496,7 +498,7 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--clip-start` | `0.0` | Start time in seconds |
 | `--clip-end` | `-1.0` | End time in seconds (`-1` = full video) |
 
-#### Pixel / token budget
+##### Pixel / token budget
 
 These values are *edge multipliers*: the actual pixel count per frame is `value × 28 × 28` (e.g. `--max-pixels 1280` → 1 003 520 pixels per frame). Adjust them to trade off detail against VRAM usage and throughput.
 
@@ -506,7 +508,7 @@ These values are *edge multipliers*: the actual pixel count per frame is `value 
 | `--max-pixels` | `1280` | Per-frame maximum token budget as an edge multiplier (1280 × 28² ≈ 1 M pixels) |
 | `--total-pixels` | `24000` | Total token budget across the whole video as an edge multiplier (24000 × 28² ≈ 19 M pixels) |
 
-#### Audio transcription
+##### Audio transcription
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -515,7 +517,7 @@ These values are *edge multipliers*: the actual pixel count per frame is `value 
 | `--max-audio-seconds` | `0.0` | Limit transcription to this many seconds from the start (`0` = no limit) |
 | `--no-save-transcript` | — | Do not write a separate `*.transcript.txt` file |
 
-#### Miscellaneous
+##### Miscellaneous
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -634,10 +636,8 @@ pytest tests/test_augment.py
 # vicrop
 pytest tests/test_vicrop.py
 
-# videsc (WD14)
+# videsc (WD14 and VL modes)
 pytest tests/test_videsc.py
-
-# videsc-vl
 pytest tests/test_videsc_main.py
 ```
 
