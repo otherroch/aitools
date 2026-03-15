@@ -239,4 +239,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument("--seed", type=int, default=4051888)
     vl.add_argument("--rep_pen", type=float, default=1.05, help="repetition penalty. Default is 1.0")
 
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+
+    # Post-parse validation for WD14 mode (--vl not set)
+    if not args.vl:
+        if args.input_dir is None and args.youtube_url is None:
+            p.error("one of --input-dir or --youtube-url is required")
+        if args.youtube_url is not None and args.youtube_api_key is None:
+            p.error("--youtube-api-key is required when using --youtube-url")
+
+    return args
