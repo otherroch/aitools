@@ -52,8 +52,7 @@ dev = ["pytest>=8.0", "pytest-cov"]
 [project.scripts]
 portrait-prep = "portrait_prep.cli:main"
 vicrop = "vicrop.cli:main"
-videsc = "videsc.wd_cli:main"
-videsc-vl = "videsc.main:main"
+videsc = "videsc.main:main"
 
 [project.urls]
 Repository = "https://github.com/otherroch/aitools"
