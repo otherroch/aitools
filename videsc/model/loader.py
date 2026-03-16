@@ -8,6 +8,7 @@ from torchsummary import summary  # unused but kept if you rely on it elsewhere
 from transformers import (
     Qwen3VLForConditionalGeneration,
     Qwen3VLMoeForConditionalGeneration,
+    Qwen3_5ForConditionalGeneration,
     AutoProcessor,
     BitsAndBytesConfig,
     Qwen3OmniMoeForConditionalGeneration,
@@ -15,6 +16,7 @@ from transformers import (
 )
 
 from videsc.config import model_dir
+from videsc.utils.helpers import _is_qwen35_model
 
 
 # Shared model / processor for threaded batch mode
@@ -38,7 +40,9 @@ def _maybe_set_reader(reader: str):
 
 def load_model_and_processor(args):
     """
-    Load Qwen3-VL model and processor once and reuse across videos.
+    Load Qwen3-VL or Qwen3.5 model and processor once and reuse across videos.
+    Automatically detects Qwen3.5 models (Qwen3_5ForConditionalGeneration) vs
+    Qwen3-VL models (Qwen3VLForConditionalGeneration) from the model path.
     In threaded batch mode, this lets all threads share the same CUDA weights.
     """
     global _SHARED_MODEL, _SHARED_PROCESSOR
@@ -74,8 +78,18 @@ def load_model_and_processor(args):
     quant_cfg = _quant_config(args.quant)
     _maybe_set_reader(args.reader)
 
+    # Select model class: Qwen3.5 uses Qwen3_5ForConditionalGeneration,
+    # which extends Qwen3VLForConditionalGeneration with a hybrid
+    # (Gated Delta Network + full-attention) text backbone.
+    is_qwen35 = _is_qwen35_model(model_path_local)
+    if is_qwen35:
+        print("Detected Qwen3.5 model: using Qwen3_5ForConditionalGeneration")
+        model_cls = Qwen3_5ForConditionalGeneration
+    else:
+        model_cls = Qwen3VLForConditionalGeneration
+
     # Load model
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
+    model = model_cls.from_pretrained(
         model_path_local,
         device_map="auto",
         torch_dtype="auto",
@@ -91,11 +105,13 @@ def load_model_and_processor(args):
             backend="inductor",
         )
 
-    # Load processor with pixel limits
+    # Pixel limits: Qwen3.5 uses patch_size=16 so pixel counts are scaled
+    # by 16×16; Qwen3-VL uses 32×32.
+    pixel_factor = 16 * 16 if is_qwen35 else 32 * 32
     processor = AutoProcessor.from_pretrained(
         model_path_local,
-        min_pixels=args.min_pixels * 32 * 32,
-        max_pixels=args.max_pixels * 32 * 32,
+        min_pixels=args.min_pixels * pixel_factor,
+        max_pixels=args.max_pixels * pixel_factor,
     )
 
     print("model loaded")

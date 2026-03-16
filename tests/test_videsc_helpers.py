@@ -9,6 +9,7 @@ import pytest
 from videsc.utils.helpers import (
     _format_time_hhmmss,
     _patch_size_for_model,
+    _is_qwen35_model,
     _edge_to_pixels,
     expand_inputs,
     namespace_to_cli,
@@ -49,6 +50,22 @@ class TestPatchSize:
     def test_empty_returns_28(self):
         assert _patch_size_for_model("") == 28
 
+    def test_qwen35_returns_16(self):
+        assert _patch_size_for_model("Qwen3.5-9B") == 16
+
+    def test_qwen35_full_hf_id_returns_16(self):
+        assert _patch_size_for_model("Qwen/Qwen3.5-9B") == 16
+
+    def test_qwen35_case_insensitive(self):
+        assert _patch_size_for_model("QWEN3.5-9B") == 16
+
+    def test_qwen35_local_path_returns_16(self):
+        assert _patch_size_for_model("/models/Qwen3.5-9B-Instruct") == 16
+
+    def test_qwen3_vl_not_confused_with_qwen35(self):
+        # Qwen3-VL-8B should return 32, not 16
+        assert _patch_size_for_model("Qwen/Qwen3-VL-8B-Instruct") == 32
+
 
 class TestEdgeToPixels:
     def test_basic(self):
@@ -56,6 +73,32 @@ class TestEdgeToPixels:
 
     def test_patch_28(self):
         assert _edge_to_pixels(2, 28) == 2 * 28 * 28
+
+    def test_patch_16(self):
+        assert _edge_to_pixels(128, 16) == 128 * 16 * 16
+
+
+class TestIsQwen35Model:
+    def test_qwen35_hf_id_detected(self):
+        assert _is_qwen35_model("Qwen/Qwen3.5-9B") is True
+
+    def test_qwen35_short_name_detected(self):
+        assert _is_qwen35_model("Qwen3.5-9B") is True
+
+    def test_qwen35_case_insensitive(self):
+        assert _is_qwen35_model("QWEN3.5-9B") is True
+
+    def test_qwen35_local_path_detected(self):
+        assert _is_qwen35_model("/models/Qwen3.5-9B-Instruct") is True
+
+    def test_qwen3_vl_not_detected_as_qwen35(self):
+        assert _is_qwen35_model("Qwen/Qwen3-VL-8B-Instruct") is False
+
+    def test_qwen2_not_detected_as_qwen35(self):
+        assert _is_qwen35_model("Qwen/Qwen2.5-VL-7B-Instruct") is False
+
+    def test_empty_string_not_detected(self):
+        assert _is_qwen35_model("") is False
 
 
 class TestExpandInputs:

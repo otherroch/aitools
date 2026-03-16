@@ -155,7 +155,7 @@ def run_single_video(args, model, processor) -> int:
 
         images, videos, video_kwargs = process_vision_info(
             messages,
-            image_patch_size=16,
+            image_patch_size=patch,
             return_video_kwargs=True,
             return_video_metadata=use_metadata,
         )

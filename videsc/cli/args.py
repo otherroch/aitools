@@ -149,12 +149,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument(
         "--model",
         default="Qwen/Qwen3-VL-8B-Instruct",
-        help="Model name or directory; used under model_dir unless --model_hf/--model_full.",
+        help=(
+            "Model name or directory; used under model_dir unless --model_hf/--model_full.\n"
+            "Supports Qwen3-VL (e.g. Qwen/Qwen3-VL-8B-Instruct) and\n"
+            "Qwen3.5 (e.g. Qwen/Qwen3.5-9B) models."
+        ),
     )
     vl.add_argument(
         "--model_hf",
         action="store_true",
-        help="Model is a HF model id (e.g. Qwen/Qwen3-VL-4B-Thinking) or local dir",
+        help="Model is a HF model id (e.g. Qwen/Qwen3-VL-4B-Thinking, Qwen/Qwen3.5-9B) or local dir",
     )
     vl.add_argument("--model_full", action="store_true", help="Model is a full path")
     vl.add_argument(

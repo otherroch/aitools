@@ -4,8 +4,26 @@ from typing import List, Any
 
 
 def _patch_size_for_model(model_id: str) -> int:
-    """Return the patch size (32 for Qwen3, 28 for Qwen2.5)."""
-    return 32 if "qwen3" in model_id.lower() else 28
+    """Return the vision patch size for the given model identifier.
+
+    - 16 for Qwen3.5 (early-fusion architecture, vision patch_size=16)
+    - 32 for Qwen3-VL
+    - 28 for Qwen2.5-VL and other models
+    """
+    lower = model_id.lower()
+    if "qwen3.5" in lower:
+        return 16
+    return 32 if "qwen3" in lower else 28
+
+
+def _is_qwen35_model(model_path: str) -> bool:
+    """Return True if *model_path* refers to a Qwen3.5 model.
+
+    Qwen3.5 uses ``Qwen3_5ForConditionalGeneration`` (an early-fusion
+    vision-language model), which requires different loading logic compared
+    to ``Qwen3VLForConditionalGeneration``.
+    """
+    return "qwen3.5" in model_path.lower()
 
 
 def _edge_to_pixels(edge: int, patch: int) -> int:
