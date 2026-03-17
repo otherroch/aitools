@@ -161,3 +161,38 @@ class TestVidescUnifiedCommand:
         assert args.spf == 4.0
         assert args.num_frames == 256
         assert args.audio is False
+
+
+class TestRunnerQwen35Path:
+    """Structural tests that verify the Qwen3.5 single-step code path exists in runner.py."""
+
+    RUNNER = VIDESC_ROOT / "pipeline" / "runner.py"
+
+    def test_runner_imports_is_qwen35_model(self):
+        """runner.py must import _is_qwen35_model to detect Qwen3.5 models."""
+        src = self.RUNNER.read_text()
+        assert "_is_qwen35_model" in src, (
+            "runner.py must import and use _is_qwen35_model"
+        )
+
+    def test_runner_has_qwen35_single_step_branch(self):
+        """runner.py must call apply_chat_template(tokenize=True) for Qwen3.5."""
+        src = self.RUNNER.read_text()
+        assert "tokenize=True" in src, (
+            "runner.py must have apply_chat_template(tokenize=True) for Qwen3.5"
+        )
+
+    def test_runner_has_return_dict_true(self):
+        """runner.py must request return_dict=True in the Qwen3.5 branch."""
+        src = self.RUNNER.read_text()
+        assert "return_dict=True" in src, (
+            "runner.py must pass return_dict=True in the Qwen3.5 single-step call"
+        )
+
+    def test_runner_qwen35_branch_uses_dict_key_access(self):
+        """generated_ids_trimmed must use inputs['input_ids'] (dict key) not inputs.input_ids."""
+        src = self.RUNNER.read_text()
+        assert 'inputs["input_ids"]' in src, (
+            "runner.py must use inputs['input_ids'] for trimming (works for both "
+            "BatchEncoding from processor() and BatchFeature from apply_chat_template)"
+        )

@@ -21,7 +21,7 @@ from videsc.audio.transcription import transcribe_audio_from_video
 from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
-from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model
+from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, _is_qwen35_model
 
 
 def run_single_video(args, model, processor) -> int:
@@ -149,44 +149,64 @@ def run_single_video(args, model, processor) -> int:
 
         _maybe_set_reader(args.reader)
 
-        use_metadata = not args.no_meta
-        if not use_metadata:
-            print("do not use metadata from vision info")
+        # Qwen3.5 overrides _prepare_position_ids_for_generation which calls
+        # get_rope_index and iterates over video_grid_thw.  When the two-step
+        # path is used (tokenize=False → process_vision_info → processor())
+        # video_grid_thw is not populated correctly and model.generate raises
+        # StopIteration.  The single-step apply_chat_template(tokenize=True)
+        # path correctly sets all vision tensors in one call.
+        is_qwen35 = _is_qwen35_model(getattr(args, "model", ""))
 
-        images, videos, video_kwargs = process_vision_info(
-            messages,
-            image_patch_size=patch,
-            return_video_kwargs=True,
-            return_video_metadata=use_metadata,
-        )
+        if is_qwen35:
+            print("Qwen3.5 detected: using single-step apply_chat_template(tokenize=True)")
+            inputs = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            inputs = inputs.to("cuda")
+            trace += "\n\n Qwen3.5 single-step inputs keys: " + str(list(inputs.keys()))
+        else:
+            use_metadata = not args.no_meta
+            if not use_metadata:
+                print("do not use metadata from vision info")
 
-        print("after process vision info")
-        print("video_kwargs:", video_kwargs)
-        trace += "\n\n video_kwargs: " + str(video_kwargs)
+            images, videos, video_kwargs = process_vision_info(
+                messages,
+                image_patch_size=patch,
+                return_video_kwargs=True,
+                return_video_metadata=use_metadata,
+            )
 
-        video_metadatas = None
-        if use_metadata:
-            if videos is not None:
-                videos, video_metadatas = zip(*videos)
-                videos, video_metadatas = list(videos), list(video_metadatas)
-            else:
-                video_metadatas = None
+            print("after process vision info")
+            print("video_kwargs:", video_kwargs)
+            trace += "\n\n video_kwargs: " + str(video_kwargs)
 
-        print("video_metadatas:", video_metadatas)
-        trace += "\n\n video_metadatas: " + str(video_metadatas)
+            video_metadatas = None
+            if use_metadata:
+                if videos is not None:
+                    videos, video_metadatas = zip(*videos)
+                    videos, video_metadatas = list(videos), list(video_metadatas)
+                else:
+                    video_metadatas = None
 
-        print("before processor")
+            print("video_metadatas:", video_metadatas)
+            trace += "\n\n video_metadatas: " + str(video_metadatas)
 
-        inputs = processor(
-            text=modeltext,
-            images=images,
-            videos=videos,
-            video_metadata=video_metadatas,
-            return_tensors="pt",
-            **video_kwargs,
-        )
+            print("before processor")
 
-        inputs = inputs.to("cuda")
+            inputs = processor(
+                text=modeltext,
+                images=images,
+                videos=videos,
+                video_metadata=video_metadatas,
+                return_tensors="pt",
+                **video_kwargs,
+            )
+
+            inputs = inputs.to("cuda")
 
         print("before generate")
 
@@ -215,7 +235,7 @@ def run_single_video(args, model, processor) -> int:
                 )
             print("after generate, before trim")
             generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, gen_ids)
+                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], gen_ids)
             ]
             text = processor.batch_decode(
                 generated_ids_trimmed,
