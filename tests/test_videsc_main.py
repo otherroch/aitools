@@ -164,7 +164,7 @@ class TestVidescUnifiedCommand:
 
 
 class TestRunnerQwen35Path:
-    """Structural tests verifying the Qwen3.5 no-metadata two-step path in runner.py."""
+    """Structural tests verifying the VL pipeline metadata handling in runner.py."""
 
     RUNNER = VIDESC_ROOT / "pipeline" / "runner.py"
 
@@ -188,6 +188,19 @@ class TestRunnerQwen35Path:
         src = self.RUNNER.read_text()
         assert 'video_metadatas is not None' in src, (
             "runner.py must guard video_metadata kwarg with an is-not-None check"
+        )
+
+    def test_runner_pops_video_metadata_before_generate(self):
+        """runner.py must pop video_metadata from BatchFeature before model.generate().
+
+        Qwen3VLProcessor returns video_metadata (list of VideoMetadata named-tuples,
+        not tensors) in the BatchFeature when return_metadata=True (the default).
+        model.generate(**inputs) would receive it as an unknown kwarg and crash.
+        """
+        src = self.RUNNER.read_text()
+        assert 'inputs.data.pop("video_metadata", None)' in src, (
+            'runner.py must remove video_metadata from the BatchFeature before '
+            'calling model.generate() to avoid an unknown-kwarg crash'
         )
 
     def test_runner_uses_dict_key_access_for_input_ids(self):

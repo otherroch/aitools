@@ -25,9 +25,10 @@ def _is_qwen35_model(model_path: str) -> bool:
     to ``Qwen3VLForConditionalGeneration``.
 
     Uses a regex with a negative lookahead to avoid matching hypothetical
-    future version names like ``qwen3.50`` or ``qwen3.500``.
+    future version names like ``qwen3.50`` or ``qwen3.500`` (extra digits or
+    decimal points directly after the version number).
     """
-    return bool(re.search(r"qwen3\.5(?!\d)", model_path.lower()))
+    return bool(re.search(r"qwen3\.5(?![.\d])", model_path.lower()))
 
 
 def _edge_to_pixels(edge: int, patch: int) -> int:

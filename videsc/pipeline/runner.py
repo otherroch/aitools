@@ -206,6 +206,16 @@ def run_single_video(args, model, processor) -> int:
 
         inputs = processor(**processor_kwargs)
 
+        # Qwen3VLProcessor (default return_metadata=True in videos_kwargs) puts
+        # video_metadata (a list of VideoMetadata named-tuples, not tensors)
+        # into the BatchFeature.  model.generate(**inputs) then receives
+        # video_metadata as a kwarg that the model's forward() and
+        # GenerationMixin._validate_model_kwargs() do not recognise → crash.
+        # The timestamps that were computed from video_metadata have already been
+        # embedded as literal text tokens ("<0.0 seconds>…") in input_ids, so
+        # the model no longer needs video_metadata at inference time.
+        inputs.data.pop("video_metadata", None)
+
         inputs = inputs.to("cuda")
 
         print("before generate")
