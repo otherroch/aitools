@@ -168,23 +168,26 @@ class TestRunnerVLPipeline:
 
     RUNNER = VIDESC_ROOT / "pipeline" / "runner.py"
 
-    def test_runner_does_not_import_is_qwen35_model(self):
-        """runner.py must NOT import _is_qwen35_model.
+    def test_runner_imports_is_qwen35_model(self):
+        """runner.py must import _is_qwen35_model.
 
-        Model-class detection is done in loader.py; runner.py uses the same
-        two-step metadata path for all VL models (Qwen3-VL and Qwen3.5).
+        Qwen3.5 must NOT receive pre-computed video_metadata because
+        process_vision_info uses Qwen3-VL's grid convention, which is
+        incompatible with Qwen3.5's get_rope_index → StopIteration.
+        runner.py needs _is_qwen35_model to detect Qwen3.5 and suppress metadata.
         """
         src = self.RUNNER.read_text()
-        assert "_is_qwen35_model" not in src, (
-            "runner.py must not import _is_qwen35_model; model-specific "
-            "class selection belongs in loader.py"
+        assert "_is_qwen35_model" in src, (
+            "runner.py must import _is_qwen35_model to detect Qwen3.5 "
+            "and suppress incompatible video_metadata"
         )
 
-    def test_runner_unified_metadata_path(self):
-        """All VL models use the same metadata path: use_metadata = not args.no_meta."""
+    def test_runner_qwen35_disables_metadata(self):
+        """Qwen3.5 must disable video_metadata: use_metadata=(not is_qwen35)."""
         src = self.RUNNER.read_text()
-        assert "use_metadata = not args.no_meta" in src, (
-            "runner.py must use 'use_metadata = not args.no_meta' for all models"
+        assert "not is_qwen35" in src, (
+            "runner.py must suppress video_metadata for Qwen3.5 models "
+            "to avoid StopIteration in get_rope_index"
         )
 
     def test_runner_video_metadata_passed_conditionally(self):
@@ -197,10 +200,10 @@ class TestRunnerVLPipeline:
     def test_runner_pops_video_metadata_before_generate(self):
         """runner.py must pop video_metadata from BatchFeature before model.generate().
 
-        The Qwen3VL/Qwen3.5 processor may return video_metadata (a list of
-        VideoMetadata named-tuples, not tensors) inside the BatchFeature.
+        Qwen3VLProcessor returns video_metadata (a list of VideoMetadata named-tuples,
+        not tensors) in the BatchFeature when return_metadata=True (the default).
         model.generate(**inputs) would receive it as an unknown kwarg and crash
-        (Qwen3-VL: TypeError/crash; Qwen3.5: StopIteration in get_rope_index).
+        (Qwen3-VL: unknown-kwarg TypeError; Qwen3.5: StopIteration in get_rope_index).
         Popping it before generate() prevents both failure modes.
         """
         src = self.RUNNER.read_text()
@@ -214,8 +217,8 @@ class TestRunnerVLPipeline:
 
         process_vision_info already resizes video frames to the target resolution.
         Without do_resize=False the processor tries to resize again, which causes
-        a C-level crash for Qwen3.5 (producing no visible Python traceback because
-        stdout is still buffered when the crash occurs).
+        a C-level SIGSEGV for Qwen3.5 (producing no visible Python traceback because
+        the crash kills the process before Python can flush its stdout buffer).
         """
         src = self.RUNNER.read_text()
         assert "do_resize=False" in src, (
@@ -236,7 +239,7 @@ class TestRunnerVLPipeline:
 
         apply_chat_template(tokenize=True) ignores the nframes/total_pixels
         constraints in the message dict and attempts to load all video frames,
-        which causes OOM for large videos.
+        which causes OOM → SIGKILL for large videos.
         """
         import re
         src = self.RUNNER.read_text()
@@ -246,4 +249,17 @@ class TestRunnerVLPipeline:
         assert "tokenize=True" not in src_no_comments, (
             "runner.py must not use apply_chat_template(tokenize=True); "
             "it ignores nframes constraints and loads all video frames"
+        )
+
+    def test_runner_stdout_flushed_after_apply_chat_template(self):
+        """runner.py must call sys.stdout.flush() after apply_chat_template.
+
+        Without this flush, if the subsequent C-extension code (process_vision_info,
+        processor, etc.) crashes with SIGSEGV or is killed by OOM, all intermediate
+        diagnostic prints are lost because Python's stdout buffer was never flushed.
+        """
+        src = self.RUNNER.read_text()
+        assert "sys.stdout.flush()" in src, (
+            "runner.py must call sys.stdout.flush() after apply_chat_template "
+            "to ensure diagnostic output is visible even if a C-level crash follows"
         )

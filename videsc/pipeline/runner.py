@@ -21,7 +21,7 @@ from videsc.audio.transcription import transcribe_audio_from_video
 from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
-from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model
+from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, _is_qwen35_model
 
 
 def run_single_video(args, model, processor) -> int:
@@ -150,13 +150,20 @@ def run_single_video(args, model, processor) -> int:
 
         _maybe_set_reader(args.reader)
 
-        # All VL models (Qwen3-VL, Qwen3.5) use the two-step path with
-        # video_metadata for accurate frame timestamps.  The --no-meta flag lets
-        # the user opt out (e.g. for models that don't need timestamps).
-        # NOTE: video_metadata is popped from the BatchFeature before
-        # model.generate() (see below) to prevent unknown-kwarg crashes.
-        use_metadata = not args.no_meta
-        if not use_metadata:
+        # Qwen3.5 uses the two-step path (tokenize=False → process_vision_info
+        # → processor()) but MUST NOT receive pre-computed video_metadata.
+        # The metadata produced by process_vision_info uses Qwen3-VL's grid
+        # convention; when Qwen3_5Processor uses it to pre-fill video_grid_thw
+        # the values are incompatible with Qwen3.5's get_rope_index
+        # → StopIteration in model.generate().
+        # Without metadata the processor recomputes video_grid_thw directly
+        # from the (correctly-sized) video frame tensors, which is consistent
+        # with what model.generate / get_rope_index expects.
+        is_qwen35 = _is_qwen35_model(getattr(args, "model", ""))
+        use_metadata = (not args.no_meta) and (not is_qwen35)
+        if is_qwen35:
+            print("Qwen3.5 detected: skipping video_metadata to avoid get_rope_index StopIteration")
+        elif not use_metadata:
             print("do not use metadata from vision info (--no-meta)")
 
         images, videos, video_kwargs = process_vision_info(
