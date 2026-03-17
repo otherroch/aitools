@@ -163,24 +163,28 @@ class TestVidescUnifiedCommand:
         assert args.audio is False
 
 
-class TestRunnerQwen35Path:
+class TestRunnerVLPipeline:
     """Structural tests verifying the VL pipeline metadata handling in runner.py."""
 
     RUNNER = VIDESC_ROOT / "pipeline" / "runner.py"
 
-    def test_runner_imports_is_qwen35_model(self):
-        """runner.py must import _is_qwen35_model to detect Qwen3.5 models."""
+    def test_runner_does_not_import_is_qwen35_model(self):
+        """runner.py must NOT import _is_qwen35_model.
+
+        Model-class detection is done in loader.py; runner.py uses the same
+        two-step metadata path for all VL models (Qwen3-VL and Qwen3.5).
+        """
         src = self.RUNNER.read_text()
-        assert "_is_qwen35_model" in src, (
-            "runner.py must import and use _is_qwen35_model"
+        assert "_is_qwen35_model" not in src, (
+            "runner.py must not import _is_qwen35_model; model-specific "
+            "class selection belongs in loader.py"
         )
 
-    def test_runner_qwen35_disables_metadata(self):
-        """Qwen3.5 must use two-step path with use_metadata=False (no video_metadata)."""
+    def test_runner_unified_metadata_path(self):
+        """All VL models use the same metadata path: use_metadata = not args.no_meta."""
         src = self.RUNNER.read_text()
-        # The no-metadata branch is expressed as: (not args.no_meta) and (not is_qwen35)
-        assert "not is_qwen35" in src, (
-            "runner.py must suppress video_metadata for Qwen3.5 models"
+        assert "use_metadata = not args.no_meta" in src, (
+            "runner.py must use 'use_metadata = not args.no_meta' for all models"
         )
 
     def test_runner_video_metadata_passed_conditionally(self):
@@ -193,14 +197,30 @@ class TestRunnerQwen35Path:
     def test_runner_pops_video_metadata_before_generate(self):
         """runner.py must pop video_metadata from BatchFeature before model.generate().
 
-        Qwen3VLProcessor returns video_metadata (list of VideoMetadata named-tuples,
-        not tensors) in the BatchFeature when return_metadata=True (the default).
-        model.generate(**inputs) would receive it as an unknown kwarg and crash.
+        The Qwen3VL/Qwen3.5 processor may return video_metadata (a list of
+        VideoMetadata named-tuples, not tensors) inside the BatchFeature.
+        model.generate(**inputs) would receive it as an unknown kwarg and crash
+        (Qwen3-VL: TypeError/crash; Qwen3.5: StopIteration in get_rope_index).
+        Popping it before generate() prevents both failure modes.
         """
         src = self.RUNNER.read_text()
         assert 'inputs.data.pop("video_metadata", None)' in src, (
             'runner.py must remove video_metadata from the BatchFeature before '
-            'calling model.generate() to avoid an unknown-kwarg crash'
+            'calling model.generate() to avoid an unknown-kwarg / StopIteration crash'
+        )
+
+    def test_runner_passes_do_resize_false_to_processor(self):
+        """processor must be called with do_resize=False.
+
+        process_vision_info already resizes video frames to the target resolution.
+        Without do_resize=False the processor tries to resize again, which causes
+        a C-level crash for Qwen3.5 (producing no visible Python traceback because
+        stdout is still buffered when the crash occurs).
+        """
+        src = self.RUNNER.read_text()
+        assert "do_resize=False" in src, (
+            "runner.py must pass do_resize=False to processor() because "
+            "process_vision_info already resized the frames"
         )
 
     def test_runner_uses_dict_key_access_for_input_ids(self):
@@ -212,8 +232,12 @@ class TestRunnerQwen35Path:
         )
 
     def test_runner_no_tokenize_true_in_vl_branch(self):
-        """runner.py must NOT call apply_chat_template(tokenize=True) for Qwen3.5
-        because that path ignores nframes/total_pixels and triggers OOM."""
+        """runner.py must NOT call apply_chat_template(tokenize=True).
+
+        apply_chat_template(tokenize=True) ignores the nframes/total_pixels
+        constraints in the message dict and attempts to load all video frames,
+        which causes OOM for large videos.
+        """
         import re
         src = self.RUNNER.read_text()
         # Strip single-line comments before searching so the check isn't

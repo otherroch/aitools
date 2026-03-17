@@ -21,7 +21,7 @@ from videsc.audio.transcription import transcribe_audio_from_video
 from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
-from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, _is_qwen35_model
+from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model
 
 
 def run_single_video(args, model, processor) -> int:
@@ -141,6 +141,7 @@ def run_single_video(args, model, processor) -> int:
         )
 
         print("after apply chat template, modeltext: ", modeltext)
+        sys.stdout.flush()
         trace += "\n\n messages: " + str(messages)
 
         now = datetime.now()
@@ -149,26 +150,14 @@ def run_single_video(args, model, processor) -> int:
 
         _maybe_set_reader(args.reader)
 
-        # Qwen3.5 uses the standard two-step path BUT must NOT pass
-        # video_metadata.  The metadata produced by qwen_vl_utils
-        # process_vision_info uses Qwen3-VL's grid convention; when
-        # Qwen3_5Processor uses it to pre-fill video_grid_thw the values are
-        # incompatible with Qwen3.5's get_rope_index → StopIteration.
-        # Additionally, apply_chat_template(tokenize=True) ignores the
-        # nframes/total_pixels constraints in the message dict and attempts to
-        # load all video frames → OOM.
-        # Without metadata the processor recomputes video_grid_thw directly
-        # from the (correctly-sized) video frame tensors, which is consistent
-        # with what model.generate / get_rope_index expects.
-        is_qwen35 = _is_qwen35_model(getattr(args, "model", ""))
-
-        # Qwen3.5 must not use pre-computed video metadata; all other models
-        # respect the --no_meta flag.
-        use_metadata = (not args.no_meta) and (not is_qwen35)
-        if is_qwen35:
-            print("Qwen3.5 detected: using two-step path without video_metadata")
-        elif not use_metadata:
-            print("do not use metadata from vision info")
+        # All VL models (Qwen3-VL, Qwen3.5) use the two-step path with
+        # video_metadata for accurate frame timestamps.  The --no-meta flag lets
+        # the user opt out (e.g. for models that don't need timestamps).
+        # NOTE: video_metadata is popped from the BatchFeature before
+        # model.generate() (see below) to prevent unknown-kwarg crashes.
+        use_metadata = not args.no_meta
+        if not use_metadata:
+            print("do not use metadata from vision info (--no-meta)")
 
         images, videos, video_kwargs = process_vision_info(
             messages,
@@ -199,6 +188,9 @@ def run_single_video(args, model, processor) -> int:
             images=images,
             videos=videos,
             return_tensors="pt",
+            # process_vision_info already resizes frames to the target
+            # resolution; tell the processor not to resize them again.
+            do_resize=False,
             **video_kwargs,
         )
         if video_metadatas is not None:
