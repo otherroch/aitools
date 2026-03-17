@@ -149,64 +149,64 @@ def run_single_video(args, model, processor) -> int:
 
         _maybe_set_reader(args.reader)
 
-        # Qwen3.5 overrides _prepare_position_ids_for_generation which calls
-        # get_rope_index and iterates over video_grid_thw.  When the two-step
-        # path is used (tokenize=False → process_vision_info → processor())
-        # video_grid_thw is not populated correctly and model.generate raises
-        # StopIteration.  The single-step apply_chat_template(tokenize=True)
-        # path correctly sets all vision tensors in one call.
+        # Qwen3.5 uses the standard two-step path BUT must NOT pass
+        # video_metadata.  The metadata produced by qwen_vl_utils
+        # process_vision_info uses Qwen3-VL's grid convention; when
+        # Qwen3_5Processor uses it to pre-fill video_grid_thw the values are
+        # incompatible with Qwen3.5's get_rope_index → StopIteration.
+        # Additionally, apply_chat_template(tokenize=True) ignores the
+        # nframes/total_pixels constraints in the message dict and attempts to
+        # load all video frames → OOM.
+        # Without metadata the processor recomputes video_grid_thw directly
+        # from the (correctly-sized) video frame tensors, which is consistent
+        # with what model.generate / get_rope_index expects.
         is_qwen35 = _is_qwen35_model(getattr(args, "model", ""))
 
+        # Qwen3.5 must not use pre-computed video metadata; all other models
+        # respect the --no_meta flag.
+        use_metadata = (not args.no_meta) and (not is_qwen35)
         if is_qwen35:
-            print("Qwen3.5 detected: using single-step apply_chat_template(tokenize=True)")
-            inputs = processor.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
-            inputs = inputs.to("cuda")
-            trace += "\n\n Qwen3.5 single-step inputs keys: " + str(list(inputs.keys()))
-        else:
-            use_metadata = not args.no_meta
-            if not use_metadata:
-                print("do not use metadata from vision info")
+            print("Qwen3.5 detected: using two-step path without video_metadata")
+        elif not use_metadata:
+            print("do not use metadata from vision info")
 
-            images, videos, video_kwargs = process_vision_info(
-                messages,
-                image_patch_size=patch,
-                return_video_kwargs=True,
-                return_video_metadata=use_metadata,
-            )
+        images, videos, video_kwargs = process_vision_info(
+            messages,
+            image_patch_size=patch,
+            return_video_kwargs=True,
+            return_video_metadata=use_metadata,
+        )
 
-            print("after process vision info")
-            print("video_kwargs:", video_kwargs)
-            trace += "\n\n video_kwargs: " + str(video_kwargs)
+        print("after process vision info")
+        print("video_kwargs:", video_kwargs)
+        trace += "\n\n video_kwargs: " + str(video_kwargs)
 
-            video_metadatas = None
-            if use_metadata:
-                if videos is not None:
-                    videos, video_metadatas = zip(*videos)
-                    videos, video_metadatas = list(videos), list(video_metadatas)
-                else:
-                    video_metadatas = None
+        video_metadatas = None
+        if use_metadata:
+            if videos is not None:
+                videos, video_metadatas = zip(*videos)
+                videos, video_metadatas = list(videos), list(video_metadatas)
+            else:
+                video_metadatas = None
 
-            print("video_metadatas:", video_metadatas)
-            trace += "\n\n video_metadatas: " + str(video_metadatas)
+        print("video_metadatas:", video_metadatas)
+        trace += "\n\n video_metadatas: " + str(video_metadatas)
 
-            print("before processor")
+        print("before processor")
 
-            inputs = processor(
-                text=modeltext,
-                images=images,
-                videos=videos,
-                video_metadata=video_metadatas,
-                return_tensors="pt",
-                **video_kwargs,
-            )
+        processor_kwargs: dict = dict(
+            text=modeltext,
+            images=images,
+            videos=videos,
+            return_tensors="pt",
+            **video_kwargs,
+        )
+        if video_metadatas is not None:
+            processor_kwargs["video_metadata"] = video_metadatas
 
-            inputs = inputs.to("cuda")
+        inputs = processor(**processor_kwargs)
+
+        inputs = inputs.to("cuda")
 
         print("before generate")
 

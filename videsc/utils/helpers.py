@@ -1,3 +1,4 @@
+import re
 import shlex
 from pathlib import Path as _P
 from typing import List, Any
@@ -22,8 +23,11 @@ def _is_qwen35_model(model_path: str) -> bool:
     Qwen3.5 uses ``Qwen3_5ForConditionalGeneration`` (an early-fusion
     vision-language model), which requires different loading logic compared
     to ``Qwen3VLForConditionalGeneration``.
+
+    Uses a regex with a negative lookahead to avoid matching hypothetical
+    future version names like ``qwen3.50`` or ``qwen3.500``.
     """
-    return "qwen3.5" in model_path.lower()
+    return bool(re.search(r"qwen3\.5(?!\d)", model_path.lower()))
 
 
 def _edge_to_pixels(edge: int, patch: int) -> int:

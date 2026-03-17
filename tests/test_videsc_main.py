@@ -164,7 +164,7 @@ class TestVidescUnifiedCommand:
 
 
 class TestRunnerQwen35Path:
-    """Structural tests that verify the Qwen3.5 single-step code path exists in runner.py."""
+    """Structural tests verifying the Qwen3.5 no-metadata two-step path in runner.py."""
 
     RUNNER = VIDESC_ROOT / "pipeline" / "runner.py"
 
@@ -175,24 +175,38 @@ class TestRunnerQwen35Path:
             "runner.py must import and use _is_qwen35_model"
         )
 
-    def test_runner_has_qwen35_single_step_branch(self):
-        """runner.py must call apply_chat_template(tokenize=True) for Qwen3.5."""
+    def test_runner_qwen35_disables_metadata(self):
+        """Qwen3.5 must use two-step path with use_metadata=False (no video_metadata)."""
         src = self.RUNNER.read_text()
-        assert "tokenize=True" in src, (
-            "runner.py must have apply_chat_template(tokenize=True) for Qwen3.5"
+        # The no-metadata branch is expressed as: (not args.no_meta) and (not is_qwen35)
+        assert "not is_qwen35" in src, (
+            "runner.py must suppress video_metadata for Qwen3.5 models"
         )
 
-    def test_runner_has_return_dict_true(self):
-        """runner.py must request return_dict=True in the Qwen3.5 branch."""
+    def test_runner_video_metadata_passed_conditionally(self):
+        """video_metadata must only be passed when video_metadatas is not None."""
         src = self.RUNNER.read_text()
-        assert "return_dict=True" in src, (
-            "runner.py must pass return_dict=True in the Qwen3.5 single-step call"
+        assert 'video_metadatas is not None' in src, (
+            "runner.py must guard video_metadata kwarg with an is-not-None check"
         )
 
-    def test_runner_qwen35_branch_uses_dict_key_access(self):
-        """generated_ids_trimmed must use inputs['input_ids'] (dict key) not inputs.input_ids."""
+    def test_runner_uses_dict_key_access_for_input_ids(self):
+        """generated_ids_trimmed must use inputs['input_ids'] (dict-key access)."""
         src = self.RUNNER.read_text()
         assert 'inputs["input_ids"]' in src, (
-            "runner.py must use inputs['input_ids'] for trimming (works for both "
-            "BatchEncoding from processor() and BatchFeature from apply_chat_template)"
+            "runner.py must use inputs['input_ids'] for trimming (works for "
+            "BatchEncoding returned by processor())"
+        )
+
+    def test_runner_no_tokenize_true_in_vl_branch(self):
+        """runner.py must NOT call apply_chat_template(tokenize=True) for Qwen3.5
+        because that path ignores nframes/total_pixels and triggers OOM."""
+        import re
+        src = self.RUNNER.read_text()
+        # Strip single-line comments before searching so the check isn't
+        # tripped by explanatory comments that mention the rejected approach.
+        src_no_comments = re.sub(r"#[^\n]*", "", src)
+        assert "tokenize=True" not in src_no_comments, (
+            "runner.py must not use apply_chat_template(tokenize=True); "
+            "it ignores nframes constraints and loads all video frames"
         )

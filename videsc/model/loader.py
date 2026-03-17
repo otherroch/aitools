@@ -16,7 +16,7 @@ from transformers import (
 )
 
 from videsc.config import model_dir
-from videsc.utils.helpers import _is_qwen35_model
+from videsc.utils.helpers import _is_qwen35_model, _patch_size_for_model
 
 
 # Shared model / processor for threaded batch mode
@@ -105,9 +105,11 @@ def load_model_and_processor(args):
             backend="inductor",
         )
 
-    # Pixel limits: Qwen3.5 uses patch_size=16 so pixel counts are scaled
-    # by 16×16; Qwen3-VL uses 32×32.
-    pixel_factor = 16 * 16 if is_qwen35 else 32 * 32
+    # Pixel limits: derive from the model's patch size so the correct
+    # per-frame min/max pixel constraints are applied regardless of model.
+    # Qwen3.5 patch_size=16 → factor=256; Qwen3-VL patch_size=32 → factor=1024.
+    patch_size = _patch_size_for_model(model_path_local)
+    pixel_factor = patch_size * patch_size
     processor = AutoProcessor.from_pretrained(
         model_path_local,
         min_pixels=args.min_pixels * pixel_factor,
