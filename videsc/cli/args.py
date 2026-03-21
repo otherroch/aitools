@@ -47,6 +47,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="YouTube Data API v3 key (required when using --youtube-url).",
     )
     wd14.add_argument(
+        "--save-video",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Download the YouTube video, save it to FILE (e.g. ./video.mp4), and exit without processing.",
+    )
+    wd14.add_argument(
         "--output-dir",
         type=Path,
         default=None,

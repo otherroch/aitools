@@ -314,3 +314,72 @@ class TestVidescUnifiedCommand:
         assert patch25 == 28
         raw25 = 24000 * patch25 * patch25
         assert raw25 == 18_816_000
+
+    # ------------------------------------------------------------------
+    # --save-video tests
+    # ------------------------------------------------------------------
+
+    def test_args_help_includes_save_video(self):
+        """The --help output must document the --save-video argument."""
+        import subprocess, sys
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--save-video" in result.stdout
+
+    def test_parse_args_save_video_default_none(self):
+        """--save-video defaults to None when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--input-dir", "/tmp"])
+        assert args.save_video is None
+
+    def test_parse_args_save_video_file_path(self):
+        """--save-video accepts a full file path."""
+        from videsc.cli.args import parse_args
+        from pathlib import Path
+
+        args = parse_args([
+            "--youtube-url", "https://www.youtube.com/watch?v=abc123",
+            "--youtube-api-key", "fake-key",
+            "--save-video", "/tmp/video.mp4",
+        ])
+        assert args.save_video == Path("/tmp/video.mp4")
+
+    def test_run_wd14_save_video_exits_without_processing(self):
+        """When --save-video is set, _run_wd14 saves the file and exits before describe_youtube."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        # The save-and-exit block must appear before the describe_youtube call
+        save_video_pos = source.find("args.save_video is not None")
+        describe_youtube_pos = source.find("describe_youtube(")
+        assert save_video_pos != -1, "_run_wd14 must check args.save_video"
+        assert describe_youtube_pos != -1, "_run_wd14 must call describe_youtube"
+        assert save_video_pos < describe_youtube_pos, (
+            "save-and-exit logic must come before describe_youtube call"
+        )
+
+    def test_run_wd14_save_video_copies_to_file_path(self):
+        """_run_wd14 must copy the video to the exact file path, not a directory."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        assert "shutil.copy2(video_path, dest)" in source, (
+            "_run_wd14 must use shutil.copy2 to save the video"
+        )
+
+    def test_run_vl_save_video_exits_without_model_load(self):
+        """When --save-video is set in VL mode, the tool saves and returns 0 before loading the model."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        assert "args.save_video is not None" in source, (
+            "_run_vl must check args.save_video before loading the model"
+        )

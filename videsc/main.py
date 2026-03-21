@@ -41,6 +41,7 @@ def _run_vl(args) -> int:
     """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 vision-language pipeline."""
     import tempfile
     import shutil
+    from pathlib import Path
     from videsc.model.loader import load_model_and_processor, load_omni_model_and_processor, load_qwen35_model_and_processor
     from videsc.pipeline.runner import run_batch, run_single_video
 
@@ -64,14 +65,23 @@ def _run_vl(args) -> int:
         if not args.outdir and args.output_dir:
             args.outdir = str(args.output_dir)
 
-        tmp_dir = tempfile.mkdtemp(prefix="videsc_yt_")
+        tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
         logger.info("Downloading YouTube video %s …", args.youtube_url)
-        video_path = _download_youtube_video(args.youtube_url, __import__("pathlib").Path(tmp_dir))
+        video_path = _download_youtube_video(args.youtube_url, tmp_dir)
         if video_path is None:
             logger.error("Failed to download YouTube video: %s", args.youtube_url)
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return 1
         args.video = video_path
+
+        # If --save-video was requested, save and exit immediately.
+        if args.save_video is not None:
+            dest = Path(args.save_video)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(video_path, dest)
+            logger.info("Saved video to %s", dest)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
 
     try:
         if args.omni:
@@ -100,6 +110,28 @@ def _run_wd14(args) -> int:
         return 1
 
     if args.youtube_url:
+        # If --save-video was requested, download, save, and exit immediately.
+        if args.save_video is not None:
+            import tempfile
+            import shutil
+            from pathlib import Path
+            from videsc.describe import _download_youtube_video
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
+            try:
+                logger.info("Downloading YouTube video %s …", args.youtube_url)
+                video_path = _download_youtube_video(args.youtube_url, tmp_dir)
+                if video_path is None:
+                    logger.error("Failed to download YouTube video: %s", args.youtube_url)
+                    return 1
+                dest = Path(args.save_video)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(video_path, dest)
+                logger.info("Saved video to %s", dest)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
         from videsc.describe import describe_youtube
 
         logger.info("videsc: processing YouTube video %s", args.youtube_url)
