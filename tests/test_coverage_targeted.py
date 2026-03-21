@@ -402,6 +402,43 @@ class TestVidescMainRuntime:
         )
         assert mod._run_vl(single) == 0
 
+    def test_run_wd14_youtube_validation(self, monkeypatch):
+        mod = self._import_main(monkeypatch)
+        args = types.SimpleNamespace(input_dir=None, youtube_url="http://yt", youtube_api_key=None)
+        assert mod._run_wd14(args) == 1
+
+    def test_run_vl_youtube_requires_api_key(self, monkeypatch):
+        mod = self._import_main(monkeypatch)
+        monkeypatch.setitem(
+            sys.modules,
+            "videsc.pipeline.runner",
+            types.SimpleNamespace(run_batch=lambda _a: 0, run_single_video=lambda *_a: 0),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "videsc.model.loader",
+            types.SimpleNamespace(
+                load_model_and_processor=lambda _a: ("m", "p"),
+                load_omni_model_and_processor=lambda _a: ("m", "p"),
+                load_qwen35_model_and_processor=lambda _a: ("m", "p"),
+            ),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "videsc.describe",
+            types.SimpleNamespace(_download_youtube_video=lambda *_a, **_k: None),
+        )
+        args = types.SimpleNamespace(
+            videos=None,
+            indir=None,
+            filelist=None,
+            youtube_url="http://yt",
+            youtube_api_key=None,
+            outdir=None,
+            output_dir=None,
+        )
+        assert mod._run_vl(args) == 1
+
 
 class TestRunner:
     def _import_runner(self, monkeypatch):
@@ -485,3 +522,140 @@ class TestRunner:
         monkeypatch.setattr(runner, "run_single_video", lambda *_a, **_k: 0)
         args = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=False, workers=2, omni=False, qwen35=False)
         assert runner.run_batch_threads(args) == 0
+
+    def test_run_batch_subprocess_executes_processes(self, monkeypatch, tmp_path):
+        runner = self._import_runner(monkeypatch)
+        vid = tmp_path / "clip.mp4"
+        vid.write_text("x")
+        monkeypatch.setattr(runner, "expand_inputs", lambda *_a, **_k: [vid])
+        monkeypatch.setattr(runner, "namespace_to_cli", lambda *_a, **_k: [])
+        monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+
+        class P:
+            def __init__(self):
+                self.pid = 123
+                self._n = 0
+
+            def poll(self):
+                self._n += 1
+                return 0 if self._n > 1 else None
+
+        monkeypatch.setattr(runner.subprocess, "Popen", lambda _cmd: P())
+        args = types.SimpleNamespace(
+            videos=None,
+            indir=None,
+            ext=[],
+            filelist=None,
+            workers=1,
+            sleep=0.0,
+            dry_run=False,
+            prompt=None,
+        )
+        assert runner.run_batch_subprocess(args) == 0
+
+    def test_run_single_video_non_omni_dry_and_transcript(self, monkeypatch, tmp_path):
+        runner = self._import_runner(monkeypatch)
+        monkeypatch.setattr(runner, "get_video_info", lambda _v: {"tot_time": 2.0, "FPS": 30.0, "num_frames": 60})
+        monkeypatch.setattr(runner, "compute_effective_nframes", lambda *_a, **_k: 2)
+        monkeypatch.setattr(
+            runner,
+            "transcribe_audio_from_video",
+            lambda *_a, **_k: ("hello audio", [{"timestamp": (0.0, 1.0), "text": "hello"}]),
+        )
+        monkeypatch.setattr(runner, "compress_audio_segments_to_nframes", lambda segs, *_a, **_k: segs)
+        monkeypatch.setattr(runner, "build_messages", lambda **_k: [{"role": "user", "content": "x"}])
+        monkeypatch.setattr(runner, "process_vision_info", lambda *_a, **_k: (None, None, {}))
+
+        class Inputs(dict):
+            def __init__(self):
+                super().__init__()
+                self.input_ids = [[1, 2]]
+
+            def to(self, *_a, **_k):
+                return self
+
+        class Processor:
+            def apply_chat_template(self, *_a, **_k):
+                return "prompt"
+
+            def __call__(self, **_kwargs):
+                return Inputs()
+
+            def batch_decode(self, *_a, **_k):
+                return ["out"]
+
+        video = tmp_path / "a.mp4"
+        video.write_text("x")
+        args = types.SimpleNamespace(
+            seed=1,
+            video=str(video),
+            audio=True,
+            num_frames=4,
+            spf=1.0,
+            model="Qwen/Qwen3-VL-8B-Instruct",
+            total_pixels=10,
+            prompt="p",
+            system="s",
+            cont_prompt=False,
+            omni=False,
+            reader="auto",
+            no_meta=False,
+            dry=True,
+            optimize=False,
+            max_new_tokens=10,
+            rep_pen=1.0,
+            no_think_trim=False,
+            outdir=str(tmp_path / "out"),
+            no_save_transcript=False,
+        )
+        model = types.SimpleNamespace(device="cuda", dtype="float16")
+        rc = runner.run_single_video(args, model, Processor())
+        assert rc == 0
+        assert (tmp_path / "out" / "a.txt").exists()
+        assert (tmp_path / "out" / "a.transcript.txt").exists()
+
+    def test_run_single_video_omni_dry(self, monkeypatch, tmp_path):
+        runner = self._import_runner(monkeypatch)
+        monkeypatch.setattr(runner, "get_video_info", lambda _v: {"tot_time": 2.0, "FPS": 30.0, "num_frames": 60})
+        monkeypatch.setattr(runner, "compute_effective_nframes", lambda *_a, **_k: 2)
+        monkeypatch.setattr(runner, "build_messages", lambda **_k: [{"role": "user", "content": "x"}])
+        monkeypatch.setattr(runner, "process_mm_info", lambda *_a, **_k: (None, None, None))
+
+        class Processor:
+            def apply_chat_template(self, *_a, **_k):
+                return "prompt"
+
+            def __call__(self, **_kwargs):
+                return types.SimpleNamespace()
+
+            def batch_decode(self, *_a, **_k):
+                return ["out"]
+
+        video = tmp_path / "o.mp4"
+        video.write_text("x")
+        args = types.SimpleNamespace(
+            seed=1,
+            video=str(video),
+            audio=False,
+            num_frames=4,
+            spf=1.0,
+            model="Qwen/Qwen3-Omni",
+            total_pixels=10,
+            prompt="p",
+            system="s",
+            cont_prompt=False,
+            omni=True,
+            reader="auto",
+            no_meta=False,
+            dry=True,
+            optimize=False,
+            max_new_tokens=10,
+            rep_pen=1.0,
+            no_think_trim=False,
+            outdir=str(tmp_path / "out2"),
+            no_save_transcript=True,
+        )
+        model = types.SimpleNamespace(device="cuda", dtype="float16")
+        rc = runner.run_single_video(args, model, Processor())
+        assert rc == 0
+        assert (tmp_path / "out2" / "o.txt").exists()
