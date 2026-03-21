@@ -50,8 +50,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--save-video",
         type=Path,
         default=None,
-        metavar="DIR",
-        help="Save the downloaded YouTube video to DIR instead of deleting it after processing.",
+        metavar="FILE",
+        help="Download the YouTube video, save it to FILE (e.g. ./video.mp4), and exit without processing.",
     )
     wd14.add_argument(
         "--output-dir",

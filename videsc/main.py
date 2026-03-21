@@ -65,14 +65,23 @@ def _run_vl(args) -> int:
         if not args.outdir and args.output_dir:
             args.outdir = str(args.output_dir)
 
-        tmp_dir = tempfile.mkdtemp(prefix="videsc_yt_")
+        tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
         logger.info("Downloading YouTube video %s …", args.youtube_url)
-        video_path = _download_youtube_video(args.youtube_url, __import__("pathlib").Path(tmp_dir))
+        video_path = _download_youtube_video(args.youtube_url, tmp_dir)
         if video_path is None:
             logger.error("Failed to download YouTube video: %s", args.youtube_url)
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return 1
         args.video = video_path
+
+        # If --save-video was requested, save and exit immediately.
+        if args.save_video is not None:
+            dest = Path(args.save_video)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(video_path, dest)
+            logger.info("Saved video to %s", dest)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
 
     try:
         if args.omni:
@@ -84,14 +93,6 @@ def _run_vl(args) -> int:
         return run_single_video(args, model, processor)
     finally:
         if tmp_dir is not None:
-            if args.save_video is not None and args.video is not None:
-                save_dir = Path(args.save_video)
-                save_dir.mkdir(parents=True, exist_ok=True)
-                video_file = Path(args.video)
-                if video_file.exists():
-                    dest = save_dir / video_file.name
-                    shutil.copy2(video_file, dest)
-                    logger.info("Saved video to %s", dest)
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -109,6 +110,28 @@ def _run_wd14(args) -> int:
         return 1
 
     if args.youtube_url:
+        # If --save-video was requested, download, save, and exit immediately.
+        if args.save_video is not None:
+            import tempfile
+            import shutil
+            from pathlib import Path
+            from videsc.describe import _download_youtube_video
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
+            try:
+                logger.info("Downloading YouTube video %s …", args.youtube_url)
+                video_path = _download_youtube_video(args.youtube_url, tmp_dir)
+                if video_path is None:
+                    logger.error("Failed to download YouTube video: %s", args.youtube_url)
+                    return 1
+                dest = Path(args.save_video)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(video_path, dest)
+                logger.info("Saved video to %s", dest)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
         from videsc.describe import describe_youtube
 
         logger.info("videsc: processing YouTube video %s", args.youtube_url)
@@ -123,7 +146,6 @@ def _run_wd14(args) -> int:
             model_repo=args.model_repo,
             include_ratings=args.include_ratings,
             skip_existing=not args.no_skip_existing,
-            save_video_dir=args.save_video,
         )
     else:
         from videsc.describe import describe_folder
