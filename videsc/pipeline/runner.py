@@ -22,7 +22,7 @@ from videsc.audio.transcription import transcribe_audio_from_video
 from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
-from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model
+from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, expand_video_grid_thw
 
 
 def run_single_video(args, model, processor) -> int:
@@ -190,6 +190,12 @@ def run_single_video(args, model, processor) -> int:
             return_tensors="pt",
             **video_kwargs,
         )
+
+        # Workaround for transformers ≥ 5.3.0 StopIteration bug
+        # (huggingface/transformers#44560): expand video_grid_thw from
+        # per-video [[T, H, W]] to per-frame [[1, H, W]] * T so that
+        # get_rope_index can match one entry per frame token-group.
+        expand_video_grid_thw(inputs)
 
         inputs = inputs.to("cuda")
 
