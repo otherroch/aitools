@@ -114,6 +114,7 @@ def _run_wd14(args) -> int:
             model_repo=args.model_repo,
             include_ratings=args.include_ratings,
             skip_existing=not args.no_skip_existing,
+            capture=args.capture,
         )
     else:
         from videsc.describe import describe_folder
@@ -129,6 +130,7 @@ def _run_wd14(args) -> int:
             model_repo=args.model_repo,
             include_ratings=args.include_ratings,
             skip_existing=not args.no_skip_existing,
+            capture=args.capture,
         )
 
     logger.info(

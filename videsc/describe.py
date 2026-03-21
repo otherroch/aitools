@@ -133,6 +133,18 @@ def _preprocess_frame(frame_rgb: np.ndarray, size: int = MODEL_INPUT_SIZE) -> np
     return arr
 
 
+def _save_capture_frames(frames: list[np.ndarray], out_dir: Path, stem: str) -> None:
+    """Save *frames* (RGB numpy arrays) as numbered JPEG images in *out_dir*.
+
+    Files are named ``{stem}_capture_0000.jpg``, ``{stem}_capture_0001.jpg``, …
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for i, frame_rgb in enumerate(frames):
+        img = Image.fromarray(frame_rgb)
+        img.save(out_dir / f"{stem}_capture_{i:04d}.jpg")
+        logger.debug("Captured frame %d → %s_capture_%04d.jpg", i, stem, i)
+
+
 def describe_video(
     video_path: Path,
     output_dir: Path | None = None,
@@ -143,6 +155,7 @@ def describe_video(
     model_repo: str = DEFAULT_MODEL_REPO,
     include_ratings: bool = False,
     skip_existing: bool = True,
+    capture: bool = False,
 ) -> dict[str, int]:
     """Generate a WD14-based text description for a single video file.
 
@@ -161,6 +174,8 @@ def describe_video(
         model_repo:      HuggingFace repo ID for the WD14 ONNX model.
         include_ratings: Include rating tags (safe / questionable / explicit).
         skip_existing:   Skip the video if its ``.txt`` file already exists.
+        capture:         Save the extracted key frames as JPEG images alongside
+                         the ``.txt`` output.
 
     Returns:
         Dict with keys ``described`` (0 or 1) and ``skipped`` (0 or 1).
@@ -184,6 +199,7 @@ def describe_video(
         model_repo=model_repo,
         include_ratings=include_ratings,
         skip_existing=skip_existing,
+        capture=capture,
     )
 
 
@@ -198,6 +214,7 @@ def _describe_video_impl(
     model_repo: str,
     include_ratings: bool,
     skip_existing: bool,
+    capture: bool = False,
 ) -> dict[str, int]:
     """Internal implementation of :func:`describe_video` (accepts injected ort)."""
     txt_dir = output_dir.resolve() if output_dir is not None else video_path.parent
@@ -212,6 +229,9 @@ def _describe_video_impl(
     if not frames:
         logger.warning("No frames extracted from %s", video_path.name)
         return {"described": 0, "skipped": 1}
+
+    if capture:
+        _save_capture_frames(frames, txt_dir, video_path.stem)
 
     logger.info("Downloading / loading WD14 model from %s …", model_repo)
     model_path, tags_csv = _download_model(model_repo)
@@ -286,6 +306,7 @@ def describe_folder(
     model_repo: str = DEFAULT_MODEL_REPO,
     include_ratings: bool = False,
     skip_existing: bool = True,
+    capture: bool = False,
 ) -> dict[str, int]:
     """Generate descriptions for all video files in *input_dir*.
 
@@ -302,6 +323,8 @@ def describe_folder(
         model_repo:      HuggingFace repo ID for the WD14 ONNX model.
         include_ratings: Include rating tags in output.
         skip_existing:   Skip videos whose ``.txt`` file already exists.
+        capture:         Save the extracted key frames as JPEG images alongside
+                         each ``.txt`` output.
 
     Returns:
         Summary dict with keys ``described`` and ``skipped``.
@@ -325,6 +348,7 @@ def describe_folder(
         model_repo=model_repo,
         include_ratings=include_ratings,
         skip_existing=skip_existing,
+        capture=capture,
     )
 
 
@@ -339,6 +363,7 @@ def _describe_folder_impl(
     model_repo: str,
     include_ratings: bool,
     skip_existing: bool,
+    capture: bool = False,
 ) -> dict[str, int]:
     """Internal implementation of :func:`describe_folder` (accepts injected ort)."""
     input_dir = input_dir.resolve()
@@ -387,6 +412,9 @@ def _describe_folder_impl(
             logger.warning("No frames extracted from %s", video_path.name)
             skipped += 1
             continue
+
+        if capture:
+            _save_capture_frames(frames, txt_dir, video_path.stem)
 
         caption = _build_caption(
             session=session,
@@ -545,6 +573,7 @@ def describe_youtube(
     model_repo: str = DEFAULT_MODEL_REPO,
     include_ratings: bool = False,
     skip_existing: bool = True,
+    capture: bool = False,
 ) -> dict[str, int]:
     """Download a YouTube video and generate a WD14-based text description.
 
@@ -565,6 +594,8 @@ def describe_youtube(
         model_repo:      HuggingFace repo ID for the WD14 ONNX model.
         include_ratings: Include rating tags (safe / questionable / explicit).
         skip_existing:   Skip if the ``.txt`` file already exists.
+        capture:         Save the extracted key frames as JPEG images alongside
+                         the ``.txt`` output.
 
     Returns:
         Dict with keys ``described`` (0 or 1) and ``skipped`` (0 or 1).
@@ -619,6 +650,7 @@ def describe_youtube(
             model_repo=model_repo,
             include_ratings=include_ratings,
             skip_existing=False,
+            capture=capture,
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

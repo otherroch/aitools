@@ -314,3 +314,103 @@ class TestVidescUnifiedCommand:
         assert patch25 == 28
         raw25 = 24000 * patch25 * patch25
         assert raw25 == 18_816_000
+
+    def test_parse_args_capture_default_false(self):
+        """--capture flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--input-dir", "/tmp"])
+        assert args.capture is False
+
+    def test_parse_args_capture_wd14_mode(self):
+        """--capture flag is True when specified in WD14 mode."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--input-dir", "/tmp", "--capture"])
+        assert args.capture is True
+
+    def test_parse_args_capture_vl_mode(self):
+        """--capture flag is True when specified in VL mode."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--video", "/tmp/test.mp4", "--capture"])
+        assert args.capture is True
+
+    def test_args_help_includes_capture(self):
+        """The --help output must document the --capture argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--capture" in result.stdout
+
+    def test_describe_save_capture_frames_creates_jpegs(self, tmp_path):
+        """_save_capture_frames must write numbered JPEG files to out_dir."""
+        import numpy as np
+        from videsc.describe import _save_capture_frames
+
+        frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(3)]
+        _save_capture_frames(frames, tmp_path, "myvideo")
+
+        saved = sorted(tmp_path.glob("myvideo_capture_*.jpg"))
+        assert len(saved) == 3
+        assert saved[0].name == "myvideo_capture_0000.jpg"
+        assert saved[1].name == "myvideo_capture_0001.jpg"
+        assert saved[2].name == "myvideo_capture_0002.jpg"
+
+    def test_describe_video_impl_capture_saves_frames(self, tmp_path):
+        """_describe_video_impl must save capture frames when capture=True."""
+        import numpy as np
+        from unittest.mock import MagicMock, patch
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"fake")
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        call_count = [0]
+        def read_side():
+            i = call_count[0]; call_count[0] += 1
+            if i < 3:
+                return True, frame[:, :, ::-1].copy()
+            return False, None
+        mock_cap.read.side_effect = read_side
+
+        mock_session = MagicMock()
+        mock_session.get_inputs.return_value = [MagicMock(name="input")]
+        mock_session.run.return_value = [np.zeros((1, 10), dtype=np.float32)]
+
+        mock_ort = MagicMock()
+        mock_ort.InferenceSession.return_value = mock_session
+
+        with patch("videsc.describe.cv2.VideoCapture", return_value=mock_cap), \
+             patch("videsc.describe.cv2.cvtColor", side_effect=lambda f, c: f), \
+             patch("videsc.describe._download_model", return_value=(tmp_path / "m.onnx", tmp_path / "tags.csv")), \
+             patch("videsc.describe._load_labels", return_value=(["tag0"] * 10, [], list(range(10)))):
+            from videsc.describe import _describe_video_impl
+            _describe_video_impl(
+                ort=mock_ort,
+                video_path=video,
+                output_dir=tmp_path,
+                every_n=1,
+                max_frames=3,
+                prefix="",
+                threshold=0.35,
+                model_repo="fake/model",
+                include_ratings=False,
+                skip_existing=False,
+                capture=True,
+            )
+
+        saved = sorted(tmp_path.glob("clip_capture_*.jpg"))
+        assert len(saved) == 3, f"Expected 3 capture frames, got {len(saved)}"

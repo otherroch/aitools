@@ -8,6 +8,9 @@ from datetime import datetime
 from pathlib import Path as _P
 from typing import Dict, Any, List, Optional
 
+import cv2
+import numpy as np
+from PIL import Image
 import torch
 from qwen_omni_utils import process_mm_info
 from qwen_vl_utils import process_vision_info
@@ -23,6 +26,43 @@ from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
 from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, expand_video_grid_thw
+
+
+def _capture_vl_frames(video_path: str, out_dir: _P, stem: str, spf: float, max_frames: int) -> None:
+    """Extract and save sampled frames for VL mode as JPEG images.
+
+    Frames are sampled at *spf* second intervals (up to *max_frames*) and
+    saved as ``{stem}_capture_0000.jpg``, ``{stem}_capture_0001.jpg``, … in
+    *out_dir*.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0.0:
+        print(f"[capture] Warning: could not read FPS from {video_path!r}; defaulting to 1.0")
+        fps = 1.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    every_n = max(1, int(fps * spf)) if spf > 0.0 else 1
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+    frame_idx = 0
+    try:
+        while saved < max_frames and frame_idx < total_frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame_rgb)
+            img.save(out_dir / f"{stem}_capture_{saved:04d}.jpg")
+            saved += 1
+            frame_idx += every_n
+    finally:
+        cap.release()
 
 
 def run_single_video(args, model, processor) -> int:
@@ -274,6 +314,16 @@ def run_single_video(args, model, processor) -> int:
             print(f"[audio] transcript saved to: {transcript_path}")
         except Exception as e:
             print(f"[audio] failed to save transcript to {transcript_path}: {e}")
+
+    # Save captured frames if requested
+    if getattr(args, "capture", False):
+        _capture_vl_frames(
+            video_path=args.video,
+            out_dir=_outdir,
+            stem=_vid.stem,
+            spf=getattr(args, "spf", 4.0),
+            max_frames=getattr(args, "num_frames", 256),
+        )
 
     return 0
 

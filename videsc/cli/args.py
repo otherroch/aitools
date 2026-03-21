@@ -21,6 +21,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, or Qwen3.5) instead of the WD14 tagger.",
     )
+    p.add_argument(
+        "--capture",
+        action="store_true",
+        help=(
+            "Save the extracted/sampled frames as JPEG images alongside each .txt output.\n"
+            "In WD14 mode the key frames are saved; in VL mode the sampled frames are saved."
+        ),
+    )
 
     # =========================================================================
     # WD14 mode arguments (active when --vl is NOT set)
