@@ -240,7 +240,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument("--seed", type=int, default=4051888)
     vl.add_argument("--rep_pen", type=float, default=1.05, help="repetition penalty. Default is 1.0")
 
+    _VL_DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
+
     args = p.parse_args(argv)
+
+    # When --qwen35 is set and the user didn't explicitly change --model,
+    # default to the Qwen3.5 HuggingFace model so the loader resolves correctly.
+    if args.qwen35 and args.model == _VL_DEFAULT_MODEL:
+        args.model = "Qwen/Qwen3.5-4B"
+        args.model_hf = True
 
     # Post-parse validation for WD14 mode (--vl not set)
     if not args.vl:

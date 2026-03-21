@@ -170,11 +170,13 @@ class TestVidescUnifiedCommand:
         assert args.qwen35 is False
 
     def test_parse_args_qwen35_flag_true(self):
-        """--qwen35 flag is True when specified."""
+        """--qwen35 flag is True when specified and defaults model to Qwen3.5-4B."""
         from videsc.cli.args import parse_args
 
         args = parse_args(["--vl", "--qwen35", "--video", "/tmp/test.mp4"])
         assert args.qwen35 is True
+        assert args.model == "Qwen/Qwen3.5-4B"
+        assert args.model_hf is True
 
     def test_parse_args_qwen35_with_model(self):
         """--qwen35 flag works with a custom model name."""
@@ -189,6 +191,21 @@ class TestVidescUnifiedCommand:
         assert args.qwen35 is True
         assert args.model == "Qwen/Qwen3.5-4B"
         assert args.model_hf is True
+
+    def test_parse_args_qwen35_explicit_model_not_overridden(self):
+        """--qwen35 with explicit --model keeps user's model choice."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--qwen35",
+            "--model", "Qwen/Qwen3.5-9B",
+            "--model_full",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.qwen35 is True
+        assert args.model == "Qwen/Qwen3.5-9B"
+        assert args.model_full is True
+        assert args.model_hf is False
 
     def test_args_help_includes_qwen35(self):
         """The --help output must document the --qwen35 argument."""
