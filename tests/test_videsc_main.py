@@ -314,3 +314,78 @@ class TestVidescUnifiedCommand:
         assert patch25 == 28
         raw25 = 24000 * patch25 * patch25
         assert raw25 == 18_816_000
+
+    # ------------------------------------------------------------------
+    # --save-video tests
+    # ------------------------------------------------------------------
+
+    def test_args_help_includes_save_video(self):
+        """The --help output must document the --save-video argument."""
+        import subprocess, sys
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--save-video" in result.stdout
+
+    def test_parse_args_save_video_default_none(self):
+        """--save-video defaults to None when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--input-dir", "/tmp"])
+        assert args.save_video is None
+
+    def test_parse_args_save_video_path(self):
+        """--save-video accepts a directory path."""
+        from videsc.cli.args import parse_args
+        from pathlib import Path
+
+        args = parse_args([
+            "--youtube-url", "https://www.youtube.com/watch?v=abc123",
+            "--youtube-api-key", "fake-key",
+            "--save-video", "/tmp/saved_videos",
+        ])
+        assert args.save_video == Path("/tmp/saved_videos")
+
+    def test_describe_youtube_saves_video(self):
+        """describe_youtube must copy the downloaded video when save_video_dir is provided."""
+        describe_py = VIDESC_ROOT / "describe.py"
+        source = describe_py.read_text()
+        assert "save_video_dir" in source, (
+            "describe_youtube must accept a save_video_dir parameter"
+        )
+        assert "shutil.copy2(video_path, dest)" in source, (
+            "describe_youtube must copy the video to save_video_dir"
+        )
+
+    def test_describe_youtube_no_save_video_by_default(self):
+        """describe_youtube save_video_dir parameter must default to None."""
+        describe_py = VIDESC_ROOT / "describe.py"
+        source = describe_py.read_text()
+        assert "save_video_dir: Path | None = None" in source, (
+            "describe_youtube save_video_dir must default to None"
+        )
+
+    def test_run_wd14_passes_save_video_to_describe_youtube(self):
+        """_run_wd14 must pass save_video to describe_youtube."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        assert "save_video_dir=args.save_video" in source, (
+            "_run_wd14 must pass save_video_dir=args.save_video to describe_youtube"
+        )
+
+    def test_run_vl_saves_video_before_cleanup(self):
+        """_run_vl must save the downloaded video before deleting the temp dir."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        assert "args.save_video" in source, (
+            "_run_vl must check args.save_video before cleaning up the temp dir"
+        )

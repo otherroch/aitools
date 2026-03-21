@@ -545,6 +545,7 @@ def describe_youtube(
     model_repo: str = DEFAULT_MODEL_REPO,
     include_ratings: bool = False,
     skip_existing: bool = True,
+    save_video_dir: Path | None = None,
 ) -> dict[str, int]:
     """Download a YouTube video and generate a WD14-based text description.
 
@@ -565,6 +566,8 @@ def describe_youtube(
         model_repo:      HuggingFace repo ID for the WD14 ONNX model.
         include_ratings: Include rating tags (safe / questionable / explicit).
         skip_existing:   Skip if the ``.txt`` file already exists.
+        save_video_dir:  If provided, copy the downloaded video to this directory
+                         instead of deleting it after processing.
 
     Returns:
         Dict with keys ``described`` (0 or 1) and ``skipped`` (0 or 1).
@@ -593,6 +596,7 @@ def describe_youtube(
         return {"described": 0, "skipped": 1}
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
+    video_path: Path | None = None
     try:
         logger.info("Downloading YouTube video %s …", video_id)
         video_path = _download_youtube_video(youtube_url, tmp_dir)
@@ -621,4 +625,10 @@ def describe_youtube(
             skip_existing=False,
         )
     finally:
+        if save_video_dir is not None and video_path is not None:
+            save_dir = Path(save_video_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            dest = save_dir / video_path.name
+            shutil.copy2(video_path, dest)
+            logger.info("Saved video to %s", dest)
         shutil.rmtree(tmp_dir, ignore_errors=True)

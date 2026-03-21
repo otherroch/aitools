@@ -41,6 +41,7 @@ def _run_vl(args) -> int:
     """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 vision-language pipeline."""
     import tempfile
     import shutil
+    from pathlib import Path
     from videsc.model.loader import load_model_and_processor, load_omni_model_and_processor, load_qwen35_model_and_processor
     from videsc.pipeline.runner import run_batch, run_single_video
 
@@ -83,6 +84,14 @@ def _run_vl(args) -> int:
         return run_single_video(args, model, processor)
     finally:
         if tmp_dir is not None:
+            if args.save_video is not None and args.video is not None:
+                save_dir = Path(args.save_video)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                video_file = Path(args.video)
+                if video_file.exists():
+                    dest = save_dir / video_file.name
+                    shutil.copy2(video_file, dest)
+                    logger.info("Saved video to %s", dest)
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -114,6 +123,7 @@ def _run_wd14(args) -> int:
             model_repo=args.model_repo,
             include_ratings=args.include_ratings,
             skip_existing=not args.no_skip_existing,
+            save_video_dir=args.save_video,
         )
     else:
         from videsc.describe import describe_folder
