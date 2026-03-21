@@ -59,6 +59,11 @@ def _run_vl(args) -> int:
             logger.error("videsc: --youtube-url requires --youtube-api-key")
             return 1
 
+        # In VL + YouTube mode, honour --output-dir as fallback for --outdir
+        # so the description isn't written into (and deleted with) the temp dir.
+        if not args.outdir and args.output_dir:
+            args.outdir = str(args.output_dir)
+
         tmp_dir = tempfile.mkdtemp(prefix="videsc_yt_")
         logger.info("Downloading YouTube video %s …", args.youtube_url)
         video_path = _download_youtube_video(args.youtube_url, __import__("pathlib").Path(tmp_dir))

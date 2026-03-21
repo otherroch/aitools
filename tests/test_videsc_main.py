@@ -235,3 +235,27 @@ class TestVidescUnifiedCommand:
         assert "load_qwen35_model_and_processor" in func_names, (
             "videsc/model/loader.py must define 'load_qwen35_model_and_processor'"
         )
+
+    def test_vl_youtube_output_dir_fallback(self):
+        """In VL + YouTube mode, --output-dir should be used as fallback for --outdir."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl",
+            "--youtube-url", "https://www.youtube.com/watch?v=test",
+            "--youtube-api-key", "fake-key",
+            "--output-dir", "./out",
+            "--video", "/tmp/test.mp4",
+        ])
+        # Before _run_vl processes it, outdir is None and output_dir is set
+        assert args.outdir is None
+        assert args.output_dir == Path("out")
+
+    def test_run_vl_source_honours_output_dir_for_youtube(self):
+        """_run_vl must set args.outdir from args.output_dir when using YouTube."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        # Verify the fallback logic exists in _run_vl
+        assert "args.outdir = str(args.output_dir)" in source, (
+            "_run_vl must fall back to --output-dir for --outdir in YouTube mode"
+        )
