@@ -15,6 +15,7 @@ from qwen_vl_utils import process_vision_info
 from videsc.model.loader import (
     load_model_and_processor,
     load_omni_model_and_processor,
+    load_qwen35_model_and_processor,
     _maybe_set_reader,
 )
 from videsc.audio.transcription import transcribe_audio_from_video
@@ -331,6 +332,8 @@ def run_batch_threads(args) -> int:
 
     if args.omni:
         model, processor = load_omni_model_and_processor(args)
+    elif args.qwen35:
+        model, processor = load_qwen35_model_and_processor(args)
     else:
         model, processor = load_model_and_processor(args)
 

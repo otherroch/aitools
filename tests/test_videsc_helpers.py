@@ -49,6 +49,12 @@ class TestPatchSize:
     def test_empty_returns_28(self):
         assert _patch_size_for_model("") == 28
 
+    def test_qwen35_returns_32(self):
+        assert _patch_size_for_model("Qwen3.5-4B") == 32
+
+    def test_qwen35_full_path_returns_32(self):
+        assert _patch_size_for_model("Qwen/Qwen3.5-4B") == 32
+
 
 class TestEdgeToPixels:
     def test_basic(self):

@@ -161,3 +161,60 @@ class TestVidescUnifiedCommand:
         assert args.spf == 4.0
         assert args.num_frames == 256
         assert args.audio is False
+
+    def test_parse_args_qwen35_flag_default_false(self):
+        """--qwen35 flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--video", "/tmp/test.mp4"])
+        assert args.qwen35 is False
+
+    def test_parse_args_qwen35_flag_true(self):
+        """--qwen35 flag is True when specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--qwen35", "--video", "/tmp/test.mp4"])
+        assert args.qwen35 is True
+
+    def test_parse_args_qwen35_with_model(self):
+        """--qwen35 flag works with a custom model name."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--qwen35",
+            "--model", "Qwen/Qwen3.5-4B",
+            "--model_hf",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.qwen35 is True
+        assert args.model == "Qwen/Qwen3.5-4B"
+        assert args.model_hf is True
+
+    def test_args_help_includes_qwen35(self):
+        """The --help output must document the --qwen35 argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--qwen35" in result.stdout
+
+    def test_loader_has_load_qwen35_function(self):
+        """videsc/model/loader.py must define 'load_qwen35_model_and_processor'."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        tree = ast.parse(loader_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "load_qwen35_model_and_processor" in func_names, (
+            "videsc/model/loader.py must define 'load_qwen35_model_and_processor'"
+        )

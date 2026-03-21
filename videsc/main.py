@@ -12,7 +12,7 @@ Supports two description modes:
 
   VL mode (--vl):
     Rich, natural-language descriptions using a Qwen3-VL vision-language
-    model (or its Qwen3-Omni multimodal variant).
+    model (or its Qwen3-Omni multimodal variant, or a Qwen3.5 model).
     Requires --video, --videos, --indir, or --filelist.
 """
 
@@ -38,10 +38,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_vl(args) -> int:
-    """Run Qwen3-VL vision-language pipeline."""
+    """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 vision-language pipeline."""
     import tempfile
     import shutil
-    from videsc.model.loader import load_model_and_processor, load_omni_model_and_processor
+    from videsc.model.loader import load_model_and_processor, load_omni_model_and_processor, load_qwen35_model_and_processor
     from videsc.pipeline.runner import run_batch, run_single_video
 
     print("args: ", str(args))
@@ -71,6 +71,8 @@ def _run_vl(args) -> int:
     try:
         if args.omni:
             model, processor = load_omni_model_and_processor(args)
+        elif args.qwen35:
+            model, processor = load_qwen35_model_and_processor(args)
         else:
             model, processor = load_model_and_processor(args)
         return run_single_video(args, model, processor)

@@ -19,7 +19,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--vl",
         action="store_true",
-        help="Use Qwen3-VL vision-language model instead of the WD14 tagger.",
+        help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, or Qwen3.5) instead of the WD14 tagger.",
     )
 
     # =========================================================================
@@ -146,6 +146,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # Model / runtime
     vl.add_argument("--omni", action="store_true", help="model is qwen3-omni")
+    vl.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
     vl.add_argument(
         "--model",
         default="Qwen/Qwen3-VL-8B-Instruct",
