@@ -68,3 +68,15 @@ addopts = "-v"
 [tool.coverage.run]
 source = ["portrait_prep", "vicrop", "videsc"]
 omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_also = [
+"if verbose:",
+"if timings:",
+"if timers:",
+"if timers_all:",
+"elif timers:",
+"except Exception:",
+"except ImportError:",
+"parser.error",
+]
