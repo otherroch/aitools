@@ -1,3 +1,4 @@
+import shutil
 import sys
 import shlex
 import subprocess
@@ -274,6 +275,18 @@ def run_single_video(args, model, processor) -> int:
             print(f"[audio] transcript saved to: {transcript_path}")
         except Exception as e:
             print(f"[audio] failed to save transcript to {transcript_path}: {e}")
+
+    # Copy source video to output directory when --capvid is set
+    if getattr(args, "capvid", False):
+        dest_video = _outdir / _vid.name
+        try:
+            if _vid.resolve() != dest_video.resolve():
+                shutil.copy2(str(_vid), str(dest_video))
+                print(f"[capvid] video saved to: {dest_video}")
+            else:
+                print(f"[capvid] source and destination are the same, skipping copy")
+        except Exception as e:
+            print(f"[capvid] failed to copy video to {dest_video}: {e}")
 
     return 0
 

@@ -231,6 +231,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Do not save the raw audio transcript to a separate *.transcript.txt file.",
     )
 
+    # Video capture
+    vl.add_argument("--capvid", action="store_true", help="Copy the source video into the output directory alongside the description.")
+
     # Misc
     vl.add_argument("--no-think-trim", action="store_true", help="Do not trim '<think>...</think>' if present.")
     vl.add_argument("--half_cpu", action="store_true", help="Use half of the CPU cores")

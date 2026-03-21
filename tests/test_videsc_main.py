@@ -314,3 +314,44 @@ class TestVidescUnifiedCommand:
         assert patch25 == 28
         raw25 = 24000 * patch25 * patch25
         assert raw25 == 18_816_000
+
+    def test_parse_args_capvid_default_false(self):
+        """--capvid flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--video", "/tmp/test.mp4"])
+        assert args.capvid is False
+
+    def test_parse_args_capvid_true(self):
+        """--capvid flag is True when specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--capvid", "--video", "/tmp/test.mp4"])
+        assert args.capvid is True
+
+    def test_args_help_includes_capvid(self):
+        """The --help output must document the --capvid argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--capvid" in result.stdout
+
+    def test_runner_has_capvid_logic(self):
+        """run_single_video must contain the capvid copy logic."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "capvid" in source, (
+            "runner must contain capvid logic to copy video to output dir"
+        )
+        assert "shutil.copy2" in source, (
+            "runner must use shutil.copy2 when --capvid is set"
+        )
