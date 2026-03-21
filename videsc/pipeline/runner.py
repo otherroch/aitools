@@ -15,13 +15,14 @@ from qwen_vl_utils import process_vision_info
 from videsc.model.loader import (
     load_model_and_processor,
     load_omni_model_and_processor,
+    load_qwen35_model_and_processor,
     _maybe_set_reader,
 )
 from videsc.audio.transcription import transcribe_audio_from_video
 from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
-from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model
+from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, expand_video_grid_thw
 
 
 def run_single_video(args, model, processor) -> int:
@@ -68,10 +69,14 @@ def run_single_video(args, model, processor) -> int:
     patch = _patch_size_for_model(args.model if getattr(args, "model", None) else "")
     print("patch:", patch)
 
+    # Convert total_pixels from edge-multiplier units to raw pixels,
+    # matching how min_pixels/max_pixels are converted in the processor.
+    tot_pixels_raw = args.total_pixels * patch * patch
+
     messages = build_messages(
         video_path=args.video,
         vinfo=video_info,
-        tot_pixels=args.total_pixels,
+        tot_pixels=tot_pixels_raw,
         spf=args.spf,
         nframes=effective_nframes,
         prompt=args.prompt,
@@ -155,7 +160,7 @@ def run_single_video(args, model, processor) -> int:
 
         images, videos, video_kwargs = process_vision_info(
             messages,
-            image_patch_size=16,
+            image_patch_size=patch // 2,
             return_video_kwargs=True,
             return_video_metadata=use_metadata,
         )
@@ -185,6 +190,12 @@ def run_single_video(args, model, processor) -> int:
             return_tensors="pt",
             **video_kwargs,
         )
+
+        # Workaround for transformers ≥ 5.3.0 StopIteration bug
+        # (huggingface/transformers#44560): expand video_grid_thw from
+        # per-video [[T, H, W]] to per-frame [[1, H, W]] * T so that
+        # get_rope_index can match one entry per frame token-group.
+        expand_video_grid_thw(inputs)
 
         inputs = inputs.to("cuda")
 
@@ -331,6 +342,8 @@ def run_batch_threads(args) -> int:
 
     if args.omni:
         model, processor = load_omni_model_and_processor(args)
+    elif args.qwen35:
+        model, processor = load_qwen35_model_and_processor(args)
     else:
         model, processor = load_model_and_processor(args)
 

@@ -161,3 +161,156 @@ class TestVidescUnifiedCommand:
         assert args.spf == 4.0
         assert args.num_frames == 256
         assert args.audio is False
+
+    def test_parse_args_qwen35_flag_default_false(self):
+        """--qwen35 flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--video", "/tmp/test.mp4"])
+        assert args.qwen35 is False
+
+    def test_parse_args_qwen35_flag_true(self):
+        """--qwen35 flag is True when specified and defaults model to Qwen3.5-4B."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--qwen35", "--video", "/tmp/test.mp4"])
+        assert args.qwen35 is True
+        assert args.model == "Qwen/Qwen3.5-4B"
+        assert args.model_hf is True
+
+    def test_parse_args_qwen35_with_model(self):
+        """--qwen35 flag works with a custom model name."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--qwen35",
+            "--model", "Qwen/Qwen3.5-4B",
+            "--model_hf",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.qwen35 is True
+        assert args.model == "Qwen/Qwen3.5-4B"
+        assert args.model_hf is True
+
+    def test_parse_args_qwen35_explicit_model_not_overridden(self):
+        """--qwen35 with explicit --model keeps user's model choice."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--qwen35",
+            "--model", "Qwen/Qwen3.5-9B",
+            "--model_full",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.qwen35 is True
+        assert args.model == "Qwen/Qwen3.5-9B"
+        assert args.model_full is True
+        assert args.model_hf is False
+
+    def test_args_help_includes_qwen35(self):
+        """The --help output must document the --qwen35 argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--qwen35" in result.stdout
+
+    def test_loader_has_load_qwen35_function(self):
+        """videsc/model/loader.py must define 'load_qwen35_model_and_processor'."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        tree = ast.parse(loader_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "load_qwen35_model_and_processor" in func_names, (
+            "videsc/model/loader.py must define 'load_qwen35_model_and_processor'"
+        )
+
+    def test_vl_youtube_output_dir_fallback(self):
+        """In VL + YouTube mode, --output-dir should be used as fallback for --outdir."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl",
+            "--youtube-url", "https://www.youtube.com/watch?v=test",
+            "--youtube-api-key", "fake-key",
+            "--output-dir", "./out",
+            "--video", "/tmp/test.mp4",
+        ])
+        # Before _run_vl processes it, outdir is None and output_dir is set
+        assert args.outdir is None
+        assert args.output_dir == Path("out")
+
+    def test_run_vl_source_honours_output_dir_for_youtube(self):
+        """_run_vl must set args.outdir from args.output_dir when using YouTube."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        # Verify the fallback logic exists in _run_vl
+        assert "args.outdir = str(args.output_dir)" in source, (
+            "_run_vl must fall back to --output-dir for --outdir in YouTube mode"
+        )
+
+    def test_runner_converts_total_pixels_to_raw(self):
+        """run_single_video must convert total_pixels from edge-multiplier to raw pixels."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "args.total_pixels * patch * patch" in source, (
+            "runner must convert total_pixels to raw pixels using patch size"
+        )
+
+    def test_runner_uses_patch_for_image_patch_size(self):
+        """process_vision_info must use model-specific patch size, not hardcoded 16."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "image_patch_size=patch // 2" in source, (
+            "process_vision_info must use patch // 2 instead of hardcoded 16"
+        )
+        assert "image_patch_size=16" not in source, (
+            "runner must not hardcode image_patch_size=16"
+        )
+
+    def test_loader_uses_patch_for_pixel_limits(self):
+        """All model loaders must use _patch_size_for_model for pixel limit calculation."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "from videsc.utils.helpers import _patch_size_for_model" in source, (
+            "loader must import _patch_size_for_model"
+        )
+        # Should not contain hardcoded 32 * 32 in processor initialization
+        assert "args.min_pixels * 32 * 32" not in source, (
+            "loader must not hardcode 32 * 32 for min_pixels"
+        )
+        assert "args.max_pixels * 32 * 32" not in source, (
+            "loader must not hardcode 32 * 32 for max_pixels"
+        )
+        # Should use patch * patch instead
+        assert "args.min_pixels * patch * patch" in source, (
+            "loader must use patch * patch for min_pixels"
+        )
+        assert "args.max_pixels * patch * patch" in source, (
+            "loader must use patch * patch for max_pixels"
+        )
+
+    def test_total_pixels_conversion_math(self):
+        """Verify total_pixels edge-multiplier to raw pixel conversion."""
+        from videsc.utils.helpers import _patch_size_for_model
+        # For Qwen3.5: patch=32, total_pixels=24000 → raw=24000*1024=24,576,000
+        patch = _patch_size_for_model("Qwen/Qwen3.5-4B")
+        assert patch == 32
+        raw = 24000 * patch * patch
+        assert raw == 24_576_000
+        # For Qwen2.5: patch=28, total_pixels=24000 → raw=24000*784=18,816,000
+        patch25 = _patch_size_for_model("Qwen/Qwen2.5-VL-7B")
+        assert patch25 == 28
+        raw25 = 24000 * patch25 * patch25
+        assert raw25 == 18_816_000

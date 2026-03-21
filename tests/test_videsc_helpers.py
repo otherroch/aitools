@@ -6,11 +6,13 @@ Unit tests for videsc.utils.helpers (ported from otherroch/videsc).
 
 import argparse
 import pytest
+import torch
 from videsc.utils.helpers import (
     _format_time_hhmmss,
     _patch_size_for_model,
     _edge_to_pixels,
     expand_inputs,
+    expand_video_grid_thw,
     namespace_to_cli,
 )
 
@@ -48,6 +50,12 @@ class TestPatchSize:
 
     def test_empty_returns_28(self):
         assert _patch_size_for_model("") == 28
+
+    def test_qwen35_returns_32(self):
+        assert _patch_size_for_model("Qwen3.5-4B") == 32
+
+    def test_qwen35_full_path_returns_32(self):
+        assert _patch_size_for_model("Qwen/Qwen3.5-4B") == 32
 
 
 class TestEdgeToPixels:
@@ -124,3 +132,65 @@ class TestNamespaceToCli:
         assert "--ext" in argv
         assert ".mp4" in argv
         assert ".mov" in argv
+
+
+class TestExpandVideoGridThw:
+    """Tests for the StopIteration workaround (transformers ≥ 5.3.0)."""
+
+    def test_expands_single_video(self):
+        """One video [[T, H, W]] → [[1, H, W]] * T."""
+        inputs = {
+            "video_grid_thw": torch.tensor([[4, 16, 24]]),
+            "mm_token_type_ids": torch.zeros(1, 100, dtype=torch.int),
+        }
+        expand_video_grid_thw(inputs)
+        vg = inputs["video_grid_thw"]
+        assert vg.shape == (4, 3)
+        for row in vg:
+            assert row.tolist() == [1, 16, 24]
+
+    def test_expands_multiple_videos(self):
+        """Two videos → per-frame entries for each."""
+        inputs = {
+            "video_grid_thw": torch.tensor([[3, 8, 8], [2, 4, 4]]),
+            "mm_token_type_ids": torch.zeros(1, 100, dtype=torch.int),
+        }
+        expand_video_grid_thw(inputs)
+        vg = inputs["video_grid_thw"]
+        assert vg.shape == (5, 3)  # 3 + 2 frames
+        for row in vg[:3]:
+            assert row.tolist() == [1, 8, 8]
+        for row in vg[3:]:
+            assert row.tolist() == [1, 4, 4]
+
+    def test_noop_when_grid_missing(self):
+        """No crash and no change when video_grid_thw is absent."""
+        inputs = {"mm_token_type_ids": torch.zeros(1, 10, dtype=torch.int)}
+        expand_video_grid_thw(inputs)
+        assert "video_grid_thw" not in inputs
+
+    def test_noop_when_mm_token_type_ids_missing(self):
+        """No expansion when mm_token_type_ids is absent (older transformers)."""
+        original = torch.tensor([[4, 16, 24]])
+        inputs = {"video_grid_thw": original}
+        expand_video_grid_thw(inputs)
+        assert torch.equal(inputs["video_grid_thw"], original)
+
+    def test_noop_when_t_equals_one(self):
+        """Single-frame video should stay [[1, H, W]]."""
+        inputs = {
+            "video_grid_thw": torch.tensor([[1, 16, 24]]),
+            "mm_token_type_ids": torch.zeros(1, 100, dtype=torch.int),
+        }
+        expand_video_grid_thw(inputs)
+        assert inputs["video_grid_thw"].shape == (1, 3)
+        assert inputs["video_grid_thw"][0].tolist() == [1, 16, 24]
+
+    def test_preserves_dtype_and_device(self):
+        """Output tensor must keep the same dtype as the input."""
+        inputs = {
+            "video_grid_thw": torch.tensor([[2, 8, 8]], dtype=torch.long),
+            "mm_token_type_ids": torch.zeros(1, 10, dtype=torch.int),
+        }
+        expand_video_grid_thw(inputs)
+        assert inputs["video_grid_thw"].dtype == torch.long

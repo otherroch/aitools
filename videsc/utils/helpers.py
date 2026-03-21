@@ -23,6 +23,41 @@ def _format_time_hhmmss(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
+def expand_video_grid_thw(inputs: dict) -> dict:
+    """Expand ``video_grid_thw`` from per-video ``[[T, H, W]]`` to per-frame
+    ``[[1, H, W]] * T`` entries so that ``get_rope_index`` can iterate one
+    entry per frame token-group produced by the processor.
+
+    This works around a known bug in ``transformers ≥ 5.3.0``
+    (huggingface/transformers#44560) where the Qwen3-VL processor creates
+    per-frame video-token groups separated by timestamp tokens, but
+    ``video_grid_thw`` still has one row per video.  ``get_rope_index``
+    calls ``next()`` on the grid iterator for *every* token-group and raises
+    ``StopIteration`` after the first frame.
+
+    The fix is safe for older transformers versions that don't add timestamps
+    (they produce a single contiguous token group, ``T == 1`` after
+    temporal-patch merging), so the expansion is a no-op.
+    """
+    import torch
+
+    vg = inputs.get("video_grid_thw")
+    mm = inputs.get("mm_token_type_ids")
+    if vg is None or mm is None:
+        return inputs
+
+    expanded = []
+    for row in vg:
+        t, h, w = int(row[0]), int(row[1]), int(row[2])
+        for _ in range(t):
+            expanded.append([1, h, w])
+
+    inputs["video_grid_thw"] = torch.tensor(
+        expanded, dtype=vg.dtype, device=vg.device
+    )
+    return inputs
+
+
 def expand_inputs(videos, indir, exts, filelist) -> List[_P]:
     paths = []
     if videos:
