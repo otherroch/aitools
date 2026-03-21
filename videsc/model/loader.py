@@ -16,6 +16,7 @@ from transformers import (
 )
 
 from videsc.config import model_dir
+from videsc.utils.helpers import _patch_size_for_model
 
 
 # Shared model / processor for threaded batch mode
@@ -92,11 +93,12 @@ def load_model_and_processor(args):
             backend="inductor",
         )
 
-    # Load processor with pixel limits
+    # Load processor with pixel limits (use model-specific patch size)
+    patch = _patch_size_for_model(model_path_local)
     processor = AutoProcessor.from_pretrained(
         model_path_local,
-        min_pixels=args.min_pixels * 32 * 32,
-        max_pixels=args.max_pixels * 32 * 32,
+        min_pixels=args.min_pixels * patch * patch,
+        max_pixels=args.max_pixels * patch * patch,
     )
 
     print("model loaded")
@@ -224,11 +226,12 @@ def load_qwen35_model_and_processor(args):
             backend="inductor",
         )
 
-    # Load processor with pixel limits
+    # Load processor with pixel limits (use model-specific patch size)
+    patch = _patch_size_for_model(model_path_local)
     processor = AutoProcessor.from_pretrained(
         model_path_local,
-        min_pixels=args.min_pixels * 32 * 32,
-        max_pixels=args.max_pixels * 32 * 32,
+        min_pixels=args.min_pixels * patch * patch,
+        max_pixels=args.max_pixels * patch * patch,
     )
 
     print("model loaded")

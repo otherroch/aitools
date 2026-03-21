@@ -69,10 +69,14 @@ def run_single_video(args, model, processor) -> int:
     patch = _patch_size_for_model(args.model if getattr(args, "model", None) else "")
     print("patch:", patch)
 
+    # Convert total_pixels from edge-multiplier units to raw pixels,
+    # matching how min_pixels/max_pixels are converted in the processor.
+    tot_pixels_raw = args.total_pixels * patch * patch
+
     messages = build_messages(
         video_path=args.video,
         vinfo=video_info,
-        tot_pixels=args.total_pixels,
+        tot_pixels=tot_pixels_raw,
         spf=args.spf,
         nframes=effective_nframes,
         prompt=args.prompt,
@@ -156,7 +160,7 @@ def run_single_video(args, model, processor) -> int:
 
         images, videos, video_kwargs = process_vision_info(
             messages,
-            image_patch_size=16,
+            image_patch_size=patch // 2,
             return_video_kwargs=True,
             return_video_metadata=use_metadata,
         )

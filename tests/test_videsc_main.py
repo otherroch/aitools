@@ -259,3 +259,58 @@ class TestVidescUnifiedCommand:
         assert "args.outdir = str(args.output_dir)" in source, (
             "_run_vl must fall back to --output-dir for --outdir in YouTube mode"
         )
+
+    def test_runner_converts_total_pixels_to_raw(self):
+        """run_single_video must convert total_pixels from edge-multiplier to raw pixels."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "args.total_pixels * patch * patch" in source, (
+            "runner must convert total_pixels to raw pixels using patch size"
+        )
+
+    def test_runner_uses_patch_for_image_patch_size(self):
+        """process_vision_info must use model-specific patch size, not hardcoded 16."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "image_patch_size=patch // 2" in source, (
+            "process_vision_info must use patch // 2 instead of hardcoded 16"
+        )
+        assert "image_patch_size=16" not in source, (
+            "runner must not hardcode image_patch_size=16"
+        )
+
+    def test_loader_uses_patch_for_pixel_limits(self):
+        """All model loaders must use _patch_size_for_model for pixel limit calculation."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "from videsc.utils.helpers import _patch_size_for_model" in source, (
+            "loader must import _patch_size_for_model"
+        )
+        # Should not contain hardcoded 32 * 32 in processor initialization
+        assert "args.min_pixels * 32 * 32" not in source, (
+            "loader must not hardcode 32 * 32 for min_pixels"
+        )
+        assert "args.max_pixels * 32 * 32" not in source, (
+            "loader must not hardcode 32 * 32 for max_pixels"
+        )
+        # Should use patch * patch instead
+        assert "args.min_pixels * patch * patch" in source, (
+            "loader must use patch * patch for min_pixels"
+        )
+        assert "args.max_pixels * patch * patch" in source, (
+            "loader must use patch * patch for max_pixels"
+        )
+
+    def test_total_pixels_conversion_math(self):
+        """Verify total_pixels edge-multiplier to raw pixel conversion."""
+        from videsc.utils.helpers import _patch_size_for_model
+        # For Qwen3.5: patch=32, total_pixels=24000 → raw=24000*1024=24,576,000
+        patch = _patch_size_for_model("Qwen/Qwen3.5-4B")
+        assert patch == 32
+        raw = 24000 * patch * patch
+        assert raw == 24_576_000
+        # For Qwen2.5: patch=28, total_pixels=24000 → raw=24000*784=18,816,000
+        patch25 = _patch_size_for_model("Qwen/Qwen2.5-VL-7B")
+        assert patch25 == 28
+        raw25 = 24000 * patch25 * patch25
+        assert raw25 == 18_816_000
