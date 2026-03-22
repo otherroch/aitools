@@ -1,0 +1,10 @@
+!Dockerfile
+!pyproject.toml
+!.dockerignore
+!README.md
+!portrait_prep/
+!vicrop/
+!vicdesc/
+!main.py
+!tests/
+!venv/
