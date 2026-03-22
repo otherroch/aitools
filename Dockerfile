@@ -18,7 +18,9 @@ COPY pyproject.toml LICENSE  README.md /app/
 # Install any needed packages specified in requirements.txt (if you had one)
 RUN python3 -m venv venv
 ENV PATH="venv/bin:$PATH"
-RUN pip install -U pip
+RUN python -m pip install -U pip
+# on windows we need to install torchcodec separately (after torch), but on linux it is included in the torch package, 
+# so we install it here to avoid issues with torch 2.7.0 and torchcodec 0.1.0
 RUN pip install --pre torch torchvision torchaudio torchcodec --index-url https://download.pytorch.org/whl/nightly/cu130
 RUN pip install --group gpu --group base --group youtube --group vl
 

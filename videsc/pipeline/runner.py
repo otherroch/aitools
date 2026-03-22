@@ -9,8 +9,6 @@ from pathlib import Path as _P
 from typing import Dict, Any, List, Optional
 
 import torch
-from qwen_omni_utils import process_mm_info
-from qwen_vl_utils import process_vision_info
 
 from videsc.model.loader import (
     load_model_and_processor,
@@ -91,6 +89,8 @@ def run_single_video(args, model, processor) -> int:
     trace += "\n\n messages: " + str(messages)
 
     if args.omni:
+        from qwen_omni_utils import process_mm_info
+
         modeltext = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
         print("after apply chat template, modeltext: ", modeltext)
 
@@ -141,6 +141,8 @@ def run_single_video(args, model, processor) -> int:
             )[0]
 
     else:
+        from qwen_vl_utils import process_vision_info
+        
         modeltext = processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
