@@ -21,7 +21,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Multimedia :: Graphics",
 ]
-dependencies = [
+
+[dependency-groups]
+base = [
     "albumentations>=1.4.0",
     "opencv-python>=4.9.0",
     "Pillow>=10.0.0",
@@ -32,8 +34,6 @@ dependencies = [
     "onnxruntime>=1.17.0",
     "huggingface_hub>=0.22.0",
 ]
-
-[project.optional-dependencies]
 gpu = ["onnxruntime-gpu>=1.17.0"]
 youtube = ["yt-dlp"]
 vl = [
@@ -46,6 +46,7 @@ vl = [
     "qwen-vl-utils",
     "qwen-omni-utils",
     "torchsummary",
+    "decord",
 ]
 dev = ["pytest>=8.0", "pytest-cov"]
 
