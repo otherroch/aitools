@@ -39,6 +39,7 @@ youtube = ["yt-dlp"]
 vl = [
     "torch",
     "torchvision",
+    "torchcodec",
     "transformers>=4.57.3",
     "accelerate",
     "bitsandbytes",
