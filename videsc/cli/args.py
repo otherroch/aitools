@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+import platform
 from typing import Optional
 
 
@@ -168,8 +169,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument(
         "--attn",
         choices=["flash_attention_2", "sdpa", "eager"],
-        default="flash_attention_2",
-        help="Attention implementation.",
+        default="sdpa",
+        help="Attention implementation. 'flash_attention_2' may be unavailable or unsupported depending on your PyTorch/CUDA build; 'sdpa' is the efficient native PyTorch implementation; 'eager' is the unoptimized PyTorch implementation and may be very slow.",
     )
     vl.add_argument(
         "--quant",
@@ -184,8 +185,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument(
         "--reader",
         choices=["auto", "torchvision", "decord", "torchcodec"],
-        default="decord",
-        help="Select the video reader. 'auto' keeps upstream default.",
+        default="auto" if platform.system() != "Windows" else "decord",
+        help="Select the video reader. 'auto' keeps upstream default on non-Windows platforms. On Windows, 'decord' is the default since torchcodec with CUDA is not yet available on Windows.",
     )
     vl.add_argument("--spf", type=float, default=4.0, help="Sampling seconds per frame or sampling interval.")
     vl.add_argument("--fps", type=float, default=1.0, help="Sampling FPS (approx).")

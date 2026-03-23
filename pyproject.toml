@@ -46,7 +46,7 @@ vl = [
     "qwen-vl-utils",
     "qwen-omni-utils",
     "torchsummary",
-    "decord",
+    "decord; platform_machine not in 'arm aarch64 arm64 armv7l armv8l'",  # decord not supported on ARM
 ]
 dev = ["pytest>=8.0", "pytest-cov"]
 
