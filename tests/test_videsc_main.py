@@ -157,7 +157,7 @@ class TestVidescUnifiedCommand:
         args = parse_args(["--vl", "--video", "/tmp/test.mp4"])
         assert args.model == "Qwen/Qwen3-VL-8B-Instruct"
         assert args.quant == "none"
-        assert args.attn == "flash_attention_2"
+        assert args.attn == "sdpa"
         assert args.spf == 4.0
         assert args.num_frames == 256
         assert args.audio is False

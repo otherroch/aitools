@@ -185,8 +185,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument(
         "--reader",
         choices=["auto", "torchvision", "decord", "torchcodec"],
-        default="auto" if platform.system() != "Windows" else "decord",
-        help="Select the video reader. 'auto' keeps upstream default on non-Windows platforms. On Windows, 'decord' is the default since torchcodec with CUDA is not yet available on Windows.",
+        default="torchcodec" if platform.system() != "Windows" else "decord",
+        help=(
+            "Select the video reader.\n"
+            "Previously, the default was 'auto', which tried to pick an available backend at runtime "
+            "(typically preferring 'torchcodec' when installed, then falling back to 'decord' or "
+            "'torchvision'). The default is now explicitly 'torchcodec' on non-Windows platforms to give "
+            "more predictable performance and behavior when 'torchcodec' is available.\n"
+            "On Windows, 'decord' remains the default because torchcodec with CUDA is not yet available. "
+            "You can still pass '--reader auto' if you prefer the old automatic selection behavior."
+        ),
     )
     vl.add_argument("--spf", type=float, default=4.0, help="Sampling seconds per frame or sampling interval.")
     vl.add_argument("--fps", type=float, default=1.0, help="Sampling FPS (approx).")

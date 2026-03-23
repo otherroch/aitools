@@ -23,6 +23,43 @@ from videsc.video.messages import build_messages
 from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, expand_video_grid_thw
 
 
+def process_mm_info(*args, **kwargs):
+    """
+    Lazy import wrapper around ``qwen_omni_utils.process_mm_info`` so tests can
+    monkeypatch this symbol on the module.
+
+    This indirection is intentionally used only where we need to:
+      * avoid importing heavy / optional multi‑modal dependencies at module import
+        time, and
+      * make it easy for tests to monkeypatch the processing function at the
+        ``videsc.pipeline.runner`` level.
+
+    In general, prefer direct imports at the top of the module for clarity.
+    Only introduce wrappers like this when testability or lazy importing of
+    optional dependencies is required and should be documented explicitly.
+    """
+    from qwen_omni_utils import process_mm_info as _process_mm_info
+
+    return _process_mm_info(*args, **kwargs)
+
+
+def process_vision_info(*args, **kwargs):
+    """
+    Lazy import wrapper around ``qwen_vl_utils.process_vision_info`` so tests
+    can monkeypatch this symbol on the module.
+
+    As with ``process_mm_info``, this pattern is reserved for cases where we
+    need lazy imports and convenient test monkeypatching of external
+    dependencies.
+
+    For typical usage, prefer direct imports at the top of the module rather
+    than adding additional wrapper functions.
+    """
+    from qwen_vl_utils import process_vision_info as _process_vision_info
+
+    return _process_vision_info(*args, **kwargs)
+
+
 def run_single_video(args, model, processor) -> int:
     """
     Core pipeline for a single video.
@@ -89,8 +126,6 @@ def run_single_video(args, model, processor) -> int:
     trace += "\n\n messages: " + str(messages)
 
     if args.omni:
-        from qwen_omni_utils import process_mm_info
-
         modeltext = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
         print("after apply chat template, modeltext: ", modeltext)
 
@@ -141,8 +176,6 @@ def run_single_video(args, model, processor) -> int:
             )[0]
 
     else:
-        from qwen_vl_utils import process_vision_info
-        
         modeltext = processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
