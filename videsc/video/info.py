@@ -11,7 +11,6 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         logger.error("Cannot open video file '%s'", video_path)
-        print(f"Error: Cannot open video file '{video_path}'")
         sys.exit(1)
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
