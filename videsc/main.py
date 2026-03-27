@@ -32,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv)
 
+    logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
+    logger.debug("videsc starting  vl=%s  log_level=%s", args.vl, getattr(args, "log_level", "INFO"))
+
     if args.vl:
         return _run_vl(args)
     return _run_wd14(args)
@@ -47,6 +50,8 @@ def _run_vl(args) -> int:
 
     print("args: ", str(args))
     is_batch = bool(args.videos or args.indir or getattr(args, "filelist", None))
+
+    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s", is_batch, getattr(args, "omni", None), getattr(args, "qwen35", None))
 
     if is_batch:
         return run_batch(args)
@@ -98,6 +103,13 @@ def _run_vl(args) -> int:
 
 def _run_wd14(args) -> int:
     """Run WD14 tagger pipeline."""
+    logger.debug(
+        "_run_wd14: input_dir=%s  youtube_url=%s  every_n=%s  max_frames=%s",
+        getattr(args, "input_dir", None),
+        getattr(args, "youtube_url", None),
+        getattr(args, "every_n", None),
+        getattr(args, "max_frames", None),
+    )
     if not args.input_dir and not args.youtube_url:
         logger.error(
             "videsc: one of --input-dir or --youtube-url is required "

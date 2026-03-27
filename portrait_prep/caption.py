@@ -110,6 +110,7 @@ def caption_image(
     rating_indices: list[int] | None = None,
 ) -> str:
     """Run WD14 inference on a single image and return a caption string."""
+    logger.debug("caption_image: running inference on %s  threshold=%.2f", image_path.name, threshold)
     input_arr = _preprocess(image_path)
     input_name = session.get_inputs()[0].name
     probs: np.ndarray = session.run(None, {input_name: input_arr})[0][0]
@@ -128,6 +129,7 @@ def caption_image(
     tags.sort(key=lambda t: t[0], reverse=True)
     tag_strs = [t[1] for t in tags]
 
+    logger.debug("caption_image: %s  found %d tag(s) above threshold", image_path.name, len(tags))
     parts = ([prefix.strip()] if prefix.strip() else []) + tag_strs
     return ", ".join(parts)
 
@@ -192,6 +194,11 @@ def _caption_folder_impl(
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.debug(
+        "_caption_folder_impl: input=%s output=%s prefix=%r threshold=%.2f skip_existing=%s",
+        input_dir, output_dir, prefix, threshold, skip_existing,
+    )
+
     images = [
         p
         for p in input_dir.rglob("*")
@@ -202,9 +209,15 @@ def _caption_folder_impl(
         logger.warning("No images found in %s", input_dir)
         return {"captioned": 0, "skipped": 0}
 
+    logger.debug("caption_folder: found %d image(s) in %s", len(images), input_dir)
     logger.info("Downloading / loading WD14 model from %s …", model_repo)
     model_path, tags_csv = _download_model(model_repo)
     tag_names, rating_indices, general_indices = _load_labels(tags_csv)
+
+    logger.debug(
+        "caption: model loaded  tags=%d  general=%d  ratings=%d",
+        len(tag_names), len(general_indices), len(rating_indices),
+    )
 
     session = ort.InferenceSession(
         str(model_path),
@@ -226,6 +239,7 @@ def _caption_folder_impl(
         txt_path = txt_dir / (img_path.stem + ".txt")
 
         if skip_existing and txt_path.exists():
+            logger.debug("caption: skipping (exists): %s", txt_path)
             skipped += 1
             continue
 
@@ -242,6 +256,7 @@ def _caption_folder_impl(
             )
             txt_path.write_text(caption, encoding="utf-8")
             logger.info("Captioned: %s", img_path.name)
+            logger.debug("caption: wrote %d char(s) to %s", len(caption), txt_path)
             captioned += 1
         except Exception as exc:
             logger.error("Failed to caption %s: %s", img_path, exc)

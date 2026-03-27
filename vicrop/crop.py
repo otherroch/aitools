@@ -129,6 +129,11 @@ def crop_video(
     output_dir = output_dir.resolve()
     video_stem_dir = output_dir / video_path.stem
 
+    logger.debug(
+        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d model=%s classify=%s",
+        video_path.name, every_n, margin_ratio, crop_size, model, classify,
+    )
+
     if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.png")):
         logger.info("Skipping (already processed): %s", video_path.name)
         return {"frames_processed": 0, "faces": 0, "persons": 0}
@@ -155,6 +160,11 @@ def crop_video(
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 face_locations = fr.face_locations(frame_rgb, model=model)
                 face_encodings = fr.face_encodings(frame_rgb, face_locations)
+
+                logger.debug(
+                    "crop_video: frame %d  detected %d face(s)",
+                    frame_idx, len(face_locations),
+                )
 
                 h_img, w_img = frame_rgb.shape[:2]
 
@@ -246,6 +256,11 @@ def crop_folder(
     if not videos:
         logger.warning("No video files found in %s", input_dir)
         return {"videos_processed": 0, "frames_processed": 0, "faces": 0, "persons": 0}
+
+    logger.debug(
+        "crop_folder: found %d video(s) in %s  every_n=%d classify=%s",
+        len(videos), input_dir, every_n, classify,
+    )
 
     total: dict[str, int] = {
         "videos_processed": 0,

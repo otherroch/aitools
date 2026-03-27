@@ -256,6 +256,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument("--seed", type=int, default=4051888)
     vl.add_argument("--rep_pen", type=float, default=1.05, help="repetition penalty. Default is 1.0")
 
+    # ── Logging ──────────────────────────────────────────────────────────────
+    p.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Set the logging level (default: INFO).",
+    )
+
     _VL_DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 
     args = p.parse_args(argv)

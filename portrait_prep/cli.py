@@ -223,6 +223,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Report what would be done for the cpcap step without writing files.",
     )
 
+    # ---- logging ----
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Set the logging level (default: INFO).",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -342,6 +350,9 @@ def run_cpcap(args: argparse.Namespace, input_dir: Path) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+
+    logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
+    logger.debug("portrait_prep starting with args: %s", args)
 
     # Maintain a running "current input" directory that flows through pipeline steps.
     # convert writes PNGs → crop reads them → caption captions them → augment augments →

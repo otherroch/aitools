@@ -1,4 +1,7 @@
 from typing import Dict, Any, List
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def compute_effective_nframes(
@@ -27,6 +30,10 @@ def compute_effective_nframes(
     if nframes > 768:
         nframes = 768
 
+    logger.debug(
+        "compute_effective_nframes: requested=%d  fps=%.2f  num_frames=%d  spf=%.2f  effective=%d",
+        requested_nframes, frame_rate, num_frames, spf, nframes,
+    )
     return nframes
 
 
@@ -45,7 +52,16 @@ def compress_audio_segments_to_nframes(
     This guarantees len(return_value) == nframes.
     """
     if not segments or nframes <= 0 or video_duration <= 0:
+        logger.debug(
+            "compress_audio_segments_to_nframes: skipped  segments=%d  nframes=%d  duration=%.2f",
+            len(segments) if segments else 0, nframes, video_duration,
+        )
         return segments
+
+    logger.debug(
+        "compress_audio_segments_to_nframes: compressing %d segment(s) into %d bucket(s)  duration=%.2f",
+        len(segments), nframes, video_duration,
+    )
 
     def _seg_start(s):
         ts = s.get("timestamp") or (0.0, 0.0)

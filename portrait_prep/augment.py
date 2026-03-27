@@ -122,6 +122,11 @@ def augment_folder(
         logger.warning("No images found in %s", input_dir)
         return {"augmented": 0, "skipped": 0}
 
+    logger.debug(
+        "augment_folder: found %d image(s)  per_image=%d size=%s keep_originals=%s seed=%d",
+        len(images), per_image, image_size, keep_originals, seed,
+    )
+
     h, w = image_size
     aug = build_augment_pipeline(height=h, width=w)
 
@@ -133,6 +138,7 @@ def augment_folder(
         out_subdir = output_dir / rel.parent
         out_subdir.mkdir(parents=True, exist_ok=True)
 
+        logger.debug("augment: processing %s", img_path.name)
         img_bgr = cv2.imread(str(img_path))
         if img_bgr is None:
             logger.warning("Could not read image %s, skipping.", img_path)
@@ -146,6 +152,7 @@ def augment_folder(
             resized_bgr = cv2.cvtColor(resized, cv2.COLOR_RGB2BGR)
             orig_out = out_subdir / f"{img_path.stem}_orig.png"
             cv2.imwrite(str(orig_out), resized_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+            logger.debug("augment: saved original copy to %s", orig_out)
 
         for i in range(per_image):
             try:
@@ -153,6 +160,7 @@ def augment_folder(
                 aug_bgr = cv2.cvtColor(aug_rgb, cv2.COLOR_RGB2BGR)
                 out_path = out_subdir / f"{img_path.stem}_aug{i:03d}.png"
                 cv2.imwrite(str(out_path), aug_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                logger.debug("augment: saved variant %d → %s", i, out_path)
                 augmented += 1
             except Exception as exc:
                 logger.error("Augmentation failed for %s (variant %d): %s", img_path, i, exc)

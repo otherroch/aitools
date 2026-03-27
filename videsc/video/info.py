@@ -1,12 +1,16 @@
 import sys
+import logging
 import cv2
 from typing import Dict, Any
 
+logger = logging.getLogger(__name__)
+
 
 def get_video_info(video_path: str) -> Dict[str, Any]:
+    logger.debug("get_video_info: opening %s", video_path)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Error: Cannot open video file '{video_path}'")
+        logger.error("Cannot open video file '%s'", video_path)
         sys.exit(1)
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -19,7 +23,7 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
 
     cap.release()
 
-    return {
+    info = {
         "num_frames": total_frames,
         "FPS": fps,
         "width": width,
@@ -27,3 +31,8 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
         "tot_time": duration_seconds,
         "duration_minutes": duration_minutes,
     }
+    logger.debug(
+        "get_video_info: %s  frames=%d  fps=%.2f  size=%dx%d  duration=%.2fs",
+        video_path, total_frames, fps, width, height, duration_seconds,
+    )
+    return info

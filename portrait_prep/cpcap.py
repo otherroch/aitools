@@ -79,6 +79,11 @@ def copy_captions(
         logger.warning("No images found in %s", aug_dir)
         return {"created": 0, "skipped_existing": 0, "skipped_no_source": 0}
 
+    logger.debug(
+        "copy_captions: found %d augmented image(s)  source=%s caption_ext=%s dry_run=%s",
+        len(aug_images), source_dir, caption_ext, dry_run,
+    )
+
     created = 0
     skipped_existing = 0
     skipped_no_source = 0
@@ -96,6 +101,7 @@ def copy_captions(
         target_caption = img_path.with_suffix(caption_ext)
 
         if skip_existing and target_caption.exists():
+            logger.debug("cpcap: skipping (exists): %s", target_caption)
             skipped_existing += 1
             continue
 
