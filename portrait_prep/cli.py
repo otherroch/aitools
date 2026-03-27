@@ -351,7 +351,7 @@ def run_cpcap(args: argparse.Namespace, input_dir: Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
     logger.debug("portrait_prep starting with args: %s", args)
 
     # Maintain a running "current input" directory that flows through pipeline steps.

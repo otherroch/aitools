@@ -32,8 +32,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv)
 
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-    logger.debug("videsc starting  vl=%s  log_level=%s", args.vl, args.log_level)
+    logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
+    logger.debug("videsc starting  vl=%s  log_level=%s", args.vl, getattr(args, "log_level", "INFO"))
 
     if args.vl:
         return _run_vl(args)
@@ -51,7 +51,7 @@ def _run_vl(args) -> int:
     print("args: ", str(args))
     is_batch = bool(args.videos or args.indir or getattr(args, "filelist", None))
 
-    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s", is_batch, args.omni, args.qwen35)
+    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s", is_batch, getattr(args, "omni", None), getattr(args, "qwen35", None))
 
     if is_batch:
         return run_batch(args)
