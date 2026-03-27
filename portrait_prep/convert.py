@@ -50,6 +50,13 @@ def convert_folder(
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.debug(
+        "convert_folder: input=%s output=%s skip_existing=%s",
+        input_dir,
+        output_dir,
+        skip_existing,
+    )
+
     candidates = [
         p
         for p in input_dir.rglob("*")
@@ -59,6 +66,8 @@ def convert_folder(
     if not candidates:
         logger.warning("No supported images found in %s", input_dir)
         return 0, 0
+
+    logger.debug("convert_folder: found %d candidate(s) to process", len(candidates))
 
     converted = 0
     skipped = 0
@@ -76,6 +85,7 @@ def convert_folder(
 
         try:
             with Image.open(src) as img:
+                logger.debug("convert: %s  original size=%s mode=%s", src.name, img.size, img.mode)
                 img = img.convert("RGB")
                 img.save(dst, format="PNG", optimize=False, compress_level=3)
             logger.info("Converted: %s → %s", src.name, dst)

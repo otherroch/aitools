@@ -91,12 +91,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Set the logging level (default: INFO).",
+    )
 
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    logger.debug("vicrop starting with args: %s", args)
 
     from vicrop.crop import crop_folder
 

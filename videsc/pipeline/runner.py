@@ -2,6 +2,7 @@ import sys
 import shlex
 import subprocess
 import time
+import logging
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -21,6 +22,8 @@ from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
 from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, expand_video_grid_thw
+
+logger = logging.getLogger(__name__)
 
 
 def process_mm_info(*args, **kwargs):
@@ -71,25 +74,34 @@ def run_single_video(args, model, processor) -> int:
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     trace += "start time: " + str(current_time)
+    logger.debug("run_single_video: start time %s  video=%s", current_time, args.video)
     print(f"✅ start time: {current_time}")
 
     # Basic video info
     video_info = get_video_info(args.video)
+    logger.debug("run_single_video: video_info=%s", video_info)
 
     transcript = None
     segments: List[Dict[str, Any]] = []
     if args.audio:
+        logger.debug("run_single_video: transcribing audio from %s", args.video)
         transcript, segments = transcribe_audio_from_video(args.video, args, model.device)
         if transcript:
             trace += "\n\n audio_transcript_head: " + transcript[:500]
+            logger.debug("run_single_video: transcript head: %s", transcript[:200])
         if segments:
             trace += f"\n\n audio_segments_count_raw: {len(segments)}"
+            logger.debug("run_single_video: raw audio segments: %d", len(segments))
 
     # Compute the effective nframes the model will actually see
     effective_nframes = compute_effective_nframes(
         video_info,
         args.num_frames,
         args.spf,
+    )
+    logger.debug(
+        "run_single_video: effective_nframes=%d  requested=%d  spf=%.2f",
+        effective_nframes, args.num_frames, args.spf,
     )
 
     # Compress audio segments so we have exactly one coarse segment per frame bucket
@@ -100,13 +112,19 @@ def run_single_video(args, model, processor) -> int:
             video_info["tot_time"],
         )
         trace += f"\n\n audio_segments_count_coarse: {len(segments)}"
+        logger.debug("run_single_video: coarse audio segments: %d", len(segments))
 
     patch = _patch_size_for_model(args.model if getattr(args, "model", None) else "")
+    logger.debug("run_single_video: patch_size=%d", patch)
     print("patch:", patch)
 
     # Convert total_pixels from edge-multiplier units to raw pixels,
     # matching how min_pixels/max_pixels are converted in the processor.
     tot_pixels_raw = args.total_pixels * patch * patch
+    logger.debug(
+        "run_single_video: total_pixels edge=%d  raw=%d  (patch=%d)",
+        args.total_pixels, tot_pixels_raw, patch,
+    )
 
     messages = build_messages(
         video_path=args.video,
@@ -122,6 +140,7 @@ def run_single_video(args, model, processor) -> int:
         is_omni=args.omni,
     )
 
+    logger.debug("run_single_video: messages built (%d message(s))", len(messages))
     print("after build messages:", messages)
     trace += "\n\n messages: " + str(messages)
 
@@ -274,6 +293,7 @@ def run_single_video(args, model, processor) -> int:
 
     print("after generate")
     print(text)
+    logger.debug("run_single_video: generation complete  output_length=%d chars", len(text))
 
     nowGen = datetime.now()
     current_time = nowGen.strftime("%H:%M:%S")
@@ -285,6 +305,7 @@ def run_single_video(args, model, processor) -> int:
     genvidRatio = float(diffGen.total_seconds()) / float(vidTime)
     genRatio = genTime + " video time: " + str(vidTime) + " gen ratio: " + str(genvidRatio)
     print(genRatio)
+    logger.debug("run_single_video: %s", genRatio)
 
     result = genRatio + "\n\n" + " input args: " + str(args) + "\n\n" + " result prompt: " + str(text) + "\n\n" + trace
 
@@ -297,6 +318,7 @@ def run_single_video(args, model, processor) -> int:
     _outdir = _P(getattr(args, "outdir", None)) if getattr(args, "outdir", None) else _default_dir
     _outdir.mkdir(parents=True, exist_ok=True)
     out_path = str(_outdir / f"{_vid.stem}.txt")
+    logger.debug("run_single_video: writing result to %s", out_path)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(result)
 
@@ -307,6 +329,7 @@ def run_single_video(args, model, processor) -> int:
             with open(transcript_path, "w", encoding="utf-8") as tf:
                 tf.write(transcript)
             print(f"[audio] transcript saved to: {transcript_path}")
+            logger.debug("run_single_video: transcript saved to %s", transcript_path)
         except Exception as e:
             print(f"[audio] failed to save transcript to {transcript_path}: {e}")
 
@@ -318,6 +341,8 @@ def run_batch_subprocess(args) -> int:
     if not inputs:
         print("[fatal] No input videos matched your criteria.", file=sys.stderr)
         return 3
+
+    logger.debug("run_batch_subprocess: %d video(s) queued  workers=%d", len(inputs), args.workers)
 
     exclude = {"videos", "indir", "filelist", "ext", "workers", "sleep", "dry_run", "video", "batch_mode"}
     base_cli = namespace_to_cli(args, exclude)
@@ -370,6 +395,8 @@ def run_batch_threads(args) -> int:
         print("[fatal] No input videos matched your criteria.", file=sys.stderr)
         return 3
 
+    logger.debug("run_batch_threads: %d video(s) queued  workers=%d", len(inputs), args.workers)
+
     if args.dry_run:
         for vid in inputs:
             print(f"[dry-run] would process: {vid}")
@@ -413,6 +440,7 @@ def run_batch_threads(args) -> int:
 def run_batch(args) -> int:
     """Dispatch to subprocess or threaded batch implementation depending on --batch-mode."""
     mode = getattr(args, "batch_mode", "threads")
+    logger.debug("run_batch: mode=%s", mode)
     if mode == "subprocess":
         print("[batch] using subprocess mode (one process per video).")
         return run_batch_subprocess(args)

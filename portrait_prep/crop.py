@@ -65,6 +65,9 @@ def crop_faces_from_image(
     fr = _load_face_recognition()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.debug("crop_faces_from_image: %s  margin_ratio=%.2f crop_size=%d model=%s",
+                 image_path.name, margin_ratio, crop_size, model)
+
     image = fr.load_image_file(str(image_path))
     face_locations = fr.face_locations(image, model=model)
     face_encodings = fr.face_encodings(image, face_locations)
@@ -72,6 +75,8 @@ def crop_faces_from_image(
     if not face_locations:
         logger.warning("No face found in %s", image_path.name)
         return []
+
+    logger.debug("crop_faces_from_image: detected %d face(s) in %s", len(face_locations), image_path.name)
 
     h_img, w_img = image.shape[:2]
     results: list[tuple[Path, np.ndarray]] = []
@@ -98,6 +103,11 @@ def crop_faces_from_image(
         out_path = output_dir / out_name
         pil_img.save(out_path)
         logger.info("Saved face crop: %s", out_path)
+        logger.debug(
+            "crop: face %d bbox=(top=%d right=%d bottom=%d left=%d) crop=(%d,%d,%d,%d)",
+            i + 1, top, right, bottom, left,
+            crop_top, crop_bottom, crop_left, crop_right,
+        )
         results.append((out_path, encoding))
 
     return results
@@ -190,6 +200,11 @@ def crop_folder(
     if not images:
         logger.warning("No images found in %s", input_dir)
         return {"faces": 0, "images_processed": 0, "persons": 0}
+
+    logger.debug(
+        "crop_folder: found %d image(s) in %s  classify=%s tolerance=%.2f model=%s",
+        len(images), input_dir, classify, tolerance, model,
+    )
 
     # Flat staging dir when classify=True (moved after clustering)
     staging_dir = output_dir / "_staging" if classify else output_dir

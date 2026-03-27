@@ -1,6 +1,7 @@
 import os
 import math
 import time
+import logging
 import subprocess
 import tempfile
 from typing import Optional, Dict, Any, List, Tuple
@@ -9,6 +10,7 @@ from transformers import pipeline as asr_pipeline
 
 from videsc.utils.helpers import _format_time_hhmmss
 
+logger = logging.getLogger(__name__)
 
 # Shared ASR pipeline (for threaded batch mode)
 _ASR_PIPELINE = None
@@ -27,10 +29,12 @@ def safe_transcribe_segment(
 
     try:
         if not os.path.exists(audio_path):
+            logger.error("[audio] Audio file not found: %s", audio_path)
             print(f"[audio] Audio file not found: {audio_path}")
             return None
 
         if _ASR_PIPELINE is None:
+            logger.debug("[audio] loading Whisper ASR model '%s'", model_name)
             print(f"[audio] loading Whisper ASR model '{model_name}'")
             _ASR_PIPELINE = asr_pipeline(
                 "automatic-speech-recognition",
@@ -43,6 +47,7 @@ def safe_transcribe_segment(
                 return_timestamps="word",
             )
 
+        logger.debug("[audio] transcribing segment: %s", audio_path)
         print(f"[audio] transcribing segment: {audio_path}")
         result = _ASR_PIPELINE(
             audio_path,
@@ -52,10 +57,12 @@ def safe_transcribe_segment(
         return result
 
     except Exception as e:
+        logger.error("[audio] error transcribing %s: %s", audio_path, e)
         print(f"[audio] error transcribing {audio_path}: {e}")
         # Fallback to a tiny Whisper model if the main one fails.
         try:
             fallback_model = "openai/whisper-tiny"
+            logger.debug("[audio] trying fallback ASR model '%s'", fallback_model)
             print(f"[audio] trying fallback ASR model '{fallback_model}'")
             _ASR_PIPELINE = asr_pipeline(
                 "automatic-speech-recognition",
@@ -73,6 +80,7 @@ def safe_transcribe_segment(
                 return_timestamps="word",
             )
         except Exception as e2:
+            logger.error("[audio] even tiny model failed: %s", e2)
             print(f"[audio] even tiny model failed: {e2}")
             return None
 
@@ -109,11 +117,17 @@ def transcribe_audio_segments(
     """
     results: List[Dict[str, Any]] = []
 
+    logger.debug(
+        "transcribe_audio_segments: processing %d segment(s) with model %s",
+        len(segments_meta), model_name,
+    )
+
     for i, seg_meta in enumerate(segments_meta):
         segment_path = seg_meta.get("path")
         base_start = float(seg_meta.get("start", 0.0) or 0.0)
         base_end = float(seg_meta.get("end", base_start + segment_duration) or (base_start + segment_duration))
 
+        logger.debug("[audio] processing segment %d/%d: %s", i + 1, len(segments_meta), segment_path)
         print(f"[audio] processing segment {i+1}/{len(segments_meta)}: {segment_path}")
         try:
             time.sleep(1.0)
@@ -129,8 +143,10 @@ def transcribe_audio_segments(
                     }
                 )
             else:
+                logger.warning("[audio] segment %d transcription returned no result", i + 1)
                 print(f"[audio] segment {i+1} transcription returned no result")
         except Exception as e:
+            logger.error("[audio] failed to process segment %d: %s", i + 1, e)
             print(f"[audio] failed to process segment {i+1}: {e}")
             continue
 
@@ -201,10 +217,15 @@ def combine_transcription_results(
             elif isinstance(res, str):
                 raw_text_parts.append(res)
         except Exception as e:
+            logger.error("[audio] error while combining result: %s", e)
             print(f"[audio] error while combining result: {e}")
             continue
 
     raw_text = " ".join(raw_text_parts).strip()
+    logger.debug(
+        "combine_transcription_results: raw_text_len=%d  timestamped_segments=%d",
+        len(raw_text), len(segments_with_ts),
+    )
     return raw_text, segments_with_ts
 
 
@@ -220,6 +241,10 @@ def transcribe_large_video(
       3) Concatenates the segment transcriptions into a single raw string and
          a list of small segments with absolute timestamps.
     """
+    logger.debug(
+        "transcribe_large_video: %s  model=%s  max_audio_seconds=%.1f",
+        mp4_path, model_name, max_audio_seconds,
+    )
     temp_dir: Optional[str] = None
     segment_infos: List[Dict[str, Any]] = []
     audio_files: List[str] = []
@@ -255,9 +280,11 @@ def transcribe_large_video(
         else:
             segment_duration = 120
 
+        logger.debug("[audio] duration=%.2fs  segment_duration=%ds", duration, segment_duration)
         print(f"[audio] Using segment duration: {segment_duration} seconds")
 
         num_segments = max(1, int(math.ceil(duration / segment_duration)))
+        logger.debug("[audio] splitting into %d segment(s)", num_segments)
         for idx in range(num_segments):
             start_time = idx * segment_duration
             if start_time >= duration:
@@ -284,6 +311,7 @@ def transcribe_large_video(
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            logger.debug("[audio] extracted segment %d: %s (%.2f–%.2f s)", idx + 1, segment_name, start_time, end_time)
             audio_files.append(segment_name)
             segment_infos.append(
                 {
@@ -302,9 +330,11 @@ def transcribe_large_video(
         return transcription, segments
 
     except subprocess.CalledProcessError as e:
+        logger.error("[audio] ffmpeg/ffprobe error while processing %s: %s", mp4_path, e)
         print(f"[audio] ffmpeg/ffprobe error while processing {mp4_path}: {e}")
         return "", []
     except Exception as e:
+        logger.error("[audio] error processing video for transcription: %s", e)
         print(f"[audio] error processing video for transcription: {e}")
         return "", []
     finally:
@@ -331,7 +361,13 @@ def transcribe_audio_from_video(
     """
     asr_model_id = getattr(args, "asr_model", None) or ""
     if not asr_model_id.strip():
+        logger.debug("transcribe_audio_from_video: no ASR model specified, skipping")
         return None, []
+
+    logger.debug(
+        "transcribe_audio_from_video: video=%s  asr_model=%s",
+        video_path, asr_model_id,
+    )
 
     try:
         max_secs = float(getattr(args, "max_audio_seconds", 0.0) or 0.0)
@@ -345,6 +381,7 @@ def transcribe_audio_from_video(
     )
 
     if not transcript and not segments:
+        logger.warning("[audio] empty transcript.")
         print("[audio] empty transcript.")
         return None, []
 

@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -18,6 +19,7 @@ from transformers import (
 from videsc.config import model_dir
 from videsc.utils.helpers import _patch_size_for_model
 
+logger = logging.getLogger(__name__)
 
 # Shared model / processor for threaded batch mode
 _SHARED_MODEL = None
@@ -46,6 +48,7 @@ def load_model_and_processor(args):
     global _SHARED_MODEL, _SHARED_PROCESSOR
 
     if _SHARED_MODEL is not None and _SHARED_PROCESSOR is not None:
+        logger.debug("load_model_and_processor: reusing cached model/processor")
         return _SHARED_MODEL, _SHARED_PROCESSOR
 
     # Resolve model path
@@ -56,6 +59,8 @@ def load_model_and_processor(args):
     else:
         model_path_local = model_dir + args.model
 
+    logger.debug("load_model_and_processor: model_path=%s  quant=%s  attn=%s",
+                 model_path_local, getattr(args, "quant", None), getattr(args, "attn", None))
     print("model_path=", model_path_local)
 
     # Optional CPU thread limiting
@@ -63,6 +68,7 @@ def load_model_and_processor(args):
         cpu_count = os.cpu_count()
         print(f"Number of CPU cores in the system: {cpu_count}")
         half_cpu_count = cpu_count // 2
+        logger.debug("load_model_and_processor: limiting to %d CPU threads", half_cpu_count)
         os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
         os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
         torch.set_num_threads(half_cpu_count)
@@ -70,6 +76,7 @@ def load_model_and_processor(args):
     # Log start time
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
+    logger.debug("load_model_and_processor: start time %s", current_time)
     print(f"✅ start time (model load): {current_time}")
 
     # Quantization + reader
@@ -86,6 +93,7 @@ def load_model_and_processor(args):
     )
 
     if args.optimize:
+        logger.debug("load_model_and_processor: compiling model with torch.compile")
         model = torch.compile(
             model,
             mode="reduce-overhead",
@@ -95,12 +103,17 @@ def load_model_and_processor(args):
 
     # Load processor with pixel limits (use model-specific patch size)
     patch = _patch_size_for_model(model_path_local)
+    logger.debug(
+        "load_model_and_processor: patch=%d  min_pixels=%d  max_pixels=%d",
+        patch, args.min_pixels * patch * patch, args.max_pixels * patch * patch,
+    )
     processor = AutoProcessor.from_pretrained(
         model_path_local,
         min_pixels=args.min_pixels * patch * patch,
         max_pixels=args.max_pixels * patch * patch,
     )
 
+    logger.debug("load_model_and_processor: model loaded")
     print("model loaded")
 
     _SHARED_MODEL = model
@@ -116,6 +129,7 @@ def load_omni_model_and_processor(args):
     global _SHARED_MODEL, _SHARED_PROCESSOR
 
     if _SHARED_MODEL is not None and _SHARED_PROCESSOR is not None:
+        logger.debug("load_omni_model_and_processor: reusing cached model/processor")
         return _SHARED_MODEL, _SHARED_PROCESSOR
 
     # Resolve model path
@@ -126,6 +140,8 @@ def load_omni_model_and_processor(args):
     else:
         model_path_local = model_dir + args.model
 
+    logger.debug("load_omni_model_and_processor: model_path=%s  quant=%s",
+                 model_path_local, getattr(args, "quant", None))
     print("model_path=", model_path_local)
 
     # Optional CPU thread limiting
@@ -133,6 +149,7 @@ def load_omni_model_and_processor(args):
         cpu_count = os.cpu_count()
         print(f"Number of CPU cores in the system: {cpu_count}")
         half_cpu_count = cpu_count // 2
+        logger.debug("load_omni_model_and_processor: limiting to %d CPU threads", half_cpu_count)
         os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
         os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
         torch.set_num_threads(half_cpu_count)
@@ -140,6 +157,7 @@ def load_omni_model_and_processor(args):
     # Log start time
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
+    logger.debug("load_omni_model_and_processor: start time %s", current_time)
     print(f"✅ start time (model load): {current_time}")
 
     # Quantization + reader
@@ -153,6 +171,7 @@ def load_omni_model_and_processor(args):
     )
 
     if args.optimize:
+        logger.debug("load_omni_model_and_processor: compiling model with torch.compile")
         model = torch.compile(
             model,
             mode="reduce-overhead",
@@ -164,6 +183,7 @@ def load_omni_model_and_processor(args):
 
     processor = Qwen3OmniMoeProcessor.from_pretrained(model_path_local)
 
+    logger.debug("load_omni_model_and_processor: model loaded")
     print("model loaded")
 
     _SHARED_MODEL = model
@@ -179,6 +199,7 @@ def load_qwen35_model_and_processor(args):
     global _SHARED_MODEL, _SHARED_PROCESSOR
 
     if _SHARED_MODEL is not None and _SHARED_PROCESSOR is not None:
+        logger.debug("load_qwen35_model_and_processor: reusing cached model/processor")
         return _SHARED_MODEL, _SHARED_PROCESSOR
 
     # Resolve model path
@@ -189,6 +210,8 @@ def load_qwen35_model_and_processor(args):
     else:
         model_path_local = model_dir + args.model
 
+    logger.debug("load_qwen35_model_and_processor: model_path=%s  quant=%s  attn=%s",
+                 model_path_local, getattr(args, "quant", None), getattr(args, "attn", None))
     print("model_path=", model_path_local)
 
     # Optional CPU thread limiting
@@ -196,6 +219,7 @@ def load_qwen35_model_and_processor(args):
         cpu_count = os.cpu_count()
         print(f"Number of CPU cores in the system: {cpu_count}")
         half_cpu_count = cpu_count // 2
+        logger.debug("load_qwen35_model_and_processor: limiting to %d CPU threads", half_cpu_count)
         os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
         os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
         torch.set_num_threads(half_cpu_count)
@@ -203,6 +227,7 @@ def load_qwen35_model_and_processor(args):
     # Log start time
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
+    logger.debug("load_qwen35_model_and_processor: start time %s", current_time)
     print(f"✅ start time (model load): {current_time}")
 
     # Quantization + reader
@@ -219,6 +244,7 @@ def load_qwen35_model_and_processor(args):
     )
 
     if args.optimize:
+        logger.debug("load_qwen35_model_and_processor: compiling model with torch.compile")
         model = torch.compile(
             model,
             mode="reduce-overhead",
@@ -228,12 +254,17 @@ def load_qwen35_model_and_processor(args):
 
     # Load processor with pixel limits (use model-specific patch size)
     patch = _patch_size_for_model(model_path_local)
+    logger.debug(
+        "load_qwen35_model_and_processor: patch=%d  min_pixels=%d  max_pixels=%d",
+        patch, args.min_pixels * patch * patch, args.max_pixels * patch * patch,
+    )
     processor = AutoProcessor.from_pretrained(
         model_path_local,
         min_pixels=args.min_pixels * patch * patch,
         max_pixels=args.max_pixels * patch * patch,
     )
 
+    logger.debug("load_qwen35_model_and_processor: model loaded")
     print("model loaded")
 
     _SHARED_MODEL = model

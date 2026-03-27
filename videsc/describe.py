@@ -59,6 +59,10 @@ def extract_keyframes(
     Returns:
         List of RGB numpy arrays shaped ``(H, W, 3)``.
     """
+    logger.debug(
+        "extract_keyframes: %s  every_n=%d  max_frames=%d",
+        video_path.name, every_n, max_frames,
+    )
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.error("Could not open video: %s", video_path)
@@ -79,6 +83,7 @@ def extract_keyframes(
     finally:
         cap.release()
 
+    logger.debug("extract_keyframes: extracted %d frame(s) from %s", len(frames), video_path.name)
     return frames
 
 
@@ -204,6 +209,11 @@ def _describe_video_impl(
     txt_dir.mkdir(parents=True, exist_ok=True)
     txt_path = txt_dir / (video_path.stem + ".txt")
 
+    logger.debug(
+        "_describe_video_impl: %s  every_n=%d  max_frames=%d  threshold=%.2f",
+        video_path.name, every_n, max_frames, threshold,
+    )
+
     if skip_existing and txt_path.exists():
         logger.debug("Skipping (exists): %s", txt_path)
         return {"described": 0, "skipped": 1}
@@ -213,6 +223,7 @@ def _describe_video_impl(
         logger.warning("No frames extracted from %s", video_path.name)
         return {"described": 0, "skipped": 1}
 
+    logger.debug("_describe_video_impl: %d frame(s) extracted  loading model …", len(frames))
     logger.info("Downloading / loading WD14 model from %s …", model_repo)
     model_path, tags_csv = _download_model(model_repo)
     tag_names, rating_indices, general_indices = _load_labels(tags_csv)
@@ -235,6 +246,7 @@ def _describe_video_impl(
 
     txt_path.write_text(caption, encoding="utf-8")
     logger.info("Described: %s → %s", video_path.name, txt_path)
+    logger.debug("_describe_video_impl: wrote %d char(s) to %s", len(caption), txt_path)
     return {"described": 1, "skipped": 0}
 
 
@@ -346,6 +358,11 @@ def _describe_folder_impl(
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.debug(
+        "_describe_folder_impl: input=%s  every_n=%d  max_frames=%d  threshold=%.2f",
+        input_dir, every_n, max_frames, threshold,
+    )
+
     videos = [
         p
         for p in input_dir.rglob("*")
@@ -356,6 +373,7 @@ def _describe_folder_impl(
         logger.warning("No video files found in %s", input_dir)
         return {"described": 0, "skipped": 0}
 
+    logger.debug("_describe_folder_impl: found %d video(s) in %s", len(videos), input_dir)
     logger.info("Downloading / loading WD14 model from %s …", model_repo)
     model_path, tags_csv = _download_model(model_repo)
     tag_names, rating_indices, general_indices = _load_labels(tags_csv)
@@ -379,6 +397,7 @@ def _describe_folder_impl(
         txt_path = txt_dir / (video_path.stem + ".txt")
 
         if skip_existing and txt_path.exists():
+            logger.debug("_describe_folder_impl: skipping (exists): %s", txt_path)
             skipped += 1
             continue
 
@@ -388,6 +407,7 @@ def _describe_folder_impl(
             skipped += 1
             continue
 
+        logger.debug("_describe_folder_impl: %s  %d frame(s) extracted", video_path.name, len(frames))
         caption = _build_caption(
             session=session,
             frames=frames,
@@ -401,6 +421,7 @@ def _describe_folder_impl(
 
         txt_path.write_text(caption, encoding="utf-8")
         logger.info("Described: %s", video_path.name)
+        logger.debug("_describe_folder_impl: wrote %d char(s) to %s", len(caption), txt_path)
         described += 1
 
     return {"described": described, "skipped": skipped}
