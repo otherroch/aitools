@@ -26,6 +26,10 @@ SUPPORTED_VIDEO_EXTS: set[str] = {
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv",
 }
 
+SUPPORTED_IMAGE_EXTS: set[str] = {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif",
+}
+
 DEFAULT_EVERY_N_FRAMES: int = 30
 DEFAULT_MARGIN_RATIO: float = 0.4
 DEFAULT_CROP_SIZE: int = 1024
@@ -42,23 +46,83 @@ def _load_face_recognition():
         ) from exc
 
 
+def _load_reference_encodings(
+    classified_path: Path,
+    model: str = "hog",
+) -> tuple[list[np.ndarray], list[int], int]:
+    """Load face encodings from a pre-classified reference directory.
+
+    The directory is expected to contain ``person_NN`` sub-folders, each holding
+    one or more reference face images.  Returns ``(encodings, labels, next_label)``
+    ready to seed the clustering algorithm.
+    """
+    fr = _load_face_recognition()
+
+    encodings: list[np.ndarray] = []
+    labels: list[int] = []
+    next_label = 1
+
+    person_dirs = sorted(
+        p for p in classified_path.iterdir()
+        if p.is_dir() and p.name.startswith("person_")
+    )
+
+    for person_dir in person_dirs:
+        try:
+            label = int(person_dir.name.split("_", 1)[1])
+        except (IndexError, ValueError):
+            logger.warning("Skipping unrecognised folder: %s", person_dir.name)
+            continue
+
+        ref_images = [
+            p for p in person_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTS
+        ]
+
+        for img_path in ref_images:
+            image = fr.load_image_file(str(img_path))
+            face_encs = fr.face_encodings(image, fr.face_locations(image, model=model))
+            if face_encs:
+                encodings.append(face_encs[0])
+                labels.append(label)
+                logger.debug(
+                    "Loaded reference encoding from %s (person_%02d)",
+                    img_path.name, label,
+                )
+
+        next_label = max(next_label, label + 1)
+
+    logger.info(
+        "Loaded %d reference encoding(s) for %d person(s) from %s",
+        len(encodings), len(person_dirs), classified_path,
+    )
+    return encodings, labels, next_label
+
+
 def _cluster_faces(
     all_results: list[tuple[Path, np.ndarray]],
     output_dir: Path,
     tolerance: float = 0.6,
+    reference_encodings: list[np.ndarray] | None = None,
+    reference_labels: list[int] | None = None,
+    next_label_start: int | None = None,
 ) -> dict[int, list[Path]]:
     """Group saved face crops by identity using greedy nearest-neighbour clustering.
 
     Each unique identity is assigned an integer label starting from 1 and its
     crops are moved into ``output_dir/person_NN/``.
 
+    When *reference_encodings* and *reference_labels* are provided (from a
+    pre-classified directory), new faces are first compared against these known
+    identities before creating new person groups.
+
     Returns a mapping ``{person_id: [list of face image paths]}``.
     """
     fr = _load_face_recognition()
 
-    known_encodings: list[np.ndarray] = []
-    known_labels: list[int] = []
-    next_label = 1
+    known_encodings: list[np.ndarray] = list(reference_encodings or [])
+    known_labels: list[int] = list(reference_labels or [])
+    next_label = next_label_start if next_label_start is not None else 1
     label_map: dict[Path, int] = {}
 
     for face_path, encoding in all_results:
@@ -100,6 +164,7 @@ def crop_video(
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
+    classified_path: Path | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -108,18 +173,20 @@ def crop_video(
     and saved as PNG files inside a sub-directory named after the video stem.
 
     Args:
-        video_path:    Path to the input video file.
-        output_dir:    Root directory where cropped images are saved.
-        every_n:       Process every N-th frame (default: 30).
-        margin_ratio:  Fractional padding around each detected face bbox.
-        crop_size:     Output square resolution in pixels (default: 1024).
-        model:         face_recognition detection model – ``"hog"`` (fast) or
-                       ``"cnn"`` (accurate).
-        classify:      If True, cluster faces by identity into
-                       ``person_NN`` sub-folders.
-        tolerance:     Face-distance threshold for identity clustering.
-        skip_existing: Skip the video if its output sub-directory already
-                       contains PNG files.
+        video_path:      Path to the input video file.
+        output_dir:      Root directory where cropped images are saved.
+        every_n:         Process every N-th frame (default: 30).
+        margin_ratio:    Fractional padding around each detected face bbox.
+        crop_size:       Output square resolution in pixels (default: 1024).
+        model:           face_recognition detection model – ``"hog"`` (fast) or
+                         ``"cnn"`` (accurate).
+        classify:        If True, cluster faces by identity into
+                         ``person_NN`` sub-folders.
+        tolerance:       Face-distance threshold for identity clustering.
+        skip_existing:   Skip the video if its output sub-directory already
+                         contains PNG files.
+        classified_path: Optional path to a directory of pre-classified
+                         reference photos used to seed identity clustering.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``, ``persons``.
@@ -200,7 +267,19 @@ def crop_video(
 
     persons = 0
     if classify and all_results:
-        person_dirs = _cluster_faces(all_results, video_stem_dir, tolerance=tolerance)
+        ref_enc: list[np.ndarray] | None = None
+        ref_lab: list[int] | None = None
+        next_lab: int | None = None
+        if classified_path is not None:
+            ref_enc, ref_lab, next_lab = _load_reference_encodings(
+                classified_path, model=model,
+            )
+        person_dirs = _cluster_faces(
+            all_results, video_stem_dir, tolerance=tolerance,
+            reference_encodings=ref_enc,
+            reference_labels=ref_lab,
+            next_label_start=next_lab,
+        )
         persons = len(person_dirs)
         try:
             staging_dir.rmdir()
@@ -224,20 +303,23 @@ def crop_folder(
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
+    classified_path: Path | None = None,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
     Args:
-        input_dir:     Source directory (searched recursively for video files).
-        output_dir:    Destination directory.
-        every_n:       Process every N-th frame from each video.
-        margin_ratio:  Fractional margin around each detected face bbox.
-        crop_size:     Output square resolution in pixels.
-        model:         face_recognition detection model (``"hog"`` or ``"cnn"``).
-        classify:      If True, cluster faces by identity into
-                       ``person_NN`` sub-folders.
-        tolerance:     Face-distance threshold for identity clustering.
-        skip_existing: Skip videos whose output sub-directory already has PNGs.
+        input_dir:       Source directory (searched recursively for video files).
+        output_dir:      Destination directory.
+        every_n:         Process every N-th frame from each video.
+        margin_ratio:    Fractional margin around each detected face bbox.
+        crop_size:       Output square resolution in pixels.
+        model:           face_recognition detection model (``"hog"`` or ``"cnn"``).
+        classify:        If True, cluster faces by identity into
+                         ``person_NN`` sub-folders.
+        tolerance:       Face-distance threshold for identity clustering.
+        skip_existing:   Skip videos whose output sub-directory already has PNGs.
+        classified_path: Optional path to a directory of pre-classified
+                         reference photos used to seed identity clustering.
 
     Returns:
         Aggregate summary dict with keys ``videos_processed``,
@@ -281,6 +363,7 @@ def crop_folder(
             classify=classify,
             tolerance=tolerance,
             skip_existing=skip_existing,
+            classified_path=classified_path,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]
