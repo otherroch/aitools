@@ -22,6 +22,12 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from portrait_prep.face_utils import (
+    DEFAULT_CROP_SIZE,
+    DEFAULT_MARGIN_RATIO,
+    cluster_faces as _cluster_faces_shared,
+    load_face_recognition as _load_face_recognition,
+)
 from vicrop.ref import (
     DEFAULT_REF_THRESH,
     collect_ref_photos,
@@ -35,19 +41,6 @@ SUPPORTED_VIDEO_EXTS: set[str] = {
 }
 
 DEFAULT_EVERY_N_FRAMES: int = 30
-DEFAULT_MARGIN_RATIO: float = 0.4
-DEFAULT_CROP_SIZE: int = 1024
-
-
-def _load_face_recognition():
-    try:
-        import face_recognition
-        return face_recognition
-    except ImportError as exc:
-        raise ImportError(
-            "face_recognition is required for vicrop.\n"
-            "Install it with: pip install face_recognition"
-        ) from exc
 
 
 def _cluster_faces(
@@ -57,45 +50,10 @@ def _cluster_faces(
 ) -> dict[int, list[Path]]:
     """Group saved face crops by identity using greedy nearest-neighbour clustering.
 
-    Each unique identity is assigned an integer label starting from 1 and its
-    crops are moved into ``output_dir/person_NN/``.
-
-    Returns a mapping ``{person_id: [list of face image paths]}``.
+    Delegates to :func:`portrait_prep.face_utils.cluster_faces`.
     """
     fr = _load_face_recognition()
-
-    known_encodings: list[np.ndarray] = []
-    known_labels: list[int] = []
-    next_label = 1
-    label_map: dict[Path, int] = {}
-
-    for face_path, encoding in all_results:
-        if not known_encodings:
-            known_encodings.append(encoding)
-            known_labels.append(next_label)
-            label_map[face_path] = next_label
-            next_label += 1
-            continue
-
-        distances = fr.face_distance(known_encodings, encoding)
-        best_idx = int(np.argmin(distances))
-        if distances[best_idx] <= tolerance:
-            label_map[face_path] = known_labels[best_idx]
-        else:
-            known_encodings.append(encoding)
-            known_labels.append(next_label)
-            label_map[face_path] = next_label
-            next_label += 1
-
-    person_dirs: dict[int, list[Path]] = {}
-    for face_path, label in label_map.items():
-        person_dir = output_dir / f"person_{label:02d}"
-        person_dir.mkdir(parents=True, exist_ok=True)
-        dest = person_dir / face_path.name
-        face_path.rename(dest)
-        person_dirs.setdefault(label, []).append(dest)
-
-    return person_dirs
+    return _cluster_faces_shared(all_results, output_dir, tolerance=tolerance, fr=fr)
 
 
 def crop_video(
