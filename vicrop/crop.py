@@ -159,6 +159,13 @@ def crop_video(
         logger.error("Could not open video: %s", video_path)
         return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frames_to_sample = max(1, (total_frames + every_n - 1) // every_n) if total_frames > 0 else 0
+    logger.info(
+        "Video %s: %d total frames, sampling every %d → ~%d frames to process",
+        video_path.name, total_frames, every_n, frames_to_sample,
+    )
+
     do_ref = ref_thresh > 0
 
     frame_idx = 0
@@ -174,7 +181,16 @@ def crop_video(
                 break
 
             if frame_idx % 1000 == 0:
-                logger.info("Processing frame %d, faces detected so far: %d", frame_idx, faces_detected)
+                if total_frames > 0:
+                    pct = frame_idx * 100.0 / total_frames
+                    logger.info(
+                        "[%5.1f%%] frame %d / %d  faces so far: %d",
+                        pct, frame_idx, total_frames, faces_detected,
+                    )
+                else:
+                    logger.info(
+                        "frame %d  faces so far: %d", frame_idx, faces_detected,
+                    )
                 
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
