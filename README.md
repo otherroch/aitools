@@ -53,6 +53,30 @@ pip install -e ".[dev]"
 > pip install dlib
 > pip install face_recognition
 > ```
+>
+> **Note – CNN face detection on GPU (`--detection-model cnn`):** By default
+> `dlib` is built for CPU only. To run the CNN detector on a GPU you must install
+> a CUDA-enabled build of `dlib`. First ensure the **CUDA Toolkit** and **cuDNN**
+> are installed and visible on your system path, then build `dlib` with the CUDA
+> flag **before** installing `face_recognition`:
+>
+> *Linux*
+> ```bash
+> pip install cmake
+> DLIB_USE_CUDA=1 pip install -v dlib
+> pip install face_recognition
+> ```
+>
+> *Windows (PowerShell)*
+> ```powershell
+> pip install cmake
+> $env:DLIB_USE_CUDA=1; pip install -v dlib
+> pip install face_recognition
+> ```
+>
+> If CUDA is correctly detected, dlib's build output will include a line such as
+> `"Enabling CUDA support"`. Without this, `--detection-model cnn` will still
+> work but will run on CPU and be significantly slower.
 
 > **Note – GPU inference:** Install the `[gpu]` extra (see above) to use
 > `onnxruntime-gpu` for significantly faster WD14 captioning on CUDA devices.
