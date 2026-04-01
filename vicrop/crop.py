@@ -27,6 +27,7 @@ from portrait_prep.face_utils import (
     DEFAULT_MARGIN_RATIO,
     cluster_faces as _cluster_faces_shared,
     load_face_recognition as _load_face_recognition,
+    load_reference_encodings,
 )
 from vicrop.ref import (
     DEFAULT_REF_THRESH,
@@ -47,13 +48,19 @@ def _cluster_faces(
     all_results: list[tuple[Path, np.ndarray]],
     output_dir: Path,
     tolerance: float = 0.6,
-) -> dict[int, list[Path]]:
+    reference_encodings: list[np.ndarray] | None = None,
+    reference_names: list[str] | None = None,
+) -> dict[str, list[Path]]:
     """Group saved face crops by identity using greedy nearest-neighbour clustering.
 
     Delegates to :func:`portrait_prep.face_utils.cluster_faces`.
     """
     fr = _load_face_recognition()
-    return _cluster_faces_shared(all_results, output_dir, tolerance=tolerance, fr=fr)
+    return _cluster_faces_shared(
+        all_results, output_dir, tolerance=tolerance, fr=fr,
+        reference_encodings=reference_encodings,
+        reference_names=reference_names,
+    )
 
 
 def crop_video(
@@ -67,6 +74,7 @@ def crop_video(
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
+    classified_path: Path | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -75,21 +83,23 @@ def crop_video(
     and saved as PNG files inside a sub-directory named after the video stem.
 
     Args:
-        video_path:    Path to the input video file.
-        output_dir:    Root directory where cropped images are saved.
-        every_n:       Process every N-th frame (default: 30).
-        margin_ratio:  Fractional padding around each detected face bbox.
-        crop_size:     Output square resolution in pixels (default: 1024).
-        model:         face_recognition detection model – ``"hog"`` (fast) or
-                       ``"cnn"`` (accurate).
-        classify:      If True, cluster faces by identity into
-                       ``person_NN`` sub-folders.
-        tolerance:     Face-distance threshold for identity clustering.
-        skip_existing: Skip the video if its output sub-directory already
-                       contains PNG files.
-        ref_thresh:    Minimum quality score (0–1) for a face crop to be
-                       listed as a reference photo.  ``0`` disables the
-                       analysis entirely.
+        video_path:      Path to the input video file.
+        output_dir:      Root directory where cropped images are saved.
+        every_n:         Process every N-th frame (default: 30).
+        margin_ratio:    Fractional padding around each detected face bbox.
+        crop_size:       Output square resolution in pixels (default: 1024).
+        model:           face_recognition detection model – ``"hog"`` (fast) or
+                         ``"cnn"`` (accurate).
+        classify:        If True, cluster faces by identity into
+                         identity sub-folders.
+        tolerance:       Face-distance threshold for identity clustering.
+        skip_existing:   Skip the video if its output sub-directory already
+                         contains PNG files.
+        ref_thresh:      Minimum quality score (0–1) for a face crop to be
+                         listed as a reference photo.  ``0`` disables the
+                         analysis entirely.
+        classified_path: Optional path to a directory of pre-classified
+                         reference photos used to seed identity clustering.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``,
@@ -215,7 +225,17 @@ def crop_video(
     )
 
     if classify and all_results:
-        person_dirs = _cluster_faces(all_results, video_stem_dir, tolerance=tolerance)
+        ref_enc: list[np.ndarray] | None = None
+        ref_names: list[str] | None = None
+        if classified_path is not None:
+            ref_enc, ref_names = load_reference_encodings(
+                classified_path, model=model,
+            )
+        person_dirs = _cluster_faces(
+            all_results, video_stem_dir, tolerance=tolerance,
+            reference_encodings=ref_enc,
+            reference_names=ref_names,
+        )
         persons = len(person_dirs)
         try:
             staging_dir.rmdir()
@@ -260,22 +280,25 @@ def crop_folder(
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
+    classified_path: Path | None = None,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
     Args:
-        input_dir:     Source directory (searched recursively for video files).
-        output_dir:    Destination directory.
-        every_n:       Process every N-th frame from each video.
-        margin_ratio:  Fractional margin around each detected face bbox.
-        crop_size:     Output square resolution in pixels.
-        model:         face_recognition detection model (``"hog"`` or ``"cnn"``).
-        classify:      If True, cluster faces by identity into
-                       ``person_NN`` sub-folders.
-        tolerance:     Face-distance threshold for identity clustering.
-        skip_existing: Skip videos whose output sub-directory already has PNGs.
-        ref_thresh:    Minimum quality score (0–1) for reference-photo
-                       selection.  ``0`` disables the analysis.
+        input_dir:       Source directory (searched recursively for video files).
+        output_dir:      Destination directory.
+        every_n:         Process every N-th frame from each video.
+        margin_ratio:    Fractional margin around each detected face bbox.
+        crop_size:       Output square resolution in pixels.
+        model:           face_recognition detection model (``"hog"`` or ``"cnn"``).
+        classify:        If True, cluster faces by identity into
+                         identity sub-folders.
+        tolerance:       Face-distance threshold for identity clustering.
+        skip_existing:   Skip videos whose output sub-directory already has PNGs.
+        ref_thresh:      Minimum quality score (0–1) for reference-photo
+                         selection.  ``0`` disables the analysis.
+        classified_path: Optional path to a directory of pre-classified
+                         reference photos used to seed identity clustering.
 
     Returns:
         Aggregate summary dict with keys ``videos_processed``,
@@ -321,6 +344,7 @@ def crop_folder(
             tolerance=tolerance,
             skip_existing=skip_existing,
             ref_thresh=ref_thresh,
+            classified_path=classified_path,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]

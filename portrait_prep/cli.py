@@ -127,6 +127,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="hog",
         help="face_recognition detection model (default: hog).",
     )
+    crop_group.add_argument(
+        "--classified-path",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a directory of pre-classified reference photos.\n"
+            "Each sub-folder is treated as a known identity whose name is\n"
+            "preserved in the output.  New faces that do not match any\n"
+            "reference are placed in auto-generated person_NN folders."
+        ),
+    )
 
     # ---- caption ----
     caption_group = parser.add_argument_group("caption options")
@@ -271,6 +282,7 @@ def run_crop(args: argparse.Namespace, input_dir: Path) -> None:
         classify=not args.no_classify,
         tolerance=args.tolerance,
         model=args.detection_model,
+        classified_path=args.classified_path,
     )
     logger.info(
         "crop: %d faces found in %d images, %d persons identified",

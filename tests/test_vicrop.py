@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from portrait_prep.face_utils import load_reference_encodings
 from vicrop.crop import (
     SUPPORTED_VIDEO_EXTS,
     DEFAULT_EVERY_N_FRAMES,
@@ -95,7 +96,7 @@ class TestClusterFaces:
         with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
             result = _cluster_faces([(face_path, encoding)], tmp_path)
 
-        assert 1 in result
+        assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
 
     def test_two_similar_faces_same_person(self, tmp_path):
@@ -414,3 +415,83 @@ class TestRefThreshIntegration:
 
         assert "ref_photos" in stats
         assert stats["ref_photos"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _cluster_faces with reference encodings
+# ---------------------------------------------------------------------------
+
+
+class TestClusterFacesWithReferences:
+    def _make_face_file(self, path: Path) -> Path:
+        make_png(path)
+        return path
+
+    def test_face_matches_reference_uses_original_name(self, tmp_path):
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        self._make_face_file(staging / "face1.png")
+
+        enc_new = np.zeros(128)
+        ref_enc = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            result = _cluster_faces(
+                [(staging / "face1.png", enc_new)],
+                tmp_path,
+                tolerance=0.6,
+                reference_encodings=[ref_enc],
+                reference_names=["alice"],
+            )
+
+        assert "alice" in result
+        assert (tmp_path / "alice" / "face1.png").exists()
+
+    def test_unknown_face_gets_person_nn(self, tmp_path):
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        self._make_face_file(staging / "face1.png")
+
+        enc_new = np.ones(128)
+        ref_enc = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array([1.5])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            result = _cluster_faces(
+                [(staging / "face1.png", enc_new)],
+                tmp_path,
+                tolerance=0.6,
+                reference_encodings=[ref_enc],
+                reference_names=["alice"],
+            )
+
+        assert "person_01" in result
+        assert (tmp_path / "person_01" / "face1.png").exists()
+        assert "alice" not in result
+
+    def test_no_folder_for_unmatched_reference(self, tmp_path):
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        self._make_face_file(staging / "face1.png")
+
+        enc_new = np.ones(128)
+        ref_enc = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array([1.5])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            _cluster_faces(
+                [(staging / "face1.png", enc_new)],
+                tmp_path,
+                tolerance=0.6,
+                reference_encodings=[ref_enc],
+                reference_names=["alice"],
+            )
+
+        assert not (tmp_path / "alice").exists()

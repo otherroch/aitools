@@ -29,6 +29,7 @@ from portrait_prep.face_utils import (
     DEFAULT_MARGIN_RATIO,
     cluster_faces as _cluster_faces_shared,
     load_face_recognition as _load_face_recognition,
+    load_reference_encodings,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,13 +111,19 @@ def _cluster_faces(
     all_results: list[tuple[Path, np.ndarray]],
     output_dir: Path,
     tolerance: float = 0.6,
-) -> dict[int, list[Path]]:
+    reference_encodings: list[np.ndarray] | None = None,
+    reference_names: list[str] | None = None,
+) -> dict[str, list[Path]]:
     """Group saved face crops by identity using face distance clustering.
 
     Delegates to :func:`portrait_prep.face_utils.cluster_faces`.
     """
     fr = _load_face_recognition()
-    return _cluster_faces_shared(all_results, output_dir, tolerance=tolerance, fr=fr)
+    return _cluster_faces_shared(
+        all_results, output_dir, tolerance=tolerance, fr=fr,
+        reference_encodings=reference_encodings,
+        reference_names=reference_names,
+    )
 
 
 def crop_folder(
@@ -127,18 +134,23 @@ def crop_folder(
     classify: bool = True,
     tolerance: float = 0.6,
     model: str = "hog",
+    classified_path: Path | None = None,
 ) -> dict[str, int]:
     """Crop all faces found in *input_dir* and write them to *output_dir*.
 
     Args:
-        input_dir:    Source directory (searched recursively).
-        output_dir:   Destination directory.
-        margin_ratio: Margin added around each detected face bbox.
-        crop_size:    Output square resolution in pixels.
-        classify:     If True, cluster faces by identity, creating
-                      ``person_NN`` sub-folders.
-        tolerance:    Face-distance threshold for identity clustering.
-        model:        face_recognition detection model ("hog" or "cnn").
+        input_dir:       Source directory (searched recursively).
+        output_dir:      Destination directory.
+        margin_ratio:    Margin added around each detected face bbox.
+        crop_size:       Output square resolution in pixels.
+        classify:        If True, cluster faces by identity, creating
+                         identity sub-folders.
+        tolerance:       Face-distance threshold for identity clustering.
+        model:           face_recognition detection model ("hog" or "cnn").
+        classified_path: Optional path to a directory of pre-classified
+                         reference photos.  Each sub-folder is treated as a
+                         known identity; new faces matching a reference are
+                         placed in a folder with the same name.
 
     Returns:
         Summary dict with keys ``faces``, ``images_processed``, ``persons``.
@@ -178,7 +190,17 @@ def crop_folder(
 
     persons = 0
     if classify and all_results:
-        person_dirs = _cluster_faces(all_results, output_dir, tolerance=tolerance)
+        ref_enc: list[np.ndarray] | None = None
+        ref_names: list[str] | None = None
+        if classified_path is not None:
+            ref_enc, ref_names = load_reference_encodings(
+                classified_path, model=model,
+            )
+        person_dirs = _cluster_faces(
+            all_results, output_dir, tolerance=tolerance,
+            reference_encodings=ref_enc,
+            reference_names=ref_names,
+        )
         persons = len(person_dirs)
         # Remove staging dir if empty
         try:

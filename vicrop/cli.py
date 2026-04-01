@@ -98,6 +98,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--classified-path",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a directory of pre-classified reference photos.\n"
+            "Each sub-folder is treated as a known identity whose name is\n"
+            "preserved in the output.  New faces that do not match any\n"
+            "reference are placed in auto-generated person_NN folders."
+        ),
+    )
+    parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
@@ -132,6 +143,7 @@ def main(argv: list[str] | None = None) -> None:
         tolerance=args.tolerance,
         skip_existing=not args.no_skip_existing,
         ref_thresh=args.ref_thresh,
+        classified_path=args.classified_path,
     )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
