@@ -336,6 +336,7 @@ When `--ref-thresh` is greater than zero (the default is `0.8`), every saved fac
 
 | Criterion | Weight | What is measured |
 |-----------|--------|-----------------|
+| Single face | hard gate | If more than one face is detected in the frame the crop is immediately disqualified (score → 0.0), regardless of all other criteria. This prevents another person's face from leaking into training data. |
 | Frontal pose | 30 % | Landmark symmetry — how evenly the nose sits between both eyes (yaw), and how far down the face the nose tip sits (pitch). Scores drop as the face turns away from the camera. |
 | Eyes open | 20 % | Eye Aspect Ratio (EAR) from six landmark points per eye. Closed or partially closed eyes score lower. |
 | Sharpness | 20 % | Laplacian variance of the face-crop region. Blurry or motion-smeared crops score lower. |
