@@ -163,6 +163,7 @@ def crop_video(
 
     frame_idx = 0
     frames_processed = 0
+    faces_detected = 0
     all_results: list[tuple[Path, np.ndarray]] = []
     ref_scores: dict[str, float] = {}  # filename → quality score
 
@@ -172,6 +173,9 @@ def crop_video(
             if not ret:
                 break
 
+            if frame_idx % 1000 == 0:
+                logger.info("Processing frame %d, faces detected so far: %d", frame_idx, faces_detected)
+                
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 face_locations = fr.face_locations(frame_rgb, model=model)
@@ -208,6 +212,8 @@ def crop_video(
                     logger.debug("Saved face crop: %s", out_path)
                     all_results.append((out_path, encoding))
 
+                    faces_detected += 1
+
                     if do_ref:
                         lm_list = fr.face_landmarks(
                             frame_rgb, [(top, right, bottom, left)],
@@ -228,6 +234,11 @@ def crop_video(
 
     persons = 0
     total_refs = 0
+    logger.info(
+        "Finished processing video: %s  frames processed: %d  faces detected: % d",
+        video_path.name, frames_processed, faces_detected,
+    )
+
     if classify and all_results:
         person_dirs = _cluster_faces(all_results, video_stem_dir, tolerance=tolerance)
         persons = len(person_dirs)

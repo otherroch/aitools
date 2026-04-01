@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
-    logger.debug("vicrop starting with args: %s", args)
+    logger.info("vicrop starting with args: %s", args)
 
     from vicrop.crop import crop_folder
 
