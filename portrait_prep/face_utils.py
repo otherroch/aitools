@@ -43,6 +43,7 @@ def load_reference_encodings(
     model: str = "hog",
     *,
     fr=None,
+    max_per_identity: int = 0,
 ) -> tuple[list[np.ndarray], list[str]]:
     """Load face encodings from a pre-classified reference directory.
 
@@ -51,10 +52,12 @@ def load_reference_encodings(
     reference face images.
 
     Args:
-        classified_path: Root directory containing identity sub-folders.
-        model:           face_recognition detection model for encoding.
-        fr:              Pre-loaded face_recognition module (loaded
-                         automatically when *None*).
+        classified_path:  Root directory containing identity sub-folders.
+        model:            face_recognition detection model for encoding.
+        fr:               Pre-loaded face_recognition module (loaded
+                          automatically when *None*).
+        max_per_identity: Maximum number of reference encodings to load per
+                          identity folder.  ``0`` (the default) means no limit.
 
     Returns:
         ``(encodings, names)`` — parallel lists where *names[i]* is the
@@ -71,12 +74,15 @@ def load_reference_encodings(
     )
 
     for identity_dir in identity_dirs:
-        ref_images = [
+        ref_images = sorted(
             p for p in identity_dir.iterdir()
             if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTS
-        ]
+        )
 
+        loaded_for_identity = 0
         for img_path in ref_images:
+            if max_per_identity > 0 and loaded_for_identity >= max_per_identity:
+                break
             image = fr.load_image_file(str(img_path))
             face_encs = fr.face_encodings(
                 image, fr.face_locations(image, model=model),
@@ -84,6 +90,7 @@ def load_reference_encodings(
             if face_encs:
                 encodings.append(face_encs[0])
                 names.append(identity_dir.name)
+                loaded_for_identity += 1
                 logger.debug(
                     "Loaded reference encoding from %s (%s)",
                     img_path.name, identity_dir.name,

@@ -223,6 +223,26 @@ class TestLoadReferenceEncodings:
 
         assert len(encodings) == 0
 
+    def test_max_per_identity_limits_loaded_encodings(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        ref_dir = tmp_path / "classified"
+        (ref_dir / "alice").mkdir(parents=True)
+        _make_png(ref_dir / "alice" / "ref1.png")
+        _make_png(ref_dir / "alice" / "ref2.png")
+        _make_png(ref_dir / "alice" / "ref3.png")
+
+        fr_mock = MagicMock()
+        fr_mock.load_image_file.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        fr_mock.face_locations.return_value = [(10, 90, 90, 10)]
+        fr_mock.face_encodings.return_value = [np.zeros(128)]
+
+        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
+            encodings, names = load_reference_encodings(ref_dir, max_per_identity=2)
+
+        assert len(encodings) == 2
+        assert names.count("alice") == 2
+
 
 # ---------------------------------------------------------------------------
 # cluster_faces with reference encodings

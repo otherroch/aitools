@@ -109,6 +109,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--classified-max",
+        type=int,
+        default=0,
+        help=(
+            "Maximum number of reference images to load per identity when\n"
+            "using --classified-path.  0 means no limit (default: 0)."
+        ),
+    )
+    parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
@@ -144,6 +153,7 @@ def main(argv: list[str] | None = None) -> None:
         skip_existing=not args.no_skip_existing,
         ref_thresh=args.ref_thresh,
         classified_path=args.classified_path,
+        classified_max=args.classified_max,
     )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "

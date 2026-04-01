@@ -138,6 +138,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "reference are placed in auto-generated person_NN folders."
         ),
     )
+    crop_group.add_argument(
+        "--classified-max",
+        type=int,
+        default=0,
+        help=(
+            "Maximum number of reference images to load per identity when\n"
+            "using --classified-path.  0 means no limit (default: 0)."
+        ),
+    )
 
     # ---- caption ----
     caption_group = parser.add_argument_group("caption options")
@@ -283,6 +292,7 @@ def run_crop(args: argparse.Namespace, input_dir: Path) -> None:
         tolerance=args.tolerance,
         model=args.detection_model,
         classified_path=args.classified_path,
+        classified_max=args.classified_max,
     )
     logger.info(
         "crop: %d faces found in %d images, %d persons identified",

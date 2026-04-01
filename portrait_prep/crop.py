@@ -135,6 +135,7 @@ def crop_folder(
     tolerance: float = 0.6,
     model: str = "hog",
     classified_path: Path | None = None,
+    classified_max: int = 0,
 ) -> dict[str, int]:
     """Crop all faces found in *input_dir* and write them to *output_dir*.
 
@@ -151,6 +152,8 @@ def crop_folder(
                          reference photos.  Each sub-folder is treated as a
                          known identity; new faces matching a reference are
                          placed in a folder with the same name.
+        classified_max:  Maximum reference images to load per identity.
+                         ``0`` means no limit.
 
     Returns:
         Summary dict with keys ``faces``, ``images_processed``, ``persons``.
@@ -195,6 +198,7 @@ def crop_folder(
         if classified_path is not None:
             ref_enc, ref_names = load_reference_encodings(
                 classified_path, model=model,
+                max_per_identity=classified_max,
             )
         person_dirs = _cluster_faces(
             all_results, output_dir, tolerance=tolerance,

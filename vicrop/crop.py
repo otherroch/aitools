@@ -75,6 +75,7 @@ def crop_video(
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
+    classified_max: int = 0,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -100,6 +101,8 @@ def crop_video(
                          analysis entirely.
         classified_path: Optional path to a directory of pre-classified
                          reference photos used to seed identity clustering.
+        classified_max:  Maximum reference images to load per identity.
+                         ``0`` means no limit.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``,
@@ -230,6 +233,7 @@ def crop_video(
         if classified_path is not None:
             ref_enc, ref_names = load_reference_encodings(
                 classified_path, model=model,
+                max_per_identity=classified_max,
             )
         person_dirs = _cluster_faces(
             all_results, video_stem_dir, tolerance=tolerance,
@@ -281,6 +285,7 @@ def crop_folder(
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
+    classified_max: int = 0,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
@@ -299,6 +304,8 @@ def crop_folder(
                          selection.  ``0`` disables the analysis.
         classified_path: Optional path to a directory of pre-classified
                          reference photos used to seed identity clustering.
+        classified_max:  Maximum reference images to load per identity.
+                         ``0`` means no limit.
 
     Returns:
         Aggregate summary dict with keys ``videos_processed``,
@@ -345,6 +352,7 @@ def crop_folder(
             skip_existing=skip_existing,
             ref_thresh=ref_thresh,
             classified_path=classified_path,
+            classified_max=classified_max,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]
