@@ -92,8 +92,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.8,
         help=(
             "Minimum quality score (0–1) for a face crop to be selected as a\n"
-            "reference portrait photo.  Reference filenames are written to\n"
-            "reflist.txt in each person folder.  Set to 0 to disable\n"
+            "reference portrait photo.  Qualifying crops are moved into a\n"
+            "ref/ sub-folder inside each person folder.  Set to 0 to disable\n"
             "reference-photo analysis entirely (default: 0.8)."
         ),
     )

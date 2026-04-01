@@ -350,56 +350,54 @@ class TestRefThreshIntegration:
 
     # -- ref_thresh disabled (0) --
 
-    def test_ref_thresh_zero_no_reflist(self, tmp_path):
+    def test_ref_thresh_zero_no_ref_folder(self, tmp_path):
         stats, out_dir = self._run_with_ref(
             tmp_path, classify=False, ref_thresh=0, ref_score_val=0.9,
         )
         assert stats["ref_photos"] == 0
-        assert not list(out_dir.rglob("reflist.txt"))
+        assert not list(out_dir.rglob("ref"))
 
     # -- no classify, score above threshold --
 
-    def test_no_classify_reflist_written(self, tmp_path):
+    def test_no_classify_ref_folder_created(self, tmp_path):
         stats, out_dir = self._run_with_ref(
             tmp_path, classify=False, ref_thresh=0.5, ref_score_val=0.9,
         )
         assert stats["ref_photos"] == 1
-        reflist = out_dir / "clip" / "reflist.txt"
-        assert reflist.exists()
-        lines = reflist.read_text().splitlines()
-        assert len(lines) == 1
+        ref_dir = out_dir / "clip" / "ref"
+        assert ref_dir.is_dir()
+        assert len(list(ref_dir.glob("*.png"))) == 1
 
     # -- no classify, score below threshold --
 
-    def test_no_classify_below_thresh_no_reflist(self, tmp_path):
+    def test_no_classify_below_thresh_no_ref_folder(self, tmp_path):
         stats, out_dir = self._run_with_ref(
             tmp_path, classify=False, ref_thresh=0.95, ref_score_val=0.5,
         )
         assert stats["ref_photos"] == 0
-        assert not list(out_dir.rglob("reflist.txt"))
+        assert not (out_dir / "clip" / "ref").exists()
 
     # -- classify, score above threshold --
 
-    def test_classify_reflist_in_person_dir(self, tmp_path):
+    def test_classify_ref_folder_in_person_dir(self, tmp_path):
         stats, out_dir = self._run_with_ref(
             tmp_path, classify=True, ref_thresh=0.5, ref_score_val=0.9,
         )
         assert stats["ref_photos"] == 1
         person_dirs = list((out_dir / "clip").glob("person_*"))
         assert len(person_dirs) == 1
-        reflist = person_dirs[0] / "reflist.txt"
-        assert reflist.exists()
+        assert (person_dirs[0] / "ref").is_dir()
 
     # -- classify, score below threshold --
 
-    def test_classify_below_thresh_no_reflist(self, tmp_path):
+    def test_classify_below_thresh_no_ref_folder(self, tmp_path):
         stats, out_dir = self._run_with_ref(
             tmp_path, classify=True, ref_thresh=0.95, ref_score_val=0.5,
         )
         assert stats["ref_photos"] == 0
         person_dirs = list((out_dir / "clip").glob("person_*"))
         assert len(person_dirs) == 1
-        assert not (person_dirs[0] / "reflist.txt").exists()
+        assert not (person_dirs[0] / "ref").exists()
 
     # -- stats key present even when skipped --
 

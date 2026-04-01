@@ -15,6 +15,7 @@ Scores face crops on multiple criteria to identify the best reference photos:
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 
 import cv2
@@ -198,23 +199,25 @@ def score_reference_quality(
     return float(np.clip(composite, 0, 1))
 
 
-def write_reflist(person_dir: Path, ref_paths: list[Path]) -> Path | None:
-    """Write ``reflist.txt`` containing reference-photo filenames.
+def collect_ref_photos(person_dir: Path, ref_paths: list[Path]) -> Path | None:
+    """Move qualifying reference photos into a ``ref/`` sub-folder.
 
-    Each line is the filename (not the full path) of a reference photo.
+    Each file in *ref_paths* is moved from its current location (inside
+    *person_dir*) into ``person_dir/ref/``.
 
     Returns:
-        Path to the written file, or *None* if *ref_paths* is empty.
+        Path to the ``ref/`` directory, or *None* if *ref_paths* is empty.
     """
     if not ref_paths:
         return None
 
-    reflist_path = person_dir / "reflist.txt"
-    with open(reflist_path, "w", encoding="utf-8") as fh:
-        for p in sorted(ref_paths):
-            fh.write(f"{p.name}\n")
+    ref_dir = person_dir / "ref"
+    ref_dir.mkdir(exist_ok=True)
+
+    for src in sorted(ref_paths):
+        shutil.move(str(src), ref_dir / src.name)
 
     logger.info(
-        "Wrote %d reference photo(s) to %s", len(ref_paths), reflist_path,
+        "Moved %d reference photo(s) to %s", len(ref_paths), ref_dir,
     )
-    return reflist_path
+    return ref_dir

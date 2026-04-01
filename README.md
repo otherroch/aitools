@@ -346,10 +346,12 @@ frames/
     ├── person_01/
     │   ├── frame000000_face1.png
     │   ├── frame000030_face1.png
-    │   └── reflist.txt          ← reference photos for this person (if any pass --ref-thresh)
+    │   └── ref/                         ← reference photos for this person (if any pass --ref-thresh)
+    │       └── frame000000_face1.png
     └── person_02/
         ├── frame000060_face1.png
-        └── reflist.txt
+        └── ref/
+            └── frame000060_face1.png
 ```
 
 ### Reference photo selection
@@ -367,7 +369,7 @@ When `--ref-thresh` is greater than zero (the default is `0.8`), every saved fac
 | Face fill | 15 % | Ratio of face bounding-box area to total frame area. A face occupying ≥ 15 % of the frame earns a full score; smaller faces score proportionally lower. |
 | Lighting | 15 % | Luminance mean and contrast. Very dark (< 40/255) or severely overexposed (> 220/255) crops score lower; well-exposed crops with natural contrast score higher. |
 
-Crops whose composite score meets or exceeds `--ref-thresh` have their filename recorded. At the end of processing, each `person_NN/` folder that contains at least one qualifying crop receives a `reflist.txt` listing those filenames (one per line, alphabetically sorted).
+Crops whose composite score meets or exceeds `--ref-thresh` are **moved** into a `ref/` sub-folder inside their identity directory. At the end of processing, each `person_NN/` folder that contains at least one qualifying crop will have a `ref/` sub-folder holding only those images.
 
 **Choosing a threshold:**
 

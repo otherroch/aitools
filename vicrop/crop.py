@@ -24,8 +24,8 @@ from PIL import Image
 
 from vicrop.ref import (
     DEFAULT_REF_THRESH,
+    collect_ref_photos,
     score_reference_quality,
-    write_reflist,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,7 +248,7 @@ def crop_video(
         except OSError:
             pass
 
-        # Write reflist.txt per person folder
+        # Move reference photos into ref/ sub-folder per person
         if do_ref:
             for _pid, paths in person_dirs.items():
                 ref_paths = [
@@ -256,7 +256,7 @@ def crop_video(
                     if ref_scores.get(p.name, 0.0) >= ref_thresh
                 ]
                 if ref_paths:
-                    write_reflist(paths[0].parent, ref_paths)
+                    collect_ref_photos(paths[0].parent, ref_paths)
                     total_refs += len(ref_paths)
     elif not classify and do_ref and all_results:
         ref_paths = [
@@ -264,7 +264,7 @@ def crop_video(
             if ref_scores.get(path.name, 0.0) >= ref_thresh
         ]
         if ref_paths:
-            write_reflist(video_stem_dir, ref_paths)
+            collect_ref_photos(video_stem_dir, ref_paths)
             total_refs += len(ref_paths)
 
     return {

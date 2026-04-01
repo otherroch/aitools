@@ -20,8 +20,8 @@ from vicrop.ref import (
     _lighting_score,
     _sharpness_score,
     _single_face_score,
+    collect_ref_photos,
     score_reference_quality,
-    write_reflist,
 )
 
 
@@ -245,25 +245,29 @@ class TestSingleFaceScore:
 
 
 # ---------------------------------------------------------------------------
-# write_reflist
+# collect_ref_photos
 # ---------------------------------------------------------------------------
 
 
-class TestWriteReflist:
-    def test_writes_filenames(self, tmp_path):
+class TestCollectRefPhotos:
+    def test_moves_files_into_ref_subfolder(self, tmp_path):
         paths = [tmp_path / "a.png", tmp_path / "c.png", tmp_path / "b.png"]
         for p in paths:
             p.write_bytes(b"fake")
 
-        result = write_reflist(tmp_path, paths)
+        result = collect_ref_photos(tmp_path, paths)
 
-        assert result == tmp_path / "reflist.txt"
-        lines = result.read_text().splitlines()
-        assert lines == ["a.png", "b.png", "c.png"]  # sorted
+        assert result == tmp_path / "ref"
+        assert result.is_dir()
+        moved = sorted(f.name for f in result.iterdir())
+        assert moved == ["a.png", "b.png", "c.png"]
+        # originals should be gone
+        for p in paths:
+            assert not p.exists()
 
     def test_empty_list_returns_none(self, tmp_path):
-        assert write_reflist(tmp_path, []) is None
-        assert not (tmp_path / "reflist.txt").exists()
+        assert collect_ref_photos(tmp_path, []) is None
+        assert not (tmp_path / "ref").exists()
 
 
 # ---------------------------------------------------------------------------
