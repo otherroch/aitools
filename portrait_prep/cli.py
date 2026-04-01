@@ -141,10 +141,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     crop_group.add_argument(
         "--classified-max",
         type=int,
-        default=0,
+        default=10,
         help=(
             "Maximum number of reference images to load per identity when\n"
-            "using --classified-path.  0 means no limit (default: 0)."
+            "using --classified-path.  0 means no limit (default: 10)."
         ),
     )
 
