@@ -87,6 +87,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="face_recognition detection model (default: hog).",
     )
     parser.add_argument(
+        "--ref-thresh",
+        type=float,
+        default=0.8,
+        help=(
+            "Minimum quality score (0–1) for a face crop to be selected as a\n"
+            "reference portrait photo.  Qualifying crops are moved into a\n"
+            "ref/ sub-folder inside each person folder.  Set to 0 to disable\n"
+            "reference-photo analysis entirely (default: 0.8)."
+        ),
+    )
+    parser.add_argument(
+        "--classified-path",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a directory of pre-classified reference photos.\n"
+            "Each sub-folder is treated as a known identity whose name is\n"
+            "preserved in the output.  New faces that do not match any\n"
+            "reference are placed in auto-generated person_NN folders."
+        ),
+    )
+    parser.add_argument(
+        "--classified-max",
+        type=int,
+        default=10,
+        help=(
+            "Maximum number of reference images to load per identity when\n"
+            "using --classified-path.  0 means no limit (default: 10)."
+        ),
+    )
+    parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
@@ -105,7 +136,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
-    logger.debug("vicrop starting with args: %s", args)
+    logger.info("vicrop starting with args: %s", args)
 
     from vicrop.crop import crop_folder
 
@@ -120,14 +151,18 @@ def main(argv: list[str] | None = None) -> None:
         classify=not args.no_classify,
         tolerance=args.tolerance,
         skip_existing=not args.no_skip_existing,
+        ref_thresh=args.ref_thresh,
+        classified_path=args.classified_path,
+        classified_max=args.classified_max,
     )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
-        "%d persons identified",
+        "%d persons identified, %d reference photos selected",
         stats["videos_processed"],
         stats["frames_processed"],
         stats["faces"],
         stats["persons"],
+        stats["ref_photos"],
     )
 
 

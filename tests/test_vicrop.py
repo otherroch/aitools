@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from portrait_prep.face_utils import load_reference_encodings
 from vicrop.crop import (
     SUPPORTED_VIDEO_EXTS,
     DEFAULT_EVERY_N_FRAMES,
@@ -95,7 +96,7 @@ class TestClusterFaces:
         with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
             result = _cluster_faces([(face_path, encoding)], tmp_path)
 
-        assert 1 in result
+        assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
 
     def test_two_similar_faces_same_person(self, tmp_path):
@@ -302,3 +303,195 @@ class TestCropFolder:
                     stats = crop_folder(src, tmp_path / "out", every_n=1, classify=False)
 
         assert stats["videos_processed"] == 2
+
+
+# ---------------------------------------------------------------------------
+# ref_thresh integration
+# ---------------------------------------------------------------------------
+
+
+class TestRefThreshIntegration:
+    """Verify --ref-thresh plumbing through crop_video / crop_folder."""
+
+    def _run_with_ref(self, tmp_path, *, classify, ref_thresh, ref_score_val):
+        """Helper: one video, one face, controllable ref score."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[10:40, 10:40] = 200
+
+        mock_cap = _fake_video_capture([frame])
+
+        face_location = (10, 40, 40, 10)
+        fake_encoding = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [face_location]
+        fr_mock.face_encodings.return_value = [fake_encoding]
+        fr_mock.face_landmarks.return_value = []
+        fr_mock.face_distance.return_value = np.array([0.2])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock), \
+             patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
+             patch("vicrop.crop.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.ref.score_reference_quality", return_value=ref_score_val):
+            stats = crop_video(
+                video_path,
+                out_dir,
+                every_n=1,
+                classify=classify,
+                tolerance=0.6,
+                crop_size=64,
+                ref_thresh=ref_thresh,
+            )
+
+        return stats, out_dir
+
+    # -- ref_thresh disabled (0) --
+
+    def test_ref_thresh_zero_no_ref_folder(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=False, ref_thresh=0, ref_score_val=0.9,
+        )
+        assert stats["ref_photos"] == 0
+        assert not list(out_dir.rglob("ref"))
+
+    # -- no classify, score above threshold --
+
+    def test_no_classify_ref_folder_created(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=False, ref_thresh=0.5, ref_score_val=0.9,
+        )
+        assert stats["ref_photos"] == 1
+        ref_dir = out_dir / "clip" / "ref"
+        assert ref_dir.is_dir()
+        assert len(list(ref_dir.glob("*.png"))) == 1
+
+    # -- no classify, score below threshold --
+
+    def test_no_classify_below_thresh_no_ref_folder(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=False, ref_thresh=0.95, ref_score_val=0.5,
+        )
+        assert stats["ref_photos"] == 0
+        assert not (out_dir / "clip" / "ref").exists()
+
+    # -- classify, score above threshold --
+
+    def test_classify_ref_folder_in_person_dir(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=True, ref_thresh=0.5, ref_score_val=0.9,
+        )
+        assert stats["ref_photos"] == 1
+        person_dirs = list((out_dir / "clip").glob("person_*"))
+        assert len(person_dirs) == 1
+        assert (person_dirs[0] / "ref").is_dir()
+
+    # -- classify, score below threshold --
+
+    def test_classify_below_thresh_no_ref_folder(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=True, ref_thresh=0.95, ref_score_val=0.5,
+        )
+        assert stats["ref_photos"] == 0
+        person_dirs = list((out_dir / "clip").glob("person_*"))
+        assert len(person_dirs) == 1
+        assert not (person_dirs[0] / "ref").exists()
+
+    # -- stats key present even when skipped --
+
+    def test_ref_photos_key_in_skip_existing(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+        stem_dir = out_dir / "clip"
+        make_png(stem_dir / "existing.png")
+
+        fr_mock = MagicMock()
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            stats = crop_video(video_path, out_dir, skip_existing=True)
+
+        assert "ref_photos" in stats
+        assert stats["ref_photos"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _cluster_faces with reference encodings
+# ---------------------------------------------------------------------------
+
+
+class TestClusterFacesWithReferences:
+    def _make_face_file(self, path: Path) -> Path:
+        make_png(path)
+        return path
+
+    def test_face_matches_reference_uses_original_name(self, tmp_path):
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        self._make_face_file(staging / "face1.png")
+
+        enc_new = np.zeros(128)
+        ref_enc = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            result = _cluster_faces(
+                [(staging / "face1.png", enc_new)],
+                tmp_path,
+                tolerance=0.6,
+                reference_encodings=[ref_enc],
+                reference_names=["alice"],
+            )
+
+        assert "alice" in result
+        assert (tmp_path / "alice" / "face1.png").exists()
+
+    def test_unknown_face_gets_person_nn(self, tmp_path):
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        self._make_face_file(staging / "face1.png")
+
+        enc_new = np.ones(128)
+        ref_enc = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array([1.5])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            result = _cluster_faces(
+                [(staging / "face1.png", enc_new)],
+                tmp_path,
+                tolerance=0.6,
+                reference_encodings=[ref_enc],
+                reference_names=["alice"],
+            )
+
+        assert "person_01" in result
+        assert (tmp_path / "person_01" / "face1.png").exists()
+        assert "alice" not in result
+
+    def test_no_folder_for_unmatched_reference(self, tmp_path):
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        self._make_face_file(staging / "face1.png")
+
+        enc_new = np.ones(128)
+        ref_enc = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array([1.5])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            _cluster_faces(
+                [(staging / "face1.png", enc_new)],
+                tmp_path,
+                tolerance=0.6,
+                reference_encodings=[ref_enc],
+                reference_names=["alice"],
+            )
+
+        assert not (tmp_path / "alice").exists()

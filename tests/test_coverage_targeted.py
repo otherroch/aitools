@@ -111,13 +111,16 @@ class TestVicropCli:
             no_classify=False,
             tolerance=0.55,
             no_skip_existing=True,
+            ref_thresh=0.8,
+            classified_path=None,
+            classified_max=10,
         )
         called = {}
 
         def fake_crop_folder(*a, **kw):
             called["args"] = a
             called["kwargs"] = kw
-            return {"videos_processed": 1, "frames_processed": 2, "faces": 3, "persons": 1}
+            return {"videos_processed": 1, "frames_processed": 2, "faces": 3, "persons": 1, "ref_photos": 0}
 
         monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
         monkeypatch.setitem(sys.modules, "vicrop.crop", types.SimpleNamespace(crop_folder=fake_crop_folder))
