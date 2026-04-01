@@ -8,7 +8,9 @@ Reads video files using OpenCV, samples frames at a configurable interval,
 detects faces in each frame with face_recognition, and saves a cropped face
 region to the output directory.  Optionally clusters face crops by identity
 into ``person_NN`` sub-folders (same greedy nearest-neighbour approach used
-by portrait_prep.crop).
+by portrait_prep.crop).  When ``ref_thresh > 0`` each face crop is also
+scored for reference-photo quality and a ``reflist.txt`` is written to each
+identity folder.
 """
 
 from __future__ import annotations
@@ -19,6 +21,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
+
+from vicrop.ref import (
+    DEFAULT_REF_THRESH,
+    score_reference_quality,
+    write_reflist,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +108,7 @@ def crop_video(
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
+    ref_thresh: float = DEFAULT_REF_THRESH,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -120,9 +129,13 @@ def crop_video(
         tolerance:     Face-distance threshold for identity clustering.
         skip_existing: Skip the video if its output sub-directory already
                        contains PNG files.
+        ref_thresh:    Minimum quality score (0–1) for a face crop to be
+                       listed as a reference photo.  ``0`` disables the
+                       analysis entirely.
 
     Returns:
-        Summary dict with keys ``frames_processed``, ``faces``, ``persons``.
+        Summary dict with keys ``frames_processed``, ``faces``,
+        ``persons``, ``ref_photos``.
     """
     fr = _load_face_recognition()
 
@@ -136,7 +149,7 @@ def crop_video(
 
     if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.png")):
         logger.info("Skipping (already processed): %s", video_path.name)
-        return {"frames_processed": 0, "faces": 0, "persons": 0}
+        return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
 
     staging_dir = video_stem_dir / "_staging" if classify else video_stem_dir
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -144,11 +157,14 @@ def crop_video(
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.error("Could not open video: %s", video_path)
-        return {"frames_processed": 0, "faces": 0, "persons": 0}
+        return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
+
+    do_ref = ref_thresh > 0
 
     frame_idx = 0
     frames_processed = 0
     all_results: list[tuple[Path, np.ndarray]] = []
+    ref_scores: dict[str, float] = {}  # filename → quality score
 
     try:
         while True:
@@ -192,6 +208,18 @@ def crop_video(
                     logger.debug("Saved face crop: %s", out_path)
                     all_results.append((out_path, encoding))
 
+                    if do_ref:
+                        lm_list = fr.face_landmarks(
+                            frame_rgb, [(top, right, bottom, left)],
+                        )
+                        lm = lm_list[0] if lm_list else None
+                        ref_scores[out_name] = score_reference_quality(
+                            frame_rgb,
+                            (top, right, bottom, left),
+                            lm,
+                            face_arr,
+                        )
+
                 frames_processed += 1
 
             frame_idx += 1
@@ -199,6 +227,7 @@ def crop_video(
         cap.release()
 
     persons = 0
+    total_refs = 0
     if classify and all_results:
         person_dirs = _cluster_faces(all_results, video_stem_dir, tolerance=tolerance)
         persons = len(person_dirs)
@@ -207,10 +236,30 @@ def crop_video(
         except OSError:
             pass
 
+        # Write reflist.txt per person folder
+        if do_ref:
+            for _pid, paths in person_dirs.items():
+                ref_paths = [
+                    p for p in paths
+                    if ref_scores.get(p.name, 0.0) >= ref_thresh
+                ]
+                if ref_paths:
+                    write_reflist(paths[0].parent, ref_paths)
+                    total_refs += len(ref_paths)
+    elif not classify and do_ref and all_results:
+        ref_paths = [
+            path for path, _ in all_results
+            if ref_scores.get(path.name, 0.0) >= ref_thresh
+        ]
+        if ref_paths:
+            write_reflist(video_stem_dir, ref_paths)
+            total_refs += len(ref_paths)
+
     return {
         "frames_processed": frames_processed,
         "faces": len(all_results),
         "persons": persons,
+        "ref_photos": total_refs,
     }
 
 
@@ -224,6 +273,7 @@ def crop_folder(
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
+    ref_thresh: float = DEFAULT_REF_THRESH,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
@@ -238,10 +288,12 @@ def crop_folder(
                        ``person_NN`` sub-folders.
         tolerance:     Face-distance threshold for identity clustering.
         skip_existing: Skip videos whose output sub-directory already has PNGs.
+        ref_thresh:    Minimum quality score (0–1) for reference-photo
+                       selection.  ``0`` disables the analysis.
 
     Returns:
         Aggregate summary dict with keys ``videos_processed``,
-        ``frames_processed``, ``faces``, ``persons``.
+        ``frames_processed``, ``faces``, ``persons``, ``ref_photos``.
     """
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
@@ -255,7 +307,7 @@ def crop_folder(
 
     if not videos:
         logger.warning("No video files found in %s", input_dir)
-        return {"videos_processed": 0, "frames_processed": 0, "faces": 0, "persons": 0}
+        return {"videos_processed": 0, "frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
 
     logger.debug(
         "crop_folder: found %d video(s) in %s  every_n=%d classify=%s",
@@ -267,6 +319,7 @@ def crop_folder(
         "frames_processed": 0,
         "faces": 0,
         "persons": 0,
+        "ref_photos": 0,
     }
 
     for video_path in videos:
@@ -281,10 +334,12 @@ def crop_folder(
             classify=classify,
             tolerance=tolerance,
             skip_existing=skip_existing,
+            ref_thresh=ref_thresh,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]
         total["faces"] += stats["faces"]
         total["persons"] += stats["persons"]
+        total["ref_photos"] += stats["ref_photos"]
 
     return total

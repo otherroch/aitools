@@ -302,3 +302,117 @@ class TestCropFolder:
                     stats = crop_folder(src, tmp_path / "out", every_n=1, classify=False)
 
         assert stats["videos_processed"] == 2
+
+
+# ---------------------------------------------------------------------------
+# ref_thresh integration
+# ---------------------------------------------------------------------------
+
+
+class TestRefThreshIntegration:
+    """Verify --ref-thresh plumbing through crop_video / crop_folder."""
+
+    def _run_with_ref(self, tmp_path, *, classify, ref_thresh, ref_score_val):
+        """Helper: one video, one face, controllable ref score."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[10:40, 10:40] = 200
+
+        mock_cap = _fake_video_capture([frame])
+
+        face_location = (10, 40, 40, 10)
+        fake_encoding = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [face_location]
+        fr_mock.face_encodings.return_value = [fake_encoding]
+        fr_mock.face_landmarks.return_value = []
+        fr_mock.face_distance.return_value = np.array([0.2])
+
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock), \
+             patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
+             patch("vicrop.crop.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.ref.score_reference_quality", return_value=ref_score_val):
+            stats = crop_video(
+                video_path,
+                out_dir,
+                every_n=1,
+                classify=classify,
+                tolerance=0.6,
+                crop_size=64,
+                ref_thresh=ref_thresh,
+            )
+
+        return stats, out_dir
+
+    # -- ref_thresh disabled (0) --
+
+    def test_ref_thresh_zero_no_reflist(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=False, ref_thresh=0, ref_score_val=0.9,
+        )
+        assert stats["ref_photos"] == 0
+        assert not list(out_dir.rglob("reflist.txt"))
+
+    # -- no classify, score above threshold --
+
+    def test_no_classify_reflist_written(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=False, ref_thresh=0.5, ref_score_val=0.9,
+        )
+        assert stats["ref_photos"] == 1
+        reflist = out_dir / "clip" / "reflist.txt"
+        assert reflist.exists()
+        lines = reflist.read_text().splitlines()
+        assert len(lines) == 1
+
+    # -- no classify, score below threshold --
+
+    def test_no_classify_below_thresh_no_reflist(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=False, ref_thresh=0.95, ref_score_val=0.5,
+        )
+        assert stats["ref_photos"] == 0
+        assert not list(out_dir.rglob("reflist.txt"))
+
+    # -- classify, score above threshold --
+
+    def test_classify_reflist_in_person_dir(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=True, ref_thresh=0.5, ref_score_val=0.9,
+        )
+        assert stats["ref_photos"] == 1
+        person_dirs = list((out_dir / "clip").glob("person_*"))
+        assert len(person_dirs) == 1
+        reflist = person_dirs[0] / "reflist.txt"
+        assert reflist.exists()
+
+    # -- classify, score below threshold --
+
+    def test_classify_below_thresh_no_reflist(self, tmp_path):
+        stats, out_dir = self._run_with_ref(
+            tmp_path, classify=True, ref_thresh=0.95, ref_score_val=0.5,
+        )
+        assert stats["ref_photos"] == 0
+        person_dirs = list((out_dir / "clip").glob("person_*"))
+        assert len(person_dirs) == 1
+        assert not (person_dirs[0] / "reflist.txt").exists()
+
+    # -- stats key present even when skipped --
+
+    def test_ref_photos_key_in_skip_existing(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+        stem_dir = out_dir / "clip"
+        make_png(stem_dir / "existing.png")
+
+        fr_mock = MagicMock()
+        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
+            stats = crop_video(video_path, out_dir, skip_existing=True)
+
+        assert "ref_photos" in stats
+        assert stats["ref_photos"] == 0
