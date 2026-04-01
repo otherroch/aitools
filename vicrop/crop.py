@@ -159,7 +159,7 @@ def crop_video(
                     logger.info(
                         "frame %d  faces so far: %d", frame_idx, faces_detected,
                     )
-                
+
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 face_locations = fr.face_locations(frame_rgb, model=model)
