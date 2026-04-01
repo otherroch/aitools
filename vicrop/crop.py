@@ -224,6 +224,7 @@ def crop_video(
                             (top, right, bottom, left),
                             lm,
                             face_arr,
+                            face_count=len(face_locations),
                         )
 
                 frames_processed += 1
@@ -235,7 +236,7 @@ def crop_video(
     persons = 0
     total_refs = 0
     logger.info(
-        "Finished processing video: %s  frames processed: %d  faces detected: % d",
+        "Finished processing video: %s  frames processed: %d  faces detected: %d",
         video_path.name, frames_processed, faces_detected,
     )
 

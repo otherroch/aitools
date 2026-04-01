@@ -9,6 +9,7 @@ Scores face crops on multiple criteria to identify the best reference photos:
 3. **Face fill** – face-to-frame area ratio.
 4. **Sharpness** – Laplacian variance of the face region.
 5. **Good lighting** – luminance mean and contrast.
+6. **Single face** – exactly one face detected in the frame.
 """
 
 from __future__ import annotations
@@ -112,6 +113,15 @@ def _lighting_score(face_rgb: np.ndarray) -> float:
     return float(np.clip(brightness_score * 0.6 + contrast_score * 0.4, 0, 1))
 
 
+def _single_face_score(face_count: int) -> float:
+    """Return 1.0 if exactly one face is present in the frame, else 0.0.
+
+    A frame with multiple faces risks including parts of another person,
+    which can confuse downstream model training.
+    """
+    return 1.0 if face_count == 1 else 0.0
+
+
 def _face_fill_score(
     face_bbox: tuple[int, int, int, int],
     frame_height: int,
@@ -140,6 +150,7 @@ def score_reference_quality(
     face_bbox: tuple[int, int, int, int],
     landmarks: dict[str, list[tuple[int, int]]] | None,
     face_region_rgb: np.ndarray,
+    face_count: int = 1,
 ) -> float:
     """Composite reference-quality score for a single detected face.
 
@@ -149,10 +160,16 @@ def score_reference_quality(
         landmarks:       Landmark dict from ``face_recognition.face_landmarks()``,
                          or *None* when landmarks are unavailable.
         face_region_rgb: Cropped (un-resized) face region as RGB array.
+        face_count:      Total number of faces detected in the frame.  Frames
+                         with more than one face receive a score of 0.0 to
+                         avoid including another person's face in training data.
 
     Returns:
         Quality score in [0.0, 1.0].
     """
+    if _single_face_score(face_count) == 0.0:
+        return 0.0
+
     h_frame, w_frame = frame_rgb.shape[:2]
 
     fill = _face_fill_score(face_bbox, h_frame, w_frame)

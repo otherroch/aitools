@@ -19,6 +19,7 @@ from vicrop.ref import (
     _frontality_score,
     _lighting_score,
     _sharpness_score,
+    _single_face_score,
     score_reference_quality,
     write_reflist,
 )
@@ -195,6 +196,52 @@ class TestScoreReferenceQuality:
             frame, (10, 60, 60, 10), _profile_landmarks(), face_region,
         )
         assert frontal > profile
+
+    def test_multiple_faces_returns_zero(self):
+        frame = _make_rgb_array(100, 100, 128)
+        face_region = _make_rgb_array(50, 50, 128)
+        score = score_reference_quality(
+            frame, (10, 60, 60, 10), _frontal_landmarks(), face_region,
+            face_count=2,
+        )
+        assert score == 0.0
+
+    def test_single_face_explicit_returns_nonzero(self):
+        frame = _make_rgb_array(100, 100, 128)
+        face_region = _make_rgb_array(50, 50, 128)
+        score = score_reference_quality(
+            frame, (10, 60, 60, 10), _frontal_landmarks(), face_region,
+            face_count=1,
+        )
+        assert score > 0.0
+
+    def test_zero_faces_returns_zero(self):
+        frame = _make_rgb_array(100, 100, 128)
+        face_region = _make_rgb_array(50, 50, 128)
+        score = score_reference_quality(
+            frame, (10, 60, 60, 10), None, face_region,
+            face_count=0,
+        )
+        assert score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _single_face_score
+# ---------------------------------------------------------------------------
+
+
+class TestSingleFaceScore:
+    def test_one_face_returns_one(self):
+        assert _single_face_score(1) == 1.0
+
+    def test_two_faces_returns_zero(self):
+        assert _single_face_score(2) == 0.0
+
+    def test_zero_faces_returns_zero(self):
+        assert _single_face_score(0) == 0.0
+
+    def test_large_count_returns_zero(self):
+        assert _single_face_score(10) == 0.0
 
 
 # ---------------------------------------------------------------------------
