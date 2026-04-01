@@ -112,6 +112,8 @@ class TestVicropCli:
             tolerance=0.55,
             no_skip_existing=True,
             ref_thresh=0.8,
+            classified_path=None,
+            classified_max=10,
         )
         called = {}
 
