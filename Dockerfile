@@ -41,7 +41,7 @@ RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
 
 RUN pip install --group base --group youtube --group vl
 
-COPY Dockerfile .dockerignore /app/
+COPY Dockerfile .dockerignore main.py /app/
 COPY tests /app/tests
 COPY portrait_prep /app/portrait_prep
 COPY vicrop /app/vicrop
