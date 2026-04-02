@@ -10,7 +10,7 @@ WORKDIR /app
 
 SHELL ["/bin/bash", "-c"] 
 
-# default ARCH is amd64, can be overridden at build time with --build-arg ARCH=arm64
+# automatically filled by docker build
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -28,20 +28,24 @@ RUN python -m pip install -U pip
 
 # on windows we need to install torchcodec separately (after torch) since torchcodec is not yet available on pip for windows, 
 # on linux (both arm64 and amd64) we can install torchcodec together with torch (torchcodec will be installed without cuda support on arm64)
-RUN pip install torch torchvision torchaudio torchcodec
 
 # the face_recognition package supports CUDA. But one needs to first build dlib with DLIB_USE_CUDA=1
-# Note: that if we didn't need to build dlib for CUDA then we could use the runtime base image instead of develI
+# Note: that if we didn't need to build dlib for CUDA then we could use the runtime base image instead of devel
 RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
         echo "Build for AMD64 with CUDA ..." && \
+        pip install torch torchvision && \
         DLIB_USE_CUDA=1 pip install -v dlib && \
         pip install --group gpu; \
+    elif [[ "$TARGETARCH" = "arm64" ]]; then \
+        echo "Build for ARM64 with NO CUDA ..." && \
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+    else \
+        echo "Unsupported architecture: $TARGETARCH" >&2 && exit 1; \
     fi
-
 
 RUN pip install --group base --group youtube --group vl
 
-COPY Dockerfile .dockerignore /app/
+COPY Dockerfile .dockerignore main.py /app/
 COPY tests /app/tests
 COPY portrait_prep /app/portrait_prep
 COPY vicrop /app/vicrop
