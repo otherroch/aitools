@@ -1,15 +1,17 @@
 
-# default ARCH is amd64, can be overridden at build time with --build-arg ARCH=arm64
-ARG ARCH=amd64
-
 # can be set at build time with --build-arg BASE_IMAGE=your_image:tag
 # for arm64 use: debian:12-slim 
-# for x86_64 use: nvidia/cuda:13.1.1-devel-ubuntu24.04 or nvidia/cuda:13.1.1-runtime-ubuntu24.04
-ARG BASE_IMAGE=nvidia/cuda:13.1.1-runtime-ubuntu24.04
-FROM ${BASE_IMAGE}
+# for x86_64 use: nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04 (includes CUDNN for building dlib)
+ARG BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
+FROM $BASE_IMAGE
 
 # Set the working directory in the container
 WORKDIR /app
+
+SHELL ["/bin/bash", "-c"] 
+
+# default ARCH is amd64, can be overridden at build time with --build-arg ARCH=arm64
+ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev python3-venv python3-pip portaudio19-dev build-essential \
@@ -26,20 +28,20 @@ RUN python -m pip install -U pip
 
 # on windows we need to install torchcodec separately (after torch) since torchcodec is not yet available on pip for windows, 
 # on linux (both arm64 and amd64) we can install torchcodec together with torch (torchcodec will be installed without cuda support on arm64)
-RUN if [ "${ARCH}" = "amd64" ]; then \
-        echo "Build for AMD64 with CUDA ..."; \
-        pip install --pre torch torchvision torchaudio torchcodec --index-url https://download.pytorch.org/whl/nightly/cu130; \
-        pip install --group gpu; \
-    else \
-        echo "Build for ARM64 with NO GPU ..."; \
-        pip install torch torchvision torchaudio torchcodec; \
-    fi
+RUN pip install torch torchvision torchaudio torchcodec
 
+# the face_recognition package supports CUDA. But one needs to first build dlib with DLIB_USE_CUDA=1
+# Note: that if we didn't need to build dlib for CUDA then we could use the runtime base image instead of develI
+RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
+        echo "Build for AMD64 with CUDA ..." && \
+        DLIB_USE_CUDA=1 pip install -v dlib && \
+        pip install --group gpu; \
+    fi
 
 
 RUN pip install --group base --group youtube --group vl
 
-COPY Dockerfile .dockerignore main.py /app/
+COPY Dockerfile .dockerignore /app/
 COPY tests /app/tests
 COPY portrait_prep /app/portrait_prep
 COPY vicrop /app/vicrop
