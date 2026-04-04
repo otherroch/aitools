@@ -112,7 +112,6 @@ def _run_crop_folder_mocked(
 ):
     """Run crop_folder with face_recognition fully mocked out."""
     from unittest.mock import MagicMock, patch
-    import numpy as np
 
     # Build per-image face data
     if encodings is None:

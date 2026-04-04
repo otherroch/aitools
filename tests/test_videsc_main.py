@@ -321,7 +321,6 @@ class TestVidescUnifiedCommand:
 
     def test_args_help_includes_save_video(self):
         """The --help output must document the --save-video argument."""
-        import subprocess, sys
         result = subprocess.run(
             [
                 sys.executable,
@@ -346,7 +345,6 @@ class TestVidescUnifiedCommand:
     def test_parse_args_save_video_file_path(self):
         """--save-video accepts a full file path."""
         from videsc.cli.args import parse_args
-        from pathlib import Path
 
         args = parse_args([
             "--youtube-url", "https://www.youtube.com/watch?v=abc123",
