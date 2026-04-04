@@ -10,14 +10,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 from PIL import Image
 
 from portrait_prep.caption import (
     _load_labels,
     _preprocess,
     caption_image,
-    caption_folder,
     _caption_folder_impl,
     DEFAULT_THRESHOLD,
 )

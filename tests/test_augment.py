@@ -9,10 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import pytest
 from PIL import Image
 
-from portrait_prep.augment import augment_folder, build_augment_pipeline, VALID_EXTS
+from portrait_prep.augment import augment_folder, build_augment_pipeline
 
 
 # ---------------------------------------------------------------------------

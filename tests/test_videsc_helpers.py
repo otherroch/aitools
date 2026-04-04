@@ -5,7 +5,6 @@ Unit tests for videsc.utils.helpers (ported from otherroch/videsc).
 """
 
 import argparse
-import pytest
 import torch
 from videsc.utils.helpers import (
     _format_time_hhmmss,

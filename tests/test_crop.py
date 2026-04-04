@@ -7,7 +7,6 @@ Unit tests for portrait_prep.crop
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from portrait_prep.crop import crop_folder
 from portrait_prep.face_utils import cluster_faces, load_reference_encodings

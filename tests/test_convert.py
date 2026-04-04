@@ -7,7 +7,6 @@ Unit tests for portrait_prep.convert
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image
@@ -31,7 +30,6 @@ def make_image(path: Path, color: tuple = (128, 64, 32), size: tuple = (100, 100
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
 
 class TestSupportedExts:
     def test_jpg_included(self):

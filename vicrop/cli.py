@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-vicrop.cli – Video Face-Crop CLI
+vicrop.cli  Video Face-Crop CLI
 
 Extract face-cropped PNG frames from video files.
 
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 logging.basicConfig(

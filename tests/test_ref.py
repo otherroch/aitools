@@ -6,9 +6,6 @@ Unit tests for vicrop.ref – reference-photo quality scoring.
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 

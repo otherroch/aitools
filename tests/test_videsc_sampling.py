@@ -4,7 +4,6 @@ tests/test_videsc_sampling.py
 Unit tests for videsc.video.sampling (ported from otherroch/videsc).
 """
 
-import pytest
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 
 
