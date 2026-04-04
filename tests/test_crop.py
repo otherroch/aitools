@@ -219,7 +219,7 @@ class TestLoadReferenceEncodings:
         fr_mock.face_encodings.return_value = []
 
         with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            encodings, names = load_reference_encodings(ref_dir)
+            encodings, _ = load_reference_encodings(ref_dir)
 
         assert len(encodings) == 0
 
@@ -345,7 +345,7 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([1.5])
 
         with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            result = cluster_faces(
+            cluster_faces(
                 [(staging / "face1.png", enc_new)],
                 tmp_path,
                 tolerance=0.6,

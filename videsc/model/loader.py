@@ -161,7 +161,6 @@ def load_omni_model_and_processor(args):
     print(f"✅ start time (model load): {current_time}")
 
     # Quantization + reader
-    quant_cfg = _quant_config(args.quant)
     _maybe_set_reader(args.reader)
 
     model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(

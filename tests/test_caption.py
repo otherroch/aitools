@@ -234,7 +234,7 @@ class TestCaptionFolder:
         src = tmp_path / "images"
         make_image(src / "photo.png")
 
-        stats = self._run(tmp_path, src, prefix="test_prefix")
+        self._run(tmp_path, src, prefix="test_prefix")
 
         assert (src / "photo.txt").exists()
         assert "test_prefix" in (src / "photo.txt").read_text()

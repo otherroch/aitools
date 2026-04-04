@@ -73,7 +73,7 @@ class TestConvertFolder:
         img_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (50, 50), (10, 20, 30)).save(img_path, format="JPEG")
 
-        converted, skipped = convert_folder(src, dst)
+        converted, _ = convert_folder(src, dst)
 
         assert converted == 1
         assert (dst / "photo.png").exists()
@@ -96,7 +96,7 @@ class TestConvertFolder:
         make_image(src / "photo.png", color=(1, 2, 3))
         make_image(dst / "photo.png", color=(200, 200, 200))
 
-        converted, skipped = convert_folder(src, dst, skip_existing=False)
+        converted, _ = convert_folder(src, dst, skip_existing=False)
 
         assert converted == 1
 
@@ -139,6 +139,6 @@ class TestConvertFolder:
         for name in ["a.png", "b.png", "c.png"]:
             make_image(src / name)
 
-        converted, skipped = convert_folder(src, dst)
+        converted, _ = convert_folder(src, dst)
 
         assert converted == 3

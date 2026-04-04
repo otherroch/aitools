@@ -174,7 +174,7 @@ def run_single_video(args, model, processor) -> int:
             current_time = now.strftime("%H:%M:%S")
             print(f"✅ Before generate: {current_time}")
             trace += "\n\n Before generate " + str(current_time)
-            text_ids, audio_output = model.generate(
+            text_ids, _ = model.generate(
                 **inputs,
                 return_audio=False,
                 thinker_return_dict_in_generate=True,
