@@ -93,12 +93,24 @@ class TestPortraitPrepCli:
 
 
 class TestVicropCli:
-    def test_parse_args_defaults(self):
+    def test_parse_args_defaults(self, tmp_path):
         mod = importlib.import_module("vicrop.cli")
-        args = mod.parse_args(["--input", "/tmp/in", "--output-dir", "/tmp/out"])
-        assert args.every_n == 30
-        assert args.detection_model == "hog"
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        input_file = tmp_path / "clip.mp4"
+        input_file.touch()
+        output_dir = tmp_path / "out"
 
+        dir_args = mod.parse_args(["--input", str(input_dir), "--output-dir", str(output_dir)])
+        file_args = mod.parse_args(["--input", str(input_file), "--output-dir", str(output_dir)])
+
+        assert dir_args.input == input_dir
+        assert dir_args.every_n == 30
+        assert dir_args.detection_model == "hog"
+
+        assert file_args.input == input_file
+        assert file_args.every_n == 30
+        assert file_args.detection_model == "hog"
     def test_main_calls_crop_folder(self, monkeypatch, tmp_path):
         mod = importlib.import_module("vicrop.cli")
         in_dir = tmp_path / "in"
