@@ -95,14 +95,16 @@ class TestPortraitPrepCli:
 class TestVicropCli:
     def test_parse_args_defaults(self):
         mod = importlib.import_module("vicrop.cli")
-        args = mod.parse_args(["--input-dir", "/tmp/in", "--output-dir", "/tmp/out"])
+        args = mod.parse_args(["--input", "/tmp/in", "--output-dir", "/tmp/out"])
         assert args.every_n == 30
         assert args.detection_model == "hog"
 
     def test_main_calls_crop_folder(self, monkeypatch, tmp_path):
         mod = importlib.import_module("vicrop.cli")
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
         args = types.SimpleNamespace(
-            input_dir=tmp_path / "in",
+            input=in_dir,
             output_dir=tmp_path / "out",
             every_n=10,
             margin_ratio=0.5,
@@ -123,10 +125,79 @@ class TestVicropCli:
             return {"videos_processed": 1, "frames_processed": 2, "faces": 3, "persons": 1, "ref_photos": 0}
 
         monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
-        monkeypatch.setitem(sys.modules, "vicrop.crop", types.SimpleNamespace(crop_folder=fake_crop_folder))
+        crop_stub = types.SimpleNamespace(
+            crop_folder=fake_crop_folder,
+            crop_video=None,
+            SUPPORTED_VIDEO_EXTS={".mp4", ".mov"},
+        )
+        monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
         mod.main([])
         assert called["kwargs"]["skip_existing"] is False
         assert called["kwargs"]["classify"] is True
+
+    def test_main_calls_crop_video_for_single_file(self, monkeypatch, tmp_path):
+        mod = importlib.import_module("vicrop.cli")
+        video_file = tmp_path / "clip.mp4"
+        video_file.write_bytes(b"fake")
+        args = types.SimpleNamespace(
+            input=video_file,
+            output_dir=tmp_path / "out",
+            every_n=10,
+            margin_ratio=0.5,
+            crop_size=256,
+            detection_model="hog",
+            no_classify=False,
+            tolerance=0.6,
+            no_skip_existing=False,
+            ref_thresh=0.8,
+            classified_path=None,
+            classified_max=10,
+        )
+        called = {}
+
+        def fake_crop_video(*a, **kw):
+            called["path"] = a[0]
+            called["kwargs"] = kw
+            return {"frames_processed": 2, "faces": 1, "persons": 1, "ref_photos": 0}
+
+        monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
+        crop_stub = types.SimpleNamespace(
+            crop_folder=None,
+            crop_video=fake_crop_video,
+            SUPPORTED_VIDEO_EXTS={".mp4", ".mov"},
+        )
+        monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+        mod.main([])
+        assert called["path"] == video_file
+        assert called["kwargs"]["classify"] is True
+
+    def test_main_rejects_unsupported_file_extension(self, monkeypatch, tmp_path):
+        mod = importlib.import_module("vicrop.cli")
+        bad_file = tmp_path / "image.jpg"
+        bad_file.write_bytes(b"fake")
+        args = types.SimpleNamespace(
+            input=bad_file,
+            output_dir=tmp_path / "out",
+            every_n=30,
+            margin_ratio=0.4,
+            crop_size=1024,
+            detection_model="hog",
+            no_classify=False,
+            tolerance=0.6,
+            no_skip_existing=False,
+            ref_thresh=0.8,
+            classified_path=None,
+            classified_max=10,
+        )
+        monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
+        crop_stub = types.SimpleNamespace(
+            crop_folder=None,
+            crop_video=None,
+            SUPPORTED_VIDEO_EXTS={".mp4", ".mov"},
+        )
+        monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+        with pytest.raises(SystemExit):
+            mod.main([])
 
 
 class TestTranscription:

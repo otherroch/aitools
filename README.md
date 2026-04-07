@@ -321,22 +321,28 @@ Reads video files using OpenCV, samples frames at a configurable interval, detec
 
 ```bash
 # Process all videos in a directory (face-crop every 30th frame)
-vicrop --input-dir ./videos --output-dir ./frames
+vicrop --input ./videos --output-dir ./frames
+
+# Process a single video file (must use a supported video extension, e.g. .mp4 or .mov;
+# unsupported file types will cause the tool to exit with an error)
+# The file must use a supported video extension (for example: .mp4, .mov);
+# otherwise, vicrop exits with an error.
+vicrop --input ./video.mp4 --output-dir ./frames
 
 # Faster sampling, no identity clustering
-vicrop --input-dir ./videos --output-dir ./frames --every-n 15 --no-classify
+vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
 
 # Higher-accuracy face detection
-vicrop --input-dir ./videos --output-dir ./frames --detection-model cnn
+vicrop --input ./videos --output-dir ./frames --detection-model cnn
 
 # Tighter margin around the face (less background context)
-vicrop --input-dir ./videos --output-dir ./frames --margin-ratio 0.2
+vicrop --input ./videos --output-dir ./frames --margin-ratio 0.2
 
 # Select reference photos scoring 0.75 or higher (more permissive than default)
-vicrop --input-dir ./videos --output-dir ./frames --ref-thresh 0.75
+vicrop --input ./videos --output-dir ./frames --ref-thresh 0.75
 
 # Disable reference-photo selection entirely
-vicrop --input-dir ./videos --output-dir ./frames --ref-thresh 0
+vicrop --input ./videos --output-dir ./frames --ref-thresh 0
 ```
 
 Output is organised as:
@@ -386,7 +392,7 @@ Lower values cast a wider net and produce a larger reference set; higher values 
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--input-dir` | *(required)* | Directory containing video files |
+| `--input` | *(required)* | Video file (e.g. `.mp4`) or directory containing video files |
 | `--output-dir` | *(required)* | Destination directory for cropped frames |
 | `--every-n` | `30` | Process every N-th frame |
 | `--margin-ratio` | `0.4` | Fractional padding around each detected face bbox (see below) |

@@ -7,13 +7,16 @@ Extract face-cropped PNG frames from video files.
 Quick examples
 --------------
 # Process all videos in a directory (face-crop every 30th frame)
-vicrop --input-dir ./videos --output-dir ./frames
+vicrop --input ./videos --output-dir ./frames
+
+# Process a single video file
+vicrop --input ./video.mp4 --output-dir ./frames
 
 # Faster sampling, no identity clustering
-vicrop --input-dir ./videos --output-dir ./frames --every-n 15 --no-classify
+vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
 
 # Use CNN model for higher-accuracy face detection
-vicrop --input-dir ./videos --output-dir ./frames --detection-model cnn
+vicrop --input ./videos --output-dir ./frames --detection-model cnn
 """
 
 from __future__ import annotations
@@ -39,10 +42,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--input-dir",
+        "--input",
         type=Path,
         required=True,
-        help="Directory containing video files (searched recursively).",
+        help=(
+            "A single video file (e.g. .mp4, .mov) or a directory of video\n"
+            "files (searched recursively)."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -138,23 +144,49 @@ def main(argv: list[str] | None = None) -> None:
     logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
     logger.info("vicrop starting with args: %s", args)
 
-    from vicrop.crop import crop_folder
+    from vicrop.crop import SUPPORTED_VIDEO_EXTS, crop_folder, crop_video
 
-    logger.info("vicrop: processing videos in %s", args.input_dir)
-    stats = crop_folder(
-        args.input_dir,
-        args.output_dir,
-        every_n=args.every_n,
-        margin_ratio=args.margin_ratio,
-        crop_size=args.crop_size,
-        model=args.detection_model,
-        classify=not args.no_classify,
-        tolerance=args.tolerance,
-        skip_existing=not args.no_skip_existing,
-        ref_thresh=args.ref_thresh,
-        classified_path=args.classified_path,
-        classified_max=args.classified_max,
-    )
+    if args.input.is_file():
+        if args.input.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
+            logger.error(
+                "Unsupported file type '%s' for file: %s. Supported extensions: %s",
+                args.input.suffix,
+                args.input,
+                ", ".join(sorted(SUPPORTED_VIDEO_EXTS)),
+            )
+            raise SystemExit(1)
+        logger.info("vicrop: processing single video %s", args.input)
+        video_stats = crop_video(
+            args.input,
+            args.output_dir,
+            every_n=args.every_n,
+            margin_ratio=args.margin_ratio,
+            crop_size=args.crop_size,
+            model=args.detection_model,
+            classify=not args.no_classify,
+            tolerance=args.tolerance,
+            skip_existing=not args.no_skip_existing,
+            ref_thresh=args.ref_thresh,
+            classified_path=args.classified_path,
+            classified_max=args.classified_max,
+        )
+        stats = {**video_stats, "videos_processed": 1}
+    else:
+        logger.info("vicrop: processing videos in %s", args.input)
+        stats = crop_folder(
+            args.input,
+            args.output_dir,
+            every_n=args.every_n,
+            margin_ratio=args.margin_ratio,
+            crop_size=args.crop_size,
+            model=args.detection_model,
+            classify=not args.no_classify,
+            tolerance=args.tolerance,
+            skip_existing=not args.no_skip_existing,
+            ref_thresh=args.ref_thresh,
+            classified_path=args.classified_path,
+            classified_max=args.classified_max,
+        )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
         "%d persons identified, %d reference photos selected",
