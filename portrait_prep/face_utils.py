@@ -38,7 +38,7 @@ DEFAULT_CROP_SIZE: int = 1024
 
 # Re-export so existing ``from portrait_prep.face_utils import
 # SUPPORTED_IMAGE_EXTS`` keeps working.
-SUPPORTED_IMAGE_EXTS = SUPPORTED_IMAGE_EXTS  # noqa: PLW0127
+from face_ops import SUPPORTED_IMAGE_EXTS as SUPPORTED_IMAGE_EXTS  # noqa: F811
 
 
 def load_face_recognition():

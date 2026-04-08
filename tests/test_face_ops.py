@@ -336,32 +336,27 @@ class TestLoadReferenceEncodings:
 
 
 class TestInsightFaceDistance:
-    """Test the cosine distance computation without needing insightface installed."""
+    """Test the cosine distance computation via the static method."""
 
     def test_identical_vectors_zero_distance(self):
-        # Directly test the distance method on an uninitialized instance
-        backend = InsightFaceBackend.__new__(InsightFaceBackend)
         v = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        dist = backend.face_distance([v], v)
+        dist = InsightFaceBackend._cosine_distance([v], v)
         assert dist[0] == pytest.approx(0.0, abs=0.01)
 
     def test_orthogonal_vectors_distance_one(self):
-        backend = InsightFaceBackend.__new__(InsightFaceBackend)
         a = np.array([1.0, 0.0], dtype=np.float32)
         b = np.array([0.0, 1.0], dtype=np.float32)
-        dist = backend.face_distance([a], b)
+        dist = InsightFaceBackend._cosine_distance([a], b)
         assert dist[0] == pytest.approx(1.0, abs=0.01)
 
     def test_opposite_vectors_distance_two(self):
-        backend = InsightFaceBackend.__new__(InsightFaceBackend)
         a = np.array([1.0, 0.0], dtype=np.float32)
         b = np.array([-1.0, 0.0], dtype=np.float32)
-        dist = backend.face_distance([a], b)
+        dist = InsightFaceBackend._cosine_distance([a], b)
         assert dist[0] == pytest.approx(2.0, abs=0.01)
 
     def test_empty_known_encodings(self):
-        backend = InsightFaceBackend.__new__(InsightFaceBackend)
-        dist = backend.face_distance([], np.zeros(3))
+        dist = InsightFaceBackend._cosine_distance([], np.zeros(3))
         assert len(dist) == 0
 
 

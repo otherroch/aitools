@@ -72,6 +72,8 @@ class InsightFaceBackend:
         *,
         model: str = "buffalo_l",
     ) -> list[FaceBBox]:
+        # ``model`` is accepted for API consistency with the FaceBackend
+        # protocol but is not used here — the model is set during __init__.
         faces = self._app.get(image)
         bboxes: list[FaceBBox] = []
         for f in faces:
@@ -127,11 +129,12 @@ class InsightFaceBackend:
     # Distance
     # ------------------------------------------------------------------
 
-    def face_distance(
-        self,
+    @staticmethod
+    def _cosine_distance(
         known_encodings: list[Encoding],
         encoding: Encoding,
     ) -> np.ndarray:
+        """Compute cosine distances between *encoding* and each known encoding."""
         if not known_encodings:
             return np.array([], dtype=np.float64)
         known = np.array(known_encodings)
@@ -140,6 +143,13 @@ class InsightFaceBackend:
         enc_norm = encoding / (np.linalg.norm(encoding) + 1e-10)
         cos_sim = known_norm @ enc_norm
         return 1.0 - cos_sim
+
+    def face_distance(
+        self,
+        known_encodings: list[Encoding],
+        encoding: Encoding,
+    ) -> np.ndarray:
+        return self._cosine_distance(known_encodings, encoding)
 
     # ------------------------------------------------------------------
     # Image I/O
