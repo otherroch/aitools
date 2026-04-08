@@ -15,7 +15,7 @@ ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev python3-venv python3-pip portaudio19-dev build-essential \
-     ffmpeg git cmake && \
+     ffmpeg git cmake libwebpdemux2 && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the current directory contents into the container at /app
@@ -33,7 +33,7 @@ RUN python -m pip install -U pip
 # Note: that if we didn't need to build dlib for CUDA then we could use the runtime base image instead of devel
 RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
         echo "Build for AMD64 with CUDA ..." && \
-        pip install torch torchvision && \
+        pip install --pre torch torchvision  --index-url https://download.pytorch.org/whl/nightly/cu130 && \
         DLIB_USE_CUDA=1 pip install -v dlib && \
         pip install --group gpu; \
     elif [[ "$TARGETARCH" = "arm64" ]]; then \
@@ -44,6 +44,12 @@ RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
     fi
 
 RUN pip install --group base --group youtube --group vl
+
+# If the cuda 13 built opencv-python is available (cudev module) then install it here
+# This is specific to linux amd64. I had to build the whl myself.
+# Without this, opencv-python will run on CPU
+#COPY --from=whl /opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl /app/
+#RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
 
 COPY Dockerfile .dockerignore main.py /app/
 COPY tests /app/tests
