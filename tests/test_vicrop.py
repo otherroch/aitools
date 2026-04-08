@@ -336,7 +336,7 @@ class TestRefThreshIntegration:
         with patch("vicrop.crop._load_face_recognition", return_value=fr_mock), \
              patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
              patch("vicrop.crop.cv2.cvtColor", return_value=frame), \
-             patch("vicrop.ref.score_reference_quality", return_value=ref_score_val):
+             patch("vicrop.crop.score_reference_quality", return_value=ref_score_val):
             stats = crop_video(
                 video_path,
                 out_dir,

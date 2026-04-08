@@ -364,7 +364,7 @@ frames/
 
 Training a portrait LoRA requires a small set of high-quality *reference photos* — images where the subject is looking directly at the camera, eyes fully open, face well-lit, sharp, and occupying a significant area of the frame. `vicrop` can automatically identify those images from all the face crops it produces.
 
-When `--ref-thresh` is greater than zero (the default is `0.8`), every saved face crop is scored on five criteria:
+When `--ref-thresh` is greater than zero (the default is `0.65`), every saved face crop is scored on five criteria:
 
 | Criterion | Weight | What is measured |
 |-----------|--------|-----------------|
@@ -382,8 +382,8 @@ Crops whose composite score meets or exceeds `--ref-thresh` are **moved** into a
 | `--ref-thresh` | Effect |
 |----------------|--------|
 | `1.0` | Only near-perfect frontal shots with fully open eyes and excellent exposure |
-| `0.8` *(default)* | Good frontal poses; minor angle deviations and slight blur accepted |
-| `0.6` | More permissive; useful when footage quality is variable |
+| `0.65` *(default)* | Good frontal poses; minor angle deviations and slight blur accepted |
+| `0.4` | More permissive; useful when footage quality is variable |
 | `0` | Disables the analysis entirely — no scoring, no `reflist.txt` |
 
 Lower values cast a wider net and produce a larger reference set; higher values are more selective. The goal is to feed the LoRA trainer images that anchor the subject's likeness without injecting off-angle or blurry samples that can reduce identity coherence.
@@ -421,9 +421,9 @@ After all face crops from a video are collected, `vicrop` groups them by identit
 
 | Value | Effect |
 |-------|--------|
-| `0.4–0.5` | Strict — only very similar encodings map to the same person. Reduces cross-person contamination in a scene with multiple look-alike subjects, but can split a single person across two `person_NN` folders when lighting or angle changes significantly. |
-| `0.6` *(default)* | Balanced — works well for most footage with a dominant subject. |
-| `0.7–0.8` | Permissive — merges more crops into each cluster. Good for footage where the subject's appearance varies widely (different lighting, head angles, partial occlusion), but risks merging distinct people who look somewhat similar. |
+| `0.4–0.6` | Strict — only very similar encodings map to the same person. Reduces cross-person contamination in a scene with multiple look-alike subjects, but can split a single person across two `person_NN` folders when lighting or angle changes significantly. |
+| `0.7` *(default)* | Balanced — works well for most footage with a dominant subject. |
+| `0.8–0.9` | Permissive — merges more crops into each cluster. Good for footage where the subject's appearance varies widely (different lighting, head angles, partial occlusion), but risks merging distinct people who look somewhat similar. |
 
 > **Tip:** if you find one person split across `person_01` and `person_03`, increase tolerance slightly. If two distinct people are being merged into the same folder, decrease it.
 

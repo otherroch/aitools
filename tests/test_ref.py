@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import cv2
 import numpy as np
 import pytest
 
@@ -117,10 +118,45 @@ class TestSharpnessScore:
         img = _make_rgb_array(value=128)
         assert _sharpness_score(img) == pytest.approx(0.0, abs=0.01)
 
-    def test_noisy_image_scores_higher(self):
-        rng = np.random.RandomState(42)
-        img = rng.randint(0, 256, (100, 100, 3), dtype=np.uint8)
-        assert _sharpness_score(img) > 0.3
+    def test_sharp_edges_score_high(self):
+        """Clear block edges (≥10 px wide) should survive pre-blur and score high."""
+        base = np.zeros((100, 100), dtype=np.uint8)
+        for i in range(0, 100, 20):
+            base[i:i + 10, :] = 255
+        img = np.stack([base] * 3, axis=-1)
+        score = _sharpness_score(img)
+        assert score > 0.6
+
+        
+    def test_blurred_image_scores_lower_than_sharp(self):
+        """An out-of-focus version of the same content must score lower."""
+        base = np.zeros((100, 100), dtype=np.uint8)
+        for i in range(0, 100, 20):
+            base[i:i + 10, :] = 255
+        sharp = np.stack([base] * 3, axis=-1)
+
+        blurred = cv2.GaussianBlur(base, (21, 21), 0)
+        blurry_img = np.stack([blurred] * 3, axis=-1)
+
+        assert _sharpness_score(blurry_img) < _sharpness_score(sharp)
+
+    def test_noisy_blurry_scores_lower_than_sharp(self):
+        """A blurry image with added noise must not outscore a sharp image."""
+        base = np.zeros((200, 200), dtype=np.uint8)
+        base[40:160, 40:160] = 200
+        base[70:80, 60:80] = 50
+        base[70:80, 120:140] = 50
+        sharp = np.stack([base] * 3, axis=-1)
+
+        blurred = cv2.GaussianBlur(base, (31, 31), 0)
+        rng = np.random.RandomState(0)
+        noisy_blurry = np.clip(
+            blurred.astype(np.int16) + rng.randint(-30, 31, blurred.shape),
+            0, 255,
+        ).astype(np.uint8)
+        noisy_blurry_img = np.stack([noisy_blurry] * 3, axis=-1)
+
+        assert _sharpness_score(noisy_blurry_img) < _sharpness_score(sharp)
 
 
 # ---------------------------------------------------------------------------

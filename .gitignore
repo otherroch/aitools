@@ -13,3 +13,6 @@ __pycache__/
 .coverage
 htmlcov/    
 dist/
+*.png
+*.jpg
+*.jpeg

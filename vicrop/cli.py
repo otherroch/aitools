@@ -83,8 +83,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--tolerance",
         type=float,
-        default=0.6,
-        help="Face distance tolerance for identity clustering (default: 0.6).",
+        default=0.7,
+        help="Face distance tolerance for identity clustering (default: 0.7).",
     )
     parser.add_argument(
         "--detection-model",
@@ -95,12 +95,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--ref-thresh",
         type=float,
-        default=0.8,
+        default=0.65,
         help=(
             "Minimum quality score (0–1) for a face crop to be selected as a\n"
             "reference portrait photo.  Qualifying crops are moved into a\n"
             "ref/ sub-folder inside each person folder.  Set to 0 to disable\n"
-            "reference-photo analysis entirely (default: 0.8)."
+            "reference-photo analysis entirely (default: 0.65)."
         ),
     )
     parser.add_argument(

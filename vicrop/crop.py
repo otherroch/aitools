@@ -145,6 +145,8 @@ def crop_video(
     all_results: list[tuple[Path, np.ndarray]] = []
     ref_scores: dict[str, float] = {}  # filename → quality score
 
+    debug_logging = logger.isEnabledFor(logging.DEBUG)
+     
     try:
         while True:
             ret, frame_bgr = cap.read()
@@ -212,6 +214,7 @@ def crop_video(
                             lm,
                             face_arr,
                             face_count=len(face_locations),
+                            name = out_name if debug_logging else None,
                         )
 
                 frames_processed += 1
@@ -247,20 +250,30 @@ def crop_video(
             pass
 
         # Move reference photos into ref/ sub-folder per person
+      
         if do_ref:
             for _pid, paths in person_dirs.items():
-                ref_paths = [
-                    p for p in paths
-                    if ref_scores.get(p.name, 0.0) >= ref_thresh
-                ]
+                ref_paths = []
+                for p in paths:
+                    if p.name in ref_scores and ref_scores[p.name] >= ref_thresh:
+                        ref_paths.append(p)
+                        logger.debug(
+                          "Selected reference photo: %s  score=%.3f",
+                          p.name, ref_scores[p.name],
+                        ) 
                 if ref_paths:
-                    collect_ref_photos(paths[0].parent, ref_paths)
+                    collect_ref_photos(ref_paths[0].parent, ref_paths)
                     total_refs += len(ref_paths)
     elif not classify and do_ref and all_results:
-        ref_paths = [
-            path for path, _ in all_results
-            if ref_scores.get(path.name, 0.0) >= ref_thresh
-        ]
+        ref_paths = []
+        for path, _ in all_results:
+            if path.name in ref_scores and ref_scores[path.name] >= ref_thresh:
+                ref_paths.append(path)
+                logger.debug(
+                    "Selected reference photo: %s  score=%.3f",
+                    path.name, ref_scores[path.name],
+                )
+
         if ref_paths:
             collect_ref_photos(video_stem_dir, ref_paths)
             total_refs += len(ref_paths)

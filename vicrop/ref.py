@@ -93,8 +93,11 @@ def _frontality_score(landmarks: dict[str, list[tuple[int, int]]]) -> float:
 def _sharpness_score(face_rgb: np.ndarray) -> float:
     """Score sharpness via Laplacian variance (0–1)."""
     gray = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2GRAY)
+    # Suppress sensor/compression noise so that noisy-but-blurry frames
+    # are not mistakenly scored as sharp.
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
     lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    return float(np.clip(lap_var / 150.0, 0, 1))
+    return float(np.clip(lap_var / 500.0, 0, 1))
 
 
 def _lighting_score(face_rgb: np.ndarray) -> float:
@@ -152,6 +155,7 @@ def score_reference_quality(
     landmarks: dict[str, list[tuple[int, int]]] | None,
     face_region_rgb: np.ndarray,
     face_count: int = 1,
+    name: str | None = None,    
 ) -> float:
     """Composite reference-quality score for a single detected face.
 
@@ -169,6 +173,10 @@ def score_reference_quality(
         Quality score in [0.0, 1.0].
     """
     if _single_face_score(face_count) == 0.0:
+        if name:
+            logger.debug(
+                "Multiple faces detected for %s; assigning score=0.0", name,
+            )   
         return 0.0
 
     h_frame, w_frame = frame_rgb.shape[:2]
@@ -178,9 +186,16 @@ def score_reference_quality(
     lighting = _lighting_score(face_region_rgb)
 
     if landmarks is None:
-        return float(np.clip(
-            fill * 0.30 + sharpness * 0.35 + lighting * 0.35, 0, 1,
-        ))
+        score = float(np.clip(fill * 0.30 + sharpness * 0.35 + lighting * 0.35, 0, 1))
+        
+        if name:
+            logger.debug(
+                "No landmarks for %s; using fill=%.3f sharpness=%.3f "
+                "lighting=%.3f → score=%.3f",
+                name, fill, sharpness, lighting,
+                score,
+            )
+        return score 
 
     frontality = _frontality_score(landmarks)
 
@@ -189,14 +204,17 @@ def score_reference_quality(
     avg_ear = (left_ear + right_ear) / 2.0
     eye_score = float(np.clip((avg_ear - 0.15) / 0.15, 0, 1))
 
-    composite = (
-        frontality * 0.30
-        + eye_score * 0.20
-        + fill * 0.15
-        + sharpness * 0.20
-        + lighting * 0.15
-    )
-    return float(np.clip(composite, 0, 1))
+    composite = frontality * 0.30 + eye_score * 0.20 + fill * 0.15 + sharpness * 0.20 + lighting * 0.15
+    composite_clipped    = float(np.clip(composite, 0, 1))
+    
+    if name:
+        logger.debug(
+            "Scoring for %s: frontality=%.3f eye=%.3f fill=%.3f sharpness=%.3f "
+            "lighting=%.3f → score=%.3f",
+            name, frontality, eye_score, fill, sharpness, lighting,
+            composite_clipped,
+        )
+    return composite_clipped
 
 
 def collect_ref_photos(person_dir: Path, ref_paths: list[Path]) -> Path | None:
@@ -215,6 +233,7 @@ def collect_ref_photos(person_dir: Path, ref_paths: list[Path]) -> Path | None:
     ref_dir.mkdir(exist_ok=True)
 
     for src in sorted(ref_paths):
+        logger.debug("Moving reference photo %s to %s", src, ref_dir / src.name)
         shutil.move(str(src), ref_dir / src.name)
 
     logger.info(
