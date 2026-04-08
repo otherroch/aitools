@@ -35,6 +35,7 @@ base = [
     "huggingface_hub>=0.22.0",
 ]
 gpu = ["onnxruntime-gpu>=1.17.0"]
+insightface = ["insightface>=0.7.3", "onnxruntime>=1.17.0"]
 youtube = ["yt-dlp"]
 vl = [
     "torch",
@@ -61,7 +62,7 @@ Repository = "https://github.com/otherroch/aitools"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["portrait_prep*", "vicrop*", "videsc*"]
+include = ["face_ops*", "portrait_prep*", "vicrop*", "videsc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
