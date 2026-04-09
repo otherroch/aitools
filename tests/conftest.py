@@ -126,7 +126,94 @@ def _make_torch_stub():
     torch.backends = types.SimpleNamespace(
         cudnn=types.SimpleNamespace(benchmark=False, enabled=False)
     )
-    torch.zeros = lambda *a, **kw: np.zeros(a)
+
+    # -- dtype sentinels --------------------------------------------------
+    _DTYPE_MAP = {
+        "torch.float32": np.float32,
+        "torch.float64": np.float64,
+        "torch.int32": np.int32,
+        "torch.int64": np.int64,
+        "torch.int": np.int32,
+        "torch.long": np.int64,
+    }
+
+    class _TorchDtype:
+        """Lightweight dtype sentinel that maps to a numpy dtype."""
+        def __init__(self, name, np_dtype):
+            self._name = name
+            self._np = np_dtype
+        def __repr__(self):
+            return self._name
+        def __eq__(self, other):
+            if isinstance(other, _TorchDtype):
+                return self._np == other._np
+            return NotImplemented
+        def __hash__(self):
+            return hash(self._np)
+
+    torch.float32 = _TorchDtype("torch.float32", np.float32)
+    torch.float64 = _TorchDtype("torch.float64", np.float64)
+    torch.int32 = _TorchDtype("torch.int32", np.int32)
+    torch.int64 = _TorchDtype("torch.int64", np.int64)
+    torch.int = _TorchDtype("torch.int", np.int32)
+    torch.long = _TorchDtype("torch.long", np.int64)
+
+    # -- minimal Tensor ---------------------------------------------------
+    class _FakeTensor:
+        """Numpy-backed tensor with the subset of the torch.Tensor API
+        required by tests and by ``expand_video_grid_thw``."""
+        def __init__(self, data, dtype=None):
+            if dtype is not None and isinstance(dtype, _TorchDtype):
+                self._data = np.array(data, dtype=dtype._np)
+            else:
+                self._data = np.asarray(data)
+            # Expose a dtype sentinel that mirrors torch conventions
+            np_dt = self._data.dtype
+            for td in (torch.float32, torch.float64, torch.int32, torch.int64):
+                if np_dt == td._np:
+                    self.dtype = td
+                    break
+            else:
+                self.dtype = _TorchDtype(f"torch.{np_dt}", np_dt)
+            self.device = types.SimpleNamespace(type="cpu")
+
+        # shape / indexing
+        @property
+        def shape(self):
+            return self._data.shape
+        def __len__(self):
+            return len(self._data)
+        def __getitem__(self, idx):
+            result = self._data[idx]
+            if isinstance(result, np.ndarray):
+                t = _FakeTensor.__new__(_FakeTensor)
+                t._data = result
+                t.dtype = self.dtype
+                t.device = self.device
+                return t
+            return result
+        def tolist(self):
+            return self._data.tolist()
+        def numpy(self):
+            return self._data.copy()
+        def __repr__(self):
+            return f"_FakeTensor({self._data!r})"
+
+    def _tensor(data, dtype=None, device=None):
+        return _FakeTensor(data, dtype=dtype)
+
+    def _zeros(*shape, dtype=None):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        dt = dtype._np if isinstance(dtype, _TorchDtype) else np.float32
+        return _FakeTensor(np.zeros(shape, dtype=dt))
+
+    def _equal(a, b):
+        return np.array_equal(a._data, b._data)
+
+    torch.tensor = _tensor
+    torch.zeros = _zeros
+    torch.equal = _equal
 
     class _TorchDevice:
         def __init__(self, s: str):
