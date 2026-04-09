@@ -60,15 +60,30 @@ class VideoReader:
         return self
 
     def read(self, timeout: float = 5.0) -> Optional[np.ndarray]:
-        """Return the next frame (BGR, uint8) or None at end-of-stream."""
-        try:
-            item = self._queue.get(timeout=timeout)
-        except Empty:
-            return None
-        if item is _EOS:
-            return None
-        return item
+        """Return the next frame (BGR, uint8) or None at end-of-stream.
 
+        A queue timeout does not indicate EOF: the decoder may simply be
+        temporarily delayed or the queue may be briefly empty. Keep polling
+        until we receive a frame, observe the EOS sentinel, or know that the
+        reader has been stopped / the decode thread has exited and no more
+        frames can arrive.
+        """
+        while True:
+            try:
+                item = self._queue.get(timeout=timeout)
+            except Empty:
+                if self._stop_event.is_set():
+                    return None
+                if (
+                    self._thread is not None
+                    and not self._thread.is_alive()
+                    and self._queue.empty()
+                ):
+                    return None
+                continue
+            if item is _EOS:
+                return None
+            return item
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
