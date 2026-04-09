@@ -34,14 +34,20 @@ RUN python -m pip install -U pip
 RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
         echo "Build for AMD64 with CUDA ..." && \
         pip install --pre torch torchvision  --index-url https://download.pytorch.org/whl/nightly/cu130 && \
+        pip install "onnxruntime-gpu>=1.17" && \
         DLIB_USE_CUDA=1 pip install -v dlib && \
         pip install --group gpu; \
     elif [[ "$TARGETARCH" = "arm64" ]]; then \
         echo "Build for ARM64 with NO CUDA ..." && \
-        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+        pip install "onnxruntime>=1.17"; \
     else \
         echo "Unsupported architecture: $TARGETARCH" >&2 && exit 1; \
     fi
+
+# Install basicsr with automated patching (PEP 667 + torchvision compat)
+COPY scripts /app/scripts
+RUN python scripts/install_basicsr.py
 
 RUN pip install --group base --group youtube --group vl --group chararep
 
@@ -52,7 +58,6 @@ RUN pip install --group base --group youtube --group vl --group chararep
 #RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
 
 COPY Dockerfile .dockerignore main.py /app/
-COPY scripts /app/scripts
 COPY tests /app/tests
 COPY portrait_prep /app/portrait_prep
 COPY vicrop /app/vicrop
