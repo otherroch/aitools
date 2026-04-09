@@ -201,7 +201,7 @@ class _OnnxCodeFormerBackend:
             # Pre-process: resize → RGB → float32 [-1, 1] → NCHW
             resized = cv2.resize(face_crop, (sz, sz), interpolation=cv2.INTER_LINEAR)
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32)
-            tensor = (rgb / _NORM_SCALE) - 1.0          # [-1, 1]
+            tensor = (rgb / _NORM_SCALE) - 1.0     # [-1, 1]
             tensor = tensor.transpose(2, 0, 1)     # HWC → CHW
             tensor = np.expand_dims(tensor, 0)     # → NCHW
 

@@ -287,12 +287,5 @@ class FaceRecognizer:
                         label,
                         sim,
                     )
-#            else:
-#                logger.debug(
-#                    "Track %d already identified as '%s' (sim=%.3f), skipping re-match",
-#                    face.track_id,
-#                    face.identity_label,
-#                    face.identity_sim,
-#                )   
- 
+
         return faces

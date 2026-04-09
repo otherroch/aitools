@@ -221,11 +221,10 @@ Config JSON format
         default=15,
         dest="mask_blur_kernel",
         help=(
-            "Number of pixels to erode from the mask before blending. "
-            "Higher values shrink the mask more, which can hide halo/boundary artifacts "
-            "but may cut into the swapped face; lower values preserve more detail but may "
-            "leave visible seams. 0 disables erosion. For most HD footage, 1–3 works well "
-            "(default: 2)."
+            "Gaussian blur kernel size for softening mask edges before blending. "
+            "Higher values produce smoother transitions but may lose detail; "
+            "lower values keep sharper edges but may leave visible seams. "
+            "0 disables blurring (default: 15)."
         ),
     )
     p.add_argument(
