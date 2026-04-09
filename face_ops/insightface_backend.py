@@ -46,22 +46,45 @@ class InsightFaceBackend:
                 "Install it with: pip install insightface onnxruntime"
             ) from exc
 
+        providers, effective_ctx_id = self._providers(ctx_id)
         self._app = FaceAnalysis(
             name=model_name,
-            providers=self._providers(ctx_id),
+            providers=providers,
         )
-        self._app.prepare(ctx_id=ctx_id, det_size=det_size)
+        self._app.prepare(ctx_id=effective_ctx_id, det_size=det_size)
 
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _providers(ctx_id: int) -> list[str]:
-        if ctx_id >= 0:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        return ["CPUExecutionProvider"]
+    def _providers(ctx_id: int) -> tuple[list[str], int]:
+        try:
+            import onnxruntime as ort
 
+            available_providers = set(ort.get_available_providers())
+        except Exception:
+            available_providers = set()
+
+        cpu_available = "CPUExecutionProvider" in available_providers
+
+        if ctx_id >= 0 and "CUDAExecutionProvider" in available_providers:
+            providers = ["CUDAExecutionProvider"]
+            if cpu_available:
+                providers.append("CPUExecutionProvider")
+            return providers, ctx_id
+
+        if ctx_id >= 0:
+            logger.warning(
+                "CUDAExecutionProvider requested (ctx_id=%s) but not available; "
+                "falling back to CPUExecutionProvider.",
+                ctx_id,
+            )
+
+        if cpu_available:
+            return ["CPUExecutionProvider"], -1
+
+        return ["CPUExecutionProvider"], -1
     # ------------------------------------------------------------------
     # Detection
     # ------------------------------------------------------------------
