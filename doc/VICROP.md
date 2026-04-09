@@ -12,8 +12,6 @@ vicrop --input ./videos --output-dir ./frames
 
 # Process a single video file (must use a supported video extension, e.g. .mp4 or .mov;
 # unsupported file types will cause the tool to exit with an error)
-# The file must use a supported video extension (for example: .mp4, .mov);
-# otherwise, vicrop exits with an error.
 vicrop --input ./video.mp4 --output-dir ./frames
 
 # Faster sampling, no identity clustering
