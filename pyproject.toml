@@ -81,7 +81,7 @@ testpaths = ["tests"]
 addopts = "-v"
 
 [tool.coverage.run]
-source = ["chararep", "portrait_prep", "vicrop", "videsc"]
+source = ["chararep", "face_ops", "portrait_prep", "vicrop", "videsc"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
