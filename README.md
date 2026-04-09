@@ -2,13 +2,14 @@
 
 **AI dataset preparation toolkit for diffusion model LoRA training.**
 
-`aitools` provides three command-line tools and Python APIs for preparing image and video datasets:
+`aitools` provides four command-line tools and Python APIs for preparing image and video datasets:
 
 | Tool | Command | Description |
 |------|---------|-------------|
 | Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (convert → crop → caption → augment) |
 | Video Crop | `vicrop` | Extract face-cropped PNG frames from video files |
 | Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL (`--vl`) |
+| Character Replace | `chararep` | Replace character faces in a video using deep face-swapping models (inswapper, SimSwap, uniface, hyperswap, blendswap) |
 
 ---
 
@@ -19,6 +20,7 @@
 - [portrait-prep](#portrait-prep)
 - [vicrop](#vicrop)
 - [videsc](#videsc)
+- [chararep](#chararep)
 - [Python API](#python-api)
 - [Running tests](#running-tests)
 
@@ -38,6 +40,9 @@ pip install -e ".[vl]"
 
 # With YouTube download support (adds yt-dlp)
 pip install -e ".[youtube]"
+
+# With chararep face-replacement pipeline (adds insightface, torch, gfpgan, onnxruntime-gpu)
+pip install -e ".[chararep]"
 
 # Including dev / test dependencies
 pip install -e ".[dev]"
@@ -91,6 +96,12 @@ pip install -e ".[dev]"
 > recommended (8 GB+ for the default 8B model; use `--quant 4bit` or `--quant 8bit`
 > to reduce VRAM requirements).
 
+> **Note – chararep:** Requires an NVIDIA GPU with CUDA support. The `[chararep]`
+> extra installs InsightFace, PyTorch, GFPGAN, and ONNX Runtime GPU. The `basicsr`
+> dependency (needed by GFPGAN) may require a manual patch on Python 3.13+; run
+> `python scripts/install_basicsr.py` to download, patch, and install it
+> automatically.
+
 ---
 
 ## Project structure
@@ -129,17 +140,41 @@ aitools/
 │   │   └── sampling.py   # Frame sampling logic
 │   └── utils/
 │       └── helpers.py    # Shared utility functions
+├── chararep/
+│   ├── __init__.py
+│   ├── main.py           # chararep CLI entry point
+│   ├── pipeline.py       # End-to-end face-replacement pipeline
+│   ├── config.py         # PipelineConfig and CharacterMapping dataclasses
+│   ├── face_detector.py  # InsightFace detection + IoU-based tracking
+│   ├── face_recognizer.py# ArcFace-based identity matching
+│   ├── face_swapper.py   # ONNX model swap (inswapper / SimSwap / uniface / hyperswap / blendswap)
+│   ├── face_enhancer.py  # GFPGAN and CodeFormer ONNX enhancement
+│   ├── face_blender.py   # Poisson seamless-clone and alpha blending
+│   ├── video_io.py       # OpenCV video read / FFmpeg video write
+│   └── gpu_utils.py      # CUDA / ONNX Runtime provider helpers
+├── face_ops/
+│   ├── __init__.py       # get_backend(), FaceBackend protocol
+│   ├── backend.py        # DlibBackend and InsightFaceBackend
+│   └── clustering.py     # Backend-agnostic cluster_faces() and load_reference_encodings()
+├── scripts/
+│   └── install_basicsr.py # Download, patch, and install basicsr for Python 3.13+
 ├── tests/
-│   ├── test_convert.py
+│   ├── conftest.py       # Stubs for insightface, onnxruntime, torch, gfpgan
 │   ├── test_crop.py
-│   ├── test_caption.py
-│   ├── test_augment.py
-│   ├── test_cpcap.py
 │   ├── test_vicrop.py
 │   ├── test_videsc.py
-│   └── test_videsc_main.py
+│   ├── test_videsc_main.py
+│   ├── test_face_ops.py
+│   ├── test_chararep_config.py
+│   ├── test_chararep_face_detector.py
+│   ├── test_chararep_face_recognizer.py
+│   ├── test_chararep_face_swapper.py
+│   ├── test_chararep_face_enhancer.py
+│   ├── test_chararep_face_blender.py
+│   └── test_chararep_gpu_utils.py
 ├── main.py               # Thin shim for portrait-prep
 ├── pyproject.toml
+├── Dockerfile
 ├── LICENSE
 └── README.md
 ```
@@ -627,6 +662,96 @@ These values are *edge multipliers*: the actual pixel count per frame is `value 
 
 ---
 
+## chararep
+
+Video face-replacement pipeline. Replace one or more character faces in a video
+with new identities using deep face-swapping models.
+
+### Features
+
+- **Face detection & tracking** — InsightFace RetinaFace with IoU-based frame-to-frame tracking
+- **Identity recognition** — ArcFace 512-d embeddings with per-character cosine-similarity thresholds
+- **Multiple swap models** — inswapper_128, SimSwap (256 / unofficial 512), uniface, hyperswap (1a/1b/1c), blendswap
+- **Face enhancement** — GFPGAN or CodeFormer ONNX for post-swap quality recovery
+- **Blending** — Poisson seamless-cloning or soft alpha-mask blending
+- **Multi-character** — Up to 3 simultaneous character swaps per video
+
+### Installation
+
+```bash
+pip install -e ".[chararep]"
+
+# If basicsr fails to install on Python 3.13+:
+python scripts/install_basicsr.py
+```
+
+### Usage
+
+```bash
+# Quick run — each --char takes a FIND folder and a REPLACE folder
+chararep -i input.mp4 -o output.mp4 \
+    --char originals/villain replacements/villain \
+    --char originals/hero replacements/hero \
+    --enhance
+
+# Using a JSON config file
+chararep --config swap_config.json
+```
+
+### CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-i` / `--input` | — | Input video path |
+| `-o` / `--output` | — | Output video path |
+| `--config` | — | JSON config file (overrides other args) |
+| `--char FIND REPLACE` | — | Pair of folders: original face images and replacement face images (repeat up to 3×) |
+| `--similarity-threshold` | `0.5` | Cosine-similarity threshold for identity matching |
+| `--swap-model-path` | auto-detect | Path to face-swap ONNX model (inswapper_128, simswap_256, uniface, etc.) |
+| `--embedding-converter-path` | — | Optional SimSwap embedding converter ONNX model |
+| `--detection-model` | `buffalo_l` | InsightFace model pack |
+| `--detect-size` | `640` | Detection resolution (try 1024 for HD video) |
+| `--enhance` | off | Enable GFPGAN face enhancement |
+| `--enhance-model` | `gfpgan` | Enhancement backend: `gfpgan` or `codeformer_onnx` |
+| `--enhance-model-path` | — | Path to enhancement model file |
+| `--enhance-weight` | `0.7` | Enhancement blend weight 0–1 |
+| `--device` | `0` | CUDA device ID |
+| `--no-fp16` | off | Disable FP16 (use FP32) |
+| `--codec` | `libx264` | Output video codec |
+| `--crf` | `18` | CRF quality value (lower = better) |
+| `--no-audio` | off | Do not copy audio |
+| `--blend-mode` | `alpha` | Blending strategy: `alpha` or `seamless` |
+| `--blender-blur` | `15` | Gaussian blur kernel for mask edges |
+| `--blender-erode` | `2` | Pixels to erode from mask |
+| `-v` / `--verbose` | off | Enable DEBUG logging |
+| `--log-file` | — | Write log to file |
+| `--timers` | off | Collect per-stage timing breakdown |
+| `--dump-config` | off | Print resolved config as JSON |
+
+### JSON config format
+
+```json
+{
+  "input_video": "input.mp4",
+  "output_video": "output.mp4",
+  "characters": [
+    {
+      "find": "originals/villain",
+      "replace": "replacements/villain",
+      "similarity_threshold": 0.5
+    },
+    {
+      "find": "originals/hero",
+      "replace": "replacements/hero"
+    }
+  ],
+  "enable_face_enhancement": true,
+  "device_id": 0
+}
+```
+
+---
+
 ## Python API
 
 ### portrait-prep
@@ -706,6 +831,32 @@ stats = describe_youtube(
 print(stats)  # {'described': 1, 'skipped': 0}
 ```
 
+### chararep
+
+```python
+from chararep.config import CharacterMapping, PipelineConfig
+from chararep.pipeline import CharacterReplacementPipeline
+
+cfg = PipelineConfig(
+    input_video="input.mp4",
+    output_video="output.mp4",
+    characters=[
+        CharacterMapping(
+            source_label="villain",
+            reference_paths=["originals/villain/frame1.jpg"],
+            portrait_paths=["replacements/villain/new_face.jpg"],
+            similarity_threshold=0.5,
+        ),
+    ],
+    enable_face_enhancement=True,
+    device_id=0,
+)
+
+pipeline = CharacterReplacementPipeline(cfg)
+stats = pipeline.run()
+print(stats)  # {'frames_total': 1200, 'frames_swapped': 450, ...}
+```
+
 ---
 
 ## Running tests
@@ -718,8 +869,9 @@ pytest
 The `[dev]` extra pulls in `pytest` and `pytest-cov`. Test paths and verbosity
 are configured in `pyproject.toml` so no extra flags are needed.
 
-Heavy dependencies (`onnxruntime`, `face_recognition`) are mocked in the test
-suite so the full suite runs without a GPU or dlib installation.
+Heavy dependencies (`onnxruntime`, `face_recognition`, `insightface`, `torch`,
+`gfpgan`) are mocked in the test suite so the full suite runs without a GPU or
+dlib installation.
 
 To run tests for a specific tool:
 
@@ -735,10 +887,18 @@ pytest tests/test_vicrop.py
 # videsc (WD14 and VL modes)
 pytest tests/test_videsc.py
 pytest tests/test_videsc_main.py
+
+# chararep
+pytest tests/test_chararep_config.py
+pytest tests/test_chararep_face_detector.py
+pytest tests/test_chararep_face_swapper.py
+
+# face_ops
+pytest tests/test_face_ops.py
 ```
 
 Generate a coverage report:
 
 ```bash
-pytest --cov=portrait_prep --cov=vicrop --cov=videsc --cov-report=term-missing
+pytest --cov=portrait_prep --cov=vicrop --cov=videsc --cov=chararep --cov=face_ops --cov-report=term-missing
 ```

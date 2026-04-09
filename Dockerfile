@@ -43,7 +43,7 @@ RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
         echo "Unsupported architecture: $TARGETARCH" >&2 && exit 1; \
     fi
 
-RUN pip install --group base --group youtube --group vl
+RUN pip install --group base --group youtube --group vl --group chararep
 
 # If the cuda 13 built opencv-python is available (cudev module) then install it here
 # This is specific to linux amd64. I had to build the whl myself.
@@ -52,10 +52,13 @@ RUN pip install --group base --group youtube --group vl
 #RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
 
 COPY Dockerfile .dockerignore main.py /app/
+COPY scripts /app/scripts
 COPY tests /app/tests
 COPY portrait_prep /app/portrait_prep
 COPY vicrop /app/vicrop
 COPY videsc /app/videsc
+COPY chararep /app/chararep
+COPY face_ops /app/face_ops
 
 
 RUN pip install -e .
