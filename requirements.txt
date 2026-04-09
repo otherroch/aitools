@@ -1,0 +1,24 @@
+# Core
+numpy>=1.24
+opencv-python>=4.8
+insightface>=0.7.3
+
+# GPU / deep learning – MUST be installed before basicsr
+# See https://pytorch.org/get-started/locally/
+# Example for CUDA 13.x:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+torch>=2.2
+torchvision>=0.17
+
+# Face enhancement
+# NOTE: basicsr 1.4.2 needs patching on Python 3.13+ / torchvision >= 0.17.
+# Install basicsr with the automated installer instead of pip, so it is
+# intentionally not listed in this requirements file:
+#   python scripts/install_basicsr.py
+gfpgan>=1.3.8
+realesrgan>=0.3.0
+onnxruntime-gpu>=1.17.0; platform_machine not in 'arm aarch64 arm64 armv7l armv8l'
+onnxruntime; platform_machine in 'arm aarch64 arm64 armv7l armv8l'
+
+# Utilities
+python-docx>=1.0  # only needed for reading research docs

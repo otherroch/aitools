@@ -1,744 +1,365 @@
-# aitools
+# CharaRep – Video Character Replacement Pipeline
 
-**AI dataset preparation toolkit for diffusion model LoRA training.**
+A GPU-accelerated Python pipeline that replaces up to **3 characters** (faces) in a video with different identities, using portrait photos as the source of the new face. Optimised for **NVIDIA RTX 5090** (CUDA, FP16 Tensor Core inference).
 
-`aitools` provides three command-line tools and Python APIs for preparing image and video datasets:
+## Architecture
 
-| Tool | Command | Description |
-|------|---------|-------------|
-| Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (convert → crop → caption → augment) |
-| Video Crop | `vicrop` | Extract face-cropped PNG frames from video files |
-| Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL (`--vl`) |
+```
+Video File
+  │
+  ▼
+┌──────────────────┐
+│  Frame Decoding   │  (video_io.py – threaded OpenCV reader)
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Face Detection   │  (face_detector.py – InsightFace RetinaFace)
+│  & IoU Tracking   │
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Face Recognition │  (face_recognizer.py – ArcFace embeddings)
+│  (ID matching)    │
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Face Swap        │  (face_swapper.py – inswapper_128 ONNX model)
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Face Enhancement │  (face_enhancer.py – GFPGAN restoration)
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Seam Blending    │  (face_blender.py – Poisson / alpha blend)
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Video Encoding   │  (video_io.py – ffmpeg subprocess writer)
+│  + Audio Muxing   │
+└──────────────────┘
+```
 
----
+## Prerequisites
 
-## Table of Contents
+| Requirement | Version |
+|---|---|
+| Python | 3.10+ |
+| CUDA Toolkit | 12.x+ |
+| ffmpeg | 4.4+ (on PATH) |
+| NVIDIA GPU | RTX 5090 recommended; any CUDA GPU works |
 
-- [Installation](#installation)
-- [Project structure](#project-structure)
-- [portrait-prep](#portrait-prep)
-- [vicrop](#vicrop)
-- [videsc](#videsc)
-- [Python API](#python-api)
-- [Running tests](#running-tests)
+### Model files
 
----
+1. **InsightFace buffalo_l** – auto-downloaded on first run to `~/.insightface/models/`.
+2. **inswapper_128.onnx** – download manually and place at `~/.insightface/models/inswapper_128.onnx`.
+   - Source: <https://github.com/deepinsight/insightface/tree/master/examples/in_swapper>
+3. **GFPGAN v1.4** – auto-downloaded by the `gfpgan` package on first run.
 
 ## Installation
 
 ```bash
-# Standard (CPU inference)
+# Create a virtual environment
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/macOS
+
+# Install stable PyTorch with CUDA support first
+# where XXX is the CUDA version that matches your needs
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cuXXX
+#or
+# install CPU version of PyTorch
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install patched basicsr (required on Python 3.13+)
+python scripts/install_basicsr.py
+
+# Install remaining dependencies
+pip install -r requirements.txt
+
+# Install chararep as a CLI command
 pip install -e .
-
-# With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
-pip install -e ".[gpu]"
-
-# With Qwen3-VL support for videsc --vl (adds PyTorch, transformers, and related dependencies)
-pip install -e ".[vl]"
-
-# With YouTube download support (adds yt-dlp)
-pip install -e ".[youtube]"
-
-# Including dev / test dependencies
-pip install -e ".[dev]"
 ```
 
-> **Note – HEIC support:** `pillow-heif` ships with pre-built wheels on PyPI for
-> Windows, macOS, and Linux — no extra system libraries required in most cases.
+## Usage
 
-> **Note – face_recognition:** Requires `cmake` and `dlib` to be present before
-> installation. On Windows the easiest path is:
-> ```bash
-> pip install cmake
-> pip install dlib
-> pip install face_recognition
-> ```
->
-> **Note – CNN face detection on GPU (`--detection-model cnn`):** By default
-> `dlib` is built for CPU only. To run the CNN detector on a GPU you must install
-> a CUDA-enabled build of `dlib`. First ensure the **CUDA Toolkit** and **cuDNN**
-> are installed and visible on your system path, then build `dlib` with the CUDA
-> flag **before** installing `face_recognition`:
->
-> *Linux*
-> ```bash
-> pip install cmake
-> DLIB_USE_CUDA=1 pip install -v dlib
-> pip install face_recognition
-> ```
->
-> *Windows (PowerShell)*
-> ```powershell
-> pip install cmake
-> $env:DLIB_USE_CUDA=1; pip install -v dlib
-> pip install face_recognition
-> ```
->
-> If CUDA is correctly detected, dlib's build output will include a line such as
-> `"Enabling CUDA support"`. Without this, `--detection-model cnn` will still
-> work but will run on CPU and be significantly slower.
-
-> **Note – GPU inference:** Install the `[gpu]` extra (see above) to use
-> `onnxruntime-gpu` for significantly faster WD14 captioning on CUDA devices.
-
-> **Note – YouTube support:** The `--youtube-url` flag requires `yt-dlp` and a
-> YouTube Data API v3 key. Install `yt-dlp` with `pip install -e ".[youtube]"` or
-> `pip install yt-dlp`.
-
-> **Note – videsc VL mode:** The `--vl` flag requires PyTorch, the
-> Transformers library, and related dependencies. Install them with
-> `pip install -e ".[vl]"`. A CUDA-capable GPU with sufficient VRAM is strongly
-> recommended (8 GB+ for the default 8B model; use `--quant 4bit` or `--quant 8bit`
-> to reduce VRAM requirements).
-
----
-
-## Project structure
-
-```
-aitools/
-├── portrait_prep/
-│   ├── __init__.py
-│   ├── convert.py        # Step 1 – format conversion
-│   ├── crop.py           # Step 2 – face crop + classification
-│   ├── caption.py        # Step 3 – WD14 captioning
-│   ├── augment.py        # Step 4 – data augmentation
-│   ├── cpcap.py          # Step 5 – caption propagation
-│   └── cli.py            # portrait-prep entry point
-├── vicrop/
-│   ├── __init__.py
-│   ├── crop.py           # Video face-crop logic
-│   └── cli.py            # vicrop entry point
-├── videsc/
-│   ├── __init__.py
-│   ├── describe.py       # WD14-based video description logic
-│   ├── wd_cli.py         # Legacy WD14 CLI module (superseded by main.py)
-│   ├── main.py           # Unified videsc entry point (WD14 + VL modes)
-│   ├── config.py         # Model directory configuration
-│   ├── cli/
-│   │   └── args.py       # Unified CLI argument parsing
-│   ├── audio/
-│   │   └── transcription.py  # Whisper-based audio transcription
-│   ├── model/
-│   │   └── loader.py     # Qwen3-VL / Qwen3-Omni model loading
-│   ├── pipeline/
-│   │   └── runner.py     # Batch & single-video runner for VL mode
-│   ├── video/
-│   │   ├── info.py       # Video metadata extraction
-│   │   ├── messages.py   # LLM message construction
-│   │   └── sampling.py   # Frame sampling logic
-│   └── utils/
-│       └── helpers.py    # Shared utility functions
-├── tests/
-│   ├── test_convert.py
-│   ├── test_crop.py
-│   ├── test_caption.py
-│   ├── test_augment.py
-│   ├── test_cpcap.py
-│   ├── test_vicrop.py
-│   ├── test_videsc.py
-│   └── test_videsc_main.py
-├── main.py               # Thin shim for portrait-prep
-├── pyproject.toml
-├── LICENSE
-└── README.md
-```
-
----
-
-## portrait-prep
-
-Portrait dataset preparation toolkit for diffusion model LoRA training.
-
-### Features
-
-| Step | Description |
-|------|-------------|
-| `convert` | Convert HEIC / JPG (and other formats) to PNG |
-| `crop` | Face-detect, crop, and classify persons into sub-folders |
-| `caption` | WD14 tagger auto-captioning with a custom token prefix |
-| `augment` | Identity-preserving Albumentations augmentations |
-| `cpcap` | Replicate captions from originals to augmented images |
-
-Steps can be run individually or chained as a full pipeline in a single command.
-
-### Usage
-
-**Full pipeline**
+### CLI (direct arguments)
 
 ```bash
-portrait-prep \
-  --input-dir ./raw_photos \
-  --output-dir ./dataset \
-  --steps convert crop caption augment cpcap \
-  --prefix "ohwx man" \
-  --per-image 8 \
-  --keep-originals
+chararep \
+    -i input_video.mp4 \
+    -o output_video.mp4 \
+    --char originals/villain replacements/villain \
+    --char originals/hero replacements/hero \
+    --device 0 \
+    -v
 ```
 
-**Step 1 – Convert HEIC/JPG to PNG**
-```bash
-portrait-prep \
-  --input-dir ./raw_heic \
-  --output-dir ./png_out \
-  --steps convert
+Each `--char` takes **two folders**:
+1. **FIND folder** — images of the **original** face to locate in the video.  The folder name becomes the character label.
+2. **REPLACE folder** — images of the **new** face to swap in.
+
+Example folder layout:
+```
+originals/
+  villain/              ← label = "villain"
+    screenshot1.jpg
+    screenshot2.png
+  hero/                 ← label = "hero"
+    hero_frame.jpg
+replacements/
+  villain/
+    new_face1.jpg
+  hero/
+    new_hero.jpg
 ```
 
-**Step 2 – Face-crop and classify persons**
-```bash
-portrait-prep \
-  --input-dir ./png_out \
-  --output-dir ./cropped \
-  --steps crop \
-  --margin-ratio 0.4 \
-  --crop-size 1024
-```
-
-Each detected person is placed in a `person_NN` sub-folder (use `--no-classify` to skip clustering).
-
-**Step 3 – WD14 captioning**
-```bash
-portrait-prep \
-  --input-dir ./cropped \
-  --steps caption \
-  --prefix "rocharch61" \
-  --threshold 0.35
-```
-
-Captions are written as `.txt` files alongside each image (or in `--caption-output-dir`).
-The first run downloads the WD14 ONNX model from HuggingFace (~350 MB) and caches it.
-
-**Step 4 – Augment images**
-```bash
-portrait-prep \
-  --input-dir ./cropped \
-  --output-dir ./augmented \
-  --steps augment \
-  --per-image 10 \
-  --image-size 1024 1024 \
-  --keep-originals \
-  --seed 4051888
-```
-
-**Step 5 – Copy captions to augmented images**
-```bash
-portrait-prep \
-  --source-dir ./cropped \
-  --aug-dir ./augmented \
-  --steps cpcap
-```
-
-Or combined with augment (source captions are automatically inferred):
-```bash
-portrait-prep \
-  --input-dir ./cropped \
-  --output-dir ./augmented \
-  --steps augment cpcap
-```
-
-### CLI reference
-
-#### Common options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--input-dir` | *(required)* | Source directory |
-| `--output-dir` | — | Destination directory (required for convert, crop, augment) |
-| `--steps` | all | Steps to run: `convert crop caption augment cpcap` |
-| `--no-skip-existing` | — | Re-process files whose output already exists |
-
-#### crop options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--margin-ratio` | `0.4` | Fractional padding around each face bbox |
-| `--crop-size` | `1024` | Output square resolution (pixels) |
-| `--no-classify` | — | Disable identity clustering |
-| `--tolerance` | `0.6` | Face-distance threshold for clustering |
-| `--detection-model` | `hog` | `hog` (fast) or `cnn` (accurate) |
-
-#### caption options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--prefix` | `""` | Token prepended to every caption |
-| `--threshold` | `0.35` | Minimum WD14 confidence to include a tag |
-| `--model-repo` | `SmilingWolf/wd-v1-4-convnextv2-tagger-v2` | HuggingFace model repo |
-| `--include-ratings` | — | Include rating tags (safe/questionable/explicit) |
-| `--caption-output-dir` | alongside images | Separate dir for `.txt` files |
-
-#### augment options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--per-image` | `5` | Augmented variants per source image |
-| `--image-size` | `1024 1024` | Output `HEIGHT WIDTH` |
-| `--keep-originals` | — | Also copy a resized `*_orig.png` |
-| `--seed` | `4051888` | Random seed |
-
-#### cpcap options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--source-dir` | `--input-dir` | Directory containing original captions |
-| `--aug-dir` | `--output-dir` | Directory with augmented images |
-| `--caption-ext` | `.txt` | Caption file extension |
-| `--dry-run` | — | Report without writing files |
-
-### Typical end-to-end workflow
-
-```
-raw HEIC/JPG photos
-       │
-       ▼ convert
-  PNG images
-       │
-       ▼ crop
-  person_01/  person_02/  …
-       │
-       ▼ caption  (generates .txt alongside each .png)
-  captioned PNGs
-       │
-       ▼ augment
-  augmented PNGs (×N per original)
-       │
-       ▼ cpcap
-  each augmented image has a matching .txt caption
-       │
-       ▼
-  ready for musubi-tuner / sd-scripts LoRA training
-```
-
----
-
-## vicrop
-
-Extract face-cropped PNG frames from video files.
-
-Reads video files using OpenCV, samples frames at a configurable interval, detects faces in each frame, crops them with padding, and saves them as PNG files. Optionally clusters face crops by identity into `person_NN` sub-folders (same greedy nearest-neighbour algorithm as `portrait-prep crop`). Optionally scores each crop for reference-photo quality and writes a `reflist.txt` per identity.
-
-### Usage
+### CLI (JSON config)
 
 ```bash
-# Process all videos in a directory (face-crop every 30th frame)
-vicrop --input ./videos --output-dir ./frames
-
-# Process a single video file (must use a supported video extension, e.g. .mp4 or .mov;
-# unsupported file types will cause the tool to exit with an error)
-# The file must use a supported video extension (for example: .mp4, .mov);
-# otherwise, vicrop exits with an error.
-vicrop --input ./video.mp4 --output-dir ./frames
-
-# Faster sampling, no identity clustering
-vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
-
-# Higher-accuracy face detection
-vicrop --input ./videos --output-dir ./frames --detection-model cnn
-
-# Tighter margin around the face (less background context)
-vicrop --input ./videos --output-dir ./frames --margin-ratio 0.2
-
-# Select reference photos scoring 0.75 or higher (more permissive than default)
-vicrop --input ./videos --output-dir ./frames --ref-thresh 0.75
-
-# Disable reference-photo selection entirely
-vicrop --input ./videos --output-dir ./frames --ref-thresh 0
+chararep --config swap_config.json
 ```
 
-Output is organised as:
+Example `swap_config.json`:
+
+```json
+{
+    "input_video": "input_video.mp4",
+    "output_video": "output_video.mp4",
+    "characters": [
+        {
+            "find": "originals/villain",
+            "replace": "replacements/villain",
+            "similarity_threshold": 0.5
+        },
+        {
+            "find": "originals/hero",
+            "replace": "replacements/hero"
+        }
+    ],
+    "enable_face_enhancement": true,
+    "device_id": 0,
+    "output_quality": 18,
+    "blend_mode": "seamless"
+}
 ```
-frames/
-└── <video_stem>/
-    ├── person_01/
-    │   ├── frame000000_face1.png
-    │   ├── frame000030_face1.png
-    │   └── ref/                         ← reference photos for this person (if any pass --ref-thresh)
-    │       └── frame000000_face1.png
-    └── person_02/
-        ├── frame000060_face1.png
-        └── ref/
-            └── frame000060_face1.png
-```
 
-### Reference photo selection
+### Key CLI options
 
-Training a portrait LoRA requires a small set of high-quality *reference photos* — images where the subject is looking directly at the camera, eyes fully open, face well-lit, sharp, and occupying a significant area of the frame. `vicrop` can automatically identify those images from all the face crops it produces.
-
-When `--ref-thresh` is greater than zero (the default is `0.65`), every saved face crop is scored on five criteria:
-
-| Criterion | Weight | What is measured |
-|-----------|--------|-----------------|
-| Single face | hard gate | If more than one face is detected in the frame the crop is immediately disqualified (score → 0.0), regardless of all other criteria. This prevents another person's face from leaking into training data. |
-| Frontal pose | 30 % | Landmark symmetry — how evenly the nose sits between both eyes (yaw), and how far down the face the nose tip sits (pitch). Scores drop as the face turns away from the camera. |
-| Eyes open | 20 % | Eye Aspect Ratio (EAR) from six landmark points per eye. Closed or partially closed eyes score lower. |
-| Sharpness | 20 % | Laplacian variance of the face-crop region. Blurry or motion-smeared crops score lower. |
-| Face fill | 15 % | Ratio of face bounding-box area to total frame area. A face occupying ≥ 15 % of the frame earns a full score; smaller faces score proportionally lower. |
-| Lighting | 15 % | Luminance mean and contrast. Very dark (< 40/255) or severely overexposed (> 220/255) crops score lower; well-exposed crops with natural contrast score higher. |
-
-Crops whose composite score meets or exceeds `--ref-thresh` are **moved** into a `ref/` sub-folder inside their identity directory. At the end of processing, each `person_NN/` folder that contains at least one qualifying crop will have a `ref/` sub-folder holding only those images.
-
-**Choosing a threshold:**
-
-| `--ref-thresh` | Effect |
-|----------------|--------|
-| `1.0` | Only near-perfect frontal shots with fully open eyes and excellent exposure |
-| `0.65` *(default)* | Good frontal poses; minor angle deviations and slight blur accepted |
-| `0.4` | More permissive; useful when footage quality is variable |
-| `0` | Disables the analysis entirely — no scoring, no `reflist.txt` |
-
-Lower values cast a wider net and produce a larger reference set; higher values are more selective. The goal is to feed the LoRA trainer images that anchor the subject's likeness without injecting off-angle or blurry samples that can reduce identity coherence.
-
-### CLI reference
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--input` | *(required)* | Video file (e.g. `.mp4`) or directory containing video files |
-| `--output-dir` | *(required)* | Destination directory for cropped frames |
-| `--every-n` | `30` | Process every N-th frame |
-| `--margin-ratio` | `0.4` | Fractional padding around each detected face bbox (see below) |
-| `--crop-size` | `1024` | Output square resolution (pixels) |
-| `--no-classify` | — | Disable identity clustering |
-| `--tolerance` | `0.6` | Face-distance threshold for clustering (see below) |
-| `--detection-model` | `hog` | `hog` (fast) or `cnn` (more accurate) |
-| `--ref-thresh` | `0.8` | Minimum quality score (0–1) for reference-photo selection; `0` disables |
-| `--no-skip-existing` | — | Re-process videos whose output already contains frames |
-
-#### `--margin-ratio` — controlling how much context surrounds the face
-
-`--margin-ratio` is a multiplier applied to the height and width of the raw face bounding box returned by the detector. The padded region is then cropped out of the frame and resized to `--crop-size` × `--crop-size`.
-
-| Value | Effect |
-|-------|--------|
-| `0.1–0.2` | Tight crop — face fills most of the image, very little neck or hair visible. Useful if you want maximum facial detail at a given resolution. |
-| `0.4` *(default)* | Balanced — includes forehead, chin, ears, and a sliver of neck/shoulders. Recommended for most portrait LoRA use cases. |
-| `0.6–0.8` | Wide crop — substantial background and shoulders included. Helpful for full-head or upper-body training examples, but effective facial resolution is lower. |
-
-> **Clipping:** margins are clamped to the frame edges, so very large values on faces near the border simply include as much of the frame as available rather than creating black padding.
-
-#### `--tolerance` — controlling how strictly faces are grouped into identities
-
-After all face crops from a video are collected, `vicrop` groups them by identity using a greedy nearest-neighbour algorithm on 128-dimensional face encodings. `--tolerance` is the maximum *face distance* (Euclidean distance in encoding space) allowed before two crops are considered different people. Lower distance → higher similarity must be met to join an existing cluster.
-
-| Value | Effect |
-|-------|--------|
-| `0.4–0.6` | Strict — only very similar encodings map to the same person. Reduces cross-person contamination in a scene with multiple look-alike subjects, but can split a single person across two `person_NN` folders when lighting or angle changes significantly. |
-| `0.7` *(default)* | Balanced — works well for most footage with a dominant subject. |
-| `0.8–0.9` | Permissive — merges more crops into each cluster. Good for footage where the subject's appearance varies widely (different lighting, head angles, partial occlusion), but risks merging distinct people who look somewhat similar. |
-
-> **Tip:** if you find one person split across `person_01` and `person_03`, increase tolerance slightly. If two distinct people are being merged into the same folder, decrease it.
-
----
-
-## videsc
-
-Generate AI-powered text descriptions for video files.
-
-`videsc` supports two modes selectable via the `--vl` flag:
-
-| | WD14 mode (default) | VL mode (`--vl`) |
+| Flag | Description | Default |
 |---|---|---|
-| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni (LLM) |
-| **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
-| **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
-| **Audio support** | No | Yes (Whisper ASR integration) |
-| **Custom prompts** | No | Yes (`--prompt` / `--system`) |
-| **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling |
+| `-i` / `--input` | Input video path | required |
+| `-o` / `--output` | Output video path | required |
+| `--char` | Character mapping (repeat up to 3×) | required |
+| `--config` | JSON config file | – |
+| `--similarity-threshold` | Cosine-similarity threshold for identity matching | `0.5` |
+| `--swap-model-path` | Path to face-swap ONNX model (`inswapper`/`simswap`) | auto-detect |
+| `--embedding-converter-path` | Optional SimSwap embedding converter ONNX path | none |
+| `--detection-model` | InsightFace model pack name | `buffalo_l` |
+| `--enhance` | Enable GFPGAN face enhancement | false |
+| `--enhance-weight` | Enhancement blend weight (`0-1`) | `0.7` |
+| `--device` | CUDA device ID | 0 |
+| `--no-fp16` | Disable FP16 and use FP32 | false |
+| `--codec` | Output video codec | `libx264` |
+| `--blend-mode` | `seamless` or `alpha` | seamless |
+| `--blender-blur` | Gaussian blur kernel size for mask edges | `15` |
+| `--blender-erode` | Pixels to erode from mask edge | `5` |
+| `--crf` | Output quality (lower=better) | 18 |
+| `--no-audio` | Don't copy original audio | false |
+| `-v` / `--verbose` | Debug logging | false |
+| `--log-file` | Write logs to file in addition to stderr | none |
+| `--timers` | Print cumulative per-stage pipeline timing report | false |
+| `--dump-config` | Print resolved pipeline config as JSON before run | false |
 
-Use the default WD14 mode when you need quick, reproducible tag-based captions that work on any hardware. Use `--vl` when you need detailed, human-readable descriptions — for example to create training captions that capture narrative context, character actions, or dialogue.
+### Common command recipes
 
-### Installation
-
-```bash
-# Standard (WD14 mode, CPU inference)
-pip install -e .
-
-# With Qwen3-VL support for --vl mode
-pip install -e ".[vl]"
-```
-
-A CUDA-capable GPU is strongly recommended for VL mode. For lower VRAM use `--quant 4bit` or `--quant 8bit`.
-
-### WD14 mode usage
-
-Key frames are extracted from each video, tagged individually with the WD14 ONNX model, and the tags are aggregated across all frames (union of tags ranked by mean confidence). The result is written to a `.txt` file alongside the video (or in a specified output directory).
-
-The first run downloads the WD14 ONNX model from HuggingFace (~350 MB) and caches it under `~/.cache/huggingface/`.
-
-```bash
-# Describe all videos in a directory (captions written alongside each video)
-videsc --input-dir ./videos
-
-# Write captions to a separate directory
-videsc --input-dir ./videos --output-dir ./captions
-
-# Add a custom prefix token and lower the confidence threshold
-videsc --input-dir ./videos --prefix "ohwx man" --threshold 0.25
-
-# Sample more frames for a more thorough description
-videsc --input-dir ./videos --max-frames 20 --every-n 15
-
-# Describe a YouTube video (YouTube Data API v3 key required)
-videsc --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
-       --youtube-api-key "YOUR_API_KEY" --output-dir ./captions
-```
-
-### VL mode usage (`--vl`)
+Quick run (single character, default settings):
 
 ```bash
-# Describe a single video (output written to <video_dir>/desc-Qwen3-VL-8B-Instruct/)
-videsc --vl --video ./interview.mp4
-
-# Describe a single video with a custom prompt
-videsc --vl --video ./interview.mp4 \
-       --prompt "Describe the scene, characters, and key actions in detail."
-
-# Describe all .mp4 and .mov files in a directory
-videsc --vl --indir ./videos --ext .mp4 .mov
-
-# Describe videos matching a glob pattern, writing results to a specific directory
-videsc --vl --videos "./footage/**/*.mp4" --outdir ./captions
-
-# Use a text file listing one video path per line
-videsc --vl --filelist ./my_videos.txt --outdir ./captions
-
-# Use 4-bit quantisation for lower VRAM consumption
-videsc --vl --video ./clip.mp4 --quant 4bit
-
-# Enable audio transcription (requires soundfile and a Whisper model)
-videsc --vl --video ./clip.mp4 --audio
-
-# Use a locally downloaded model
-videsc --vl --video ./clip.mp4 --model /path/to/Qwen3-VL-8B-Instruct --model_full
-
-# Use Qwen3-Omni for multimodal (audio + video) understanding
-videsc --vl --video ./clip.mp4 --omni --model Qwen/Qwen3-Omni-8B --model_hf
+chararep -i input.mp4 -o output.mp4 \
+  --char originals/villain replacements/villain
 ```
 
-Output `.txt` files are placed alongside each video in a `desc-<model>` subdirectory by default, or in the directory specified by `--outdir`.
+Higher quality output (slower, better visual quality):
 
-### CLI reference
+```bash
+chararep -i input.mp4 -o output_hq.mp4 \
+  --char originals/villain replacements/villain \
+  --crf 14 --blend-mode seamless --enhance --enhance-weight 0.8
+```
 
-#### Mode
+Faster run (no enhancement, alpha blending):
 
-| Flag | Description |
-|------|-------------|
-| `--vl` | Use Qwen3-VL vision-language model instead of the WD14 tagger |
+```bash
+chararep -i input.mp4 -o output_fast.mp4 \
+  --char originals/villain replacements/villain \
+  --blend-mode alpha
+```
 
-#### WD14 mode arguments
+Multi-character replacement:
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--input-dir` | *(mutually exclusive with --youtube-url)* | Directory containing video files |
-| `--youtube-url` | *(mutually exclusive with --input-dir)* | YouTube video URL to download and describe |
-| `--youtube-api-key` | — | YouTube Data API v3 key (required with `--youtube-url`) |
-| `--output-dir` | alongside videos / cwd | Where to write `.txt` description files |
-| `--every-n` | `30` | Extract one frame every N frames |
-| `--max-frames` | `10` | Maximum key frames to process per video |
-| `--prefix` | `""` | Token(s) prepended to every description |
-| `--threshold` | `0.35` | Minimum WD14 tag confidence to include |
-| `--model-repo` | `SmilingWolf/wd-v1-4-convnextv2-tagger-v2` | HuggingFace model repo |
-| `--include-ratings` | — | Include rating tags (safe/questionable/explicit) |
-| `--no-skip-existing` | — | Re-describe videos whose `.txt` already exists |
+```bash
+chararep -i input.mp4 -o output.mp4 \
+  --char originals/villain replacements/villain \
+  --char originals/hero replacements/hero
+```
 
-#### VL mode arguments (`--vl`)
+SimSwap model with optional embedding converter:
 
-##### Input / output
+```bash
+chararep -i input.mp4 -o output_simswap.mp4 \
+  --char originals/villain replacements/villain \
+  --swap-model-path models/simswap_256.onnx \
+  --embedding-converter-path models/crossface_simswap.onnx
+```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--video` | — | Path to a single input video file |
-| `--videos` | — | One or more glob patterns matching video files *(mutually exclusive with --indir / --filelist)* |
-| `--indir` | — | Directory to scan recursively for video files *(mutually exclusive with --videos / --filelist)* |
-| `--filelist` | — | Text file containing one video path per line *(mutually exclusive with --videos / --indir)* |
-| `--ext` | *(all)* | File extensions to match when using `--indir` (e.g. `.mp4 .mov`) |
-| `--outdir` | `<video_dir>/desc-<model>` | Directory for output `.txt` description files |
+Run from JSON config:
 
-##### Batch processing
+```bash
+chararep --config swap_config.json
+```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--workers` | `2` | Number of videos to process in parallel |
-| `--batch-mode` | `threads` | `threads` – one shared model process; `subprocess` – one process per video |
-| `--sleep` | `0.25` | Polling interval in seconds for job supervision |
-| `--dry-run` | — | Print resolved commands without running them |
+Debug and diagnostics (verbose logs, timing report, config dump):
 
-##### Prompt
+```bash
+chararep -i input.mp4 -o output.mp4 \
+  --char originals/villain replacements/villain \
+  -v --timers --dump-config --log-file run.log
+```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--prompt` | `"First, list all distinct characters, actions, and any important visuals in several long, comprehensive paragraphs."` | User prompt sent to the model |
-| `--system` | `"You are a helpful assistant that writes clear, concise video descriptions."` | System prompt |
+## Input requirements and restrictions
 
-##### Model / runtime
+### Input video
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--model` | `Qwen/Qwen3-VL-8B-Instruct` | Model name (looked up under model_dir) or HF id / local path |
-| `--model_hf` | — | Treat `--model` as a HuggingFace model id or local directory |
-| `--model_full` | — | Treat `--model` as a full filesystem path |
-| `--omni` | — | Load as Qwen3-Omni (multimodal audio + video model) |
-| `--attn` | `flash_attention_2` | Attention implementation: `flash_attention_2`, `sdpa`, or `eager` |
-| `--quant` | `none` | Weight quantisation: `none`, `8bit`, or `4bit` |
-| `--max-new-tokens` | `8192` | Maximum tokens to generate |
-| `--optimize` | — | Compile the model with `torch.compile` for faster inference |
+| Property | Requirement | Notes |
+|---|---|---|
+| **Container format** | Any container supported by OpenCV/ffmpeg | `.mp4`, `.mkv`, `.mov`, `.avi`, `.webm` all work |
+| **Video codec** | Any codec decodable by OpenCV | H.264, H.265, VP9, ProRes, etc. |
+| **Colour space** | BGR / YUV420 | OpenCV decodes to BGR uint8 automatically |
+| **Frame size (width × height)** | Any resolution ≥ ~160 × 120 | Faces must be large enough to detect (see below) |
+| **Maximum resolution** | No hard limit; 4K is practical on ≥ 16 GB VRAM | Higher resolutions increase VRAM and processing time |
+| **Frame rate** | Any; float values supported | Stored in output unchanged |
+| **Duration / frame count** | No hard limit | Tested up to ~10 000 frames; longer videos work |
+| **Audio track** | Optional; any codec | Re-encoded to AAC in the output when `--no-audio` is not set |
+| **Variable frame rate (VFR)** | ⚠ Not recommended | OpenCV may miscount frames; convert to CFR first with `ffmpeg -vsync cfr` |
 
-##### Video decoding & frame sampling
+#### Minimum detectable face size
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--reader` | `decord` | Video reader backend: `auto`, `torchvision`, `decord`, or `torchcodec` |
-| `--spf` | `4.0` | Sampling interval in seconds per frame |
-| `--fps` | `1.0` | Approximate sampling frame rate |
-| `--num-frames` | `256` | Maximum frames to sample (the loader may adapt) |
-| `--stride` | `1` | Take 1 of every N frames after initial sampling |
-| `--clip-start` | `0.0` | Start time in seconds |
-| `--clip-end` | `-1.0` | End time in seconds (`-1` = full video) |
+The InsightFace RetinaFace detector processes every frame resized to **640 × 640** pixels internally.  A face must span at least **~32 × 32 pixels in that 640 × 640 space** to be reliably detected.
 
-##### Pixel / token budget
+To estimate the minimum face size for your video:
 
-These values are *edge multipliers*: the actual pixel count per frame is `value × 28 × 28` (e.g. `--max-pixels 1280` → 1 003 520 pixels per frame). Adjust them to trade off detail against VRAM usage and throughput.
+```
+min_face_width_px  = video_width  / 640 × 32  ≈  video_width  / 20
+min_face_height_px = video_height / 640 × 32  ≈  video_height / 20
+```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--min-pixels` | `128` | Per-frame minimum token budget as an edge multiplier (128 × 28² ≈ 100 K pixels) |
-| `--max-pixels` | `1280` | Per-frame maximum token budget as an edge multiplier (1280 × 28² ≈ 1 M pixels) |
-| `--total-pixels` | `24000` | Total token budget across the whole video as an edge multiplier (24000 × 28² ≈ 19 M pixels) |
+For example, in a **1920 × 1080** video a face must be at least **≈96 × 54 pixels**.
 
-##### Audio transcription
+> **Tip**: If faces are consistently missed, use footage where faces are larger in frame (zoom/crop/upscale before processing).
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--audio` | — | Enable Whisper-based audio transcription |
-| `--asr-model` | `openai/whisper-large-v3-turbo` | HuggingFace ASR model id |
-| `--max-audio-seconds` | `0.0` | Limit transcription to this many seconds from the start (`0` = no limit) |
-| `--no-save-transcript` | — | Do not write a separate `*.transcript.txt` file |
+#### Face size required for a high-quality swap
 
-##### Miscellaneous
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--no-think-trim` | — | Keep `<think>…</think>` reasoning tokens in the output |
-| `--cont_prompt` | — | Append a continuation prompt to generate longer output |
-| `--no_meta` | — | Skip metadata from `process_vision_info` |
-| `--rep_pen` | `1.05` | Repetition penalty |
-| `--seed` | `4051888` | Random seed |
-| `--half_cpu` | — | Limit PyTorch to half the available CPU cores |
-| `--dry` | — | Load the model but skip generation (for testing) |
+The `inswapper_128` model operates on **128 × 128** pixel crops extracted by the affine-alignment step.  Small faces (< ~64 px wide in the original frame) produce blurry or distorted swaps.  For best results aim for faces that are at least **128 × 128 pixels** in the source video.
 
 ---
 
-## Python API
+### Reference images (FIND folder)
 
-### portrait-prep
+These are photos of the **original face to locate** in the video.
 
-```python
-from pathlib import Path
-from portrait_prep.convert import convert_folder
-from portrait_prep.crop import crop_folder
-from portrait_prep.caption import caption_folder
-from portrait_prep.augment import augment_folder
-from portrait_prep.cpcap import copy_captions
-
-# 1. Convert
-convert_folder(Path("raw"), Path("png_out"))
-
-# 2. Crop
-crop_folder(Path("png_out"), Path("cropped"), classify=True)
-
-# 3. Caption
-caption_folder(Path("cropped"), prefix="ohwx man", threshold=0.35)
-
-# 4. Augment
-augment_folder(Path("cropped"), Path("augmented"), per_image=8, keep_originals=True)
-
-# 5. Copy captions
-copy_captions(Path("cropped"), Path("augmented"))
-```
-
-### vicrop
-
-```python
-from pathlib import Path
-from vicrop.crop import crop_folder, crop_video
-
-# Process a single video
-stats = crop_video(
-    Path("interview.mp4"),
-    Path("frames"),
-    every_n=30,
-    crop_size=1024,
-    classify=True,
-)
-print(stats)  # {'frames_processed': 20, 'faces': 5, 'persons': 1}
-
-# Process all videos in a directory
-stats = crop_folder(Path("videos"), Path("frames"))
-```
-
-### videsc
-
-```python
-from pathlib import Path
-from videsc.describe import describe_folder, describe_video, describe_youtube
-
-# Describe a single video
-stats = describe_video(
-    Path("interview.mp4"),
-    prefix="ohwx man",
-    threshold=0.35,
-)
-print(stats)  # {'described': 1, 'skipped': 0}
-
-# Describe all videos in a directory
-stats = describe_folder(
-    Path("videos"),
-    output_dir=Path("captions"),
-    prefix="ohwx man",
-)
-
-# Describe a YouTube video (YouTube Data API v3 key required; yt-dlp must be installed)
-stats = describe_youtube(
-    "https://www.youtube.com/watch?v=VIDEO_ID",
-    youtube_api_key="YOUR_API_KEY",
-    output_dir=Path("captions"),
-    prefix="ohwx man",
-)
-print(stats)  # {'described': 1, 'skipped': 0}
-```
+| Property | Requirement | Notes |
+|---|---|---|
+| **File formats** | `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.tiff`, `.tif` | Case-insensitive extensions |
+| **Minimum number** | 1 image | More images improve recognition robustness |
+| **Recommended number** | 3–10 images | Diverse angles/lighting improve ArcFace mean embedding quality |
+| **Maximum number** | No hard limit | Each image is encoded once at startup |
+| **Image dimensions** | Any size that allows face detection | The same 640 × 640 det_size applies; faces < 32 px in the scaled image will not be encoded |
+| **Recommended minimum face size** | ≥ 128 × 128 px in the reference image | Ensures a high-quality ArcFace embedding |
+| **Colour space** | BGR / RGB (standard photos) | OpenCV decodes all common formats automatically |
+| **Number of faces** | Exactly 1 clearly visible face per image | The **largest** detected face by bounding-box area is used; extra faces are ignored |
+| **Face occlusion** | Minimal | Sunglasses, heavy makeup, profile angles > ~60° degrade embedding quality and matching accuracy |
+| **Lighting** | Varied lighting recommended | Homogeneous lighting in all reference images biases the mean embedding |
 
 ---
 
-## Running tests
+### Portrait images (REPLACE folder)
 
-```bash
-pip install -e ".[dev]"
-pytest
-```
+These are photos of the **new face to swap in**.
 
-The `[dev]` extra pulls in `pytest` and `pytest-cov`. Test paths and verbosity
-are configured in `pyproject.toml` so no extra flags are needed.
+| Property | Requirement | Notes |
+|---|---|---|
+| **File formats** | Same as reference images | `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.tiff`, `.tif` |
+| **Minimum number** | 1 image | Only the first portrait is used by the swap engine at runtime |
+| **Recommended number** | 1–3 frontal-face images | Portraits are ranked by detection confidence; the highest-scoring one is passed to `inswapper` |
+| **Image dimensions** | Any size; face must be detectable | Same 640 × 640 detection constraint applies |
+| **Recommended face size** | ≥ 128 × 128 px | Larger faces yield sharper inswapper results |
+| **Face orientation** | Near-frontal preferred (< 30° yaw/pitch) | `inswapper_128` performs best with frontal faces; profiles may produce artefacts |
+| **Colour space** | Standard BGR / RGB photos | |
+| **Number of faces** | Exactly 1 clearly visible face | Largest-by-area face is selected automatically |
+| **Background** | Any | The swap engine only uses the aligned face crop, not the background |
 
-Heavy dependencies (`onnxruntime`, `face_recognition`) are mocked in the test
-suite so the full suite runs without a GPU or dlib installation.
+---
 
-To run tests for a specific tool:
+### Maximum characters (simultaneous face replacements)
 
-```bash
-# portrait-prep
-pytest tests/test_convert.py
-pytest tests/test_cpcap.py
-pytest tests/test_augment.py
+The pipeline supports **up to 3 character replacements** in a single run.  This limit exists because:
 
-# vicrop
-pytest tests/test_vicrop.py
+- The ArcFace gallery comparison is O(faces × characters) per frame.
+- `inswapper_128` swaps are applied sequentially; more swaps increases per-frame latency.
+- Memory footprint of three independent ONNX inference sessions.
 
-# videsc (WD14 and VL modes)
-pytest tests/test_videsc.py
-pytest tests/test_videsc_main.py
-```
+To replace more than 3 characters, run the pipeline in multiple passes.
 
-Generate a coverage report:
+---
 
-```bash
-pytest --cov=portrait_prep --cov=vicrop --cov=videsc --cov-report=term-missing
-```
+### VRAM requirements (guidelines)
+
+| Configuration | Estimated VRAM |
+|---|---|
+| Detection + swap only (no GFPGAN) | ~3–4 GB |
+| Detection + swap + GFPGAN v1.4 | ~6–8 GB |
+| 4K video, 3 characters, GFPGAN | ~12–16 GB |
+
+
+
+1. **Detection & Tracking**: Each frame is processed by InsightFace's RetinaFace detector. A lightweight IoU tracker maintains consistent face IDs across frames.
+
+2. **Identity Matching**: ArcFace embeddings are computed for each detected face and compared (cosine similarity) against the **recognition gallery** built from the *find* folder images. Faces matching above the similarity threshold are queued for swapping with the corresponding *replace* identity.
+
+3. **Face Swap**: The `inswapper_128` model transfers the target identity onto the source face while preserving the source's expression and head pose.
+
+4. **Enhancement**: GFPGAN restores fine details and removes swap artefacts.
+
+5. **Blending**: Poisson seamless cloning (or alpha blending) smooths the seam between the swapped face and the original frame.
+
+6. **Output**: Frames are encoded via ffmpeg with the original audio muxed back in.
+
+## Performance notes
+
+- **Threaded I/O**: Video decode and encode run in separate threads so the GPU is never idle waiting on disk.
+- **FP16 inference**: All ONNX models run with CUDAExecutionProvider in FP16 precision (Tensor Cores on RTX 5090).
+- **Pinned memory**: Frame buffers use page-locked memory for faster GPU transfers.
+- **5-minute video** (~9,000 frames at 30 fps): processing depends on the number of faces per frame and enhancement settings.
+
+## Module overview
+
+| File | Responsibility |
+|---|---|
+| `config.py` | Dataclass-based configuration |
+| `gpu_utils.py` | CUDA/ONNX provider setup, GPU diagnostics |
+| `video_io.py` | Threaded video reader & ffmpeg-based writer |
+| `face_detector.py` | Face detection (RetinaFace) + IoU tracker |
+| `face_recognizer.py` | ArcFace gallery + identity matching |
+| `face_swapper.py` | inswapper_128 face transfer |
+| `face_enhancer.py` | GFPGAN face restoration |
+| `face_blender.py` | Poisson / alpha mask blending |
+| `pipeline.py` | End-to-end pipeline orchestrator |
+| `main.py` | CLI argument parsing & entry point |
+
+## License
+
+This pipeline integrates several open-source components. Ensure you comply with their respective licenses:
+- InsightFace / inswapper: check the InsightFace license terms
+- GFPGAN: Apache 2.0
+- OpenCV: Apache 2.0

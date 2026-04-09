@@ -1,18 +1,9 @@
-venv/
 __pycache__/
 *.pyc
-.DS_Store
-.idea/
-*.log
-*.sqlite3
-*.env
+# Ignore virtual environments
+venv/
+env/
 *.egg-info/
-*.mp4
-*.mp3
-*.txt
+test*/
 .coverage
-htmlcov/    
-dist/
-*.png
-*.jpg
-*.jpeg
+!tests/

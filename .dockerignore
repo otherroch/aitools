@@ -2,9 +2,11 @@
 !pyproject.toml
 !.dockerignore
 !README.md
-!portrait_prep/
-!vicrop/
-!vicdesc/
-!main.py
-!tests/
-!venv/
+!*.py
+!tests
+!requirements.txt
+!LICENSE
+!chararep.egg-info
+**__pycache__/
+*.pyc
+# Ignore everything else

@@ -1,74 +1,57 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aitools"
+name = "chararep"
 version = "0.1.0"
-description = "AI dataset preparation toolkit: portrait prep, video face-crop, and video description"
+description = "Face-swap character replacement video pipeline"
+authors = [{ name = "chararep developers", email = "dev@chararep.example.com" }]
 readme = "README.md"
-license = { file = "LICENSE" }
-requires-python = ">=3.10"
-keywords = ["diffusion", "lora", "dataset", "portrait", "video", "augmentation", "captioning"]
+license = { text = "MIT" }
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Multimedia :: Graphics",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Graphics :: Editors :: Video",
 ]
-
-[dependency-groups]
-base = [
-    "albumentations>=1.4.0",
-    "opencv-python>=4.9.0",
-    "Pillow>=10.0.0",
-    "pillow-heif>=0.16.0",
-    "face_recognition>=1.3.0",
-    "numpy>=1.24.0",
-    "tqdm>=4.66.0",
-    "onnxruntime>=1.17.0",
-    "huggingface_hub>=0.22.0",
-]
-gpu = ["onnxruntime-gpu>=1.17.0"]
-youtube = ["yt-dlp"]
-vl = [
-    "torch",
-    "torchvision",
-    "torchcodec",
-    "transformers>=4.57.3",
-    "accelerate",
-    "bitsandbytes",
-    "soundfile",
-    "qwen-vl-utils",
-    "qwen-omni-utils",
-    "torchsummary",
-    "decord; platform_machine not in 'arm aarch64 arm64 armv7l armv8l'",  # decord not supported on ARM
-]
-dev = ["pytest>=8.0", "pytest-cov"]
+requires-python = ">=3.10"
 
 [project.scripts]
-portrait-prep = "portrait_prep.cli:main"
-vicrop = "vicrop.cli:main"
-videsc = "videsc.main:main"
+chararep = "main:main"
 
-[project.urls]
-Repository = "https://github.com/otherroch/aitools"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["portrait_prep*", "vicrop*", "videsc*"]
+[tool.setuptools]
+py-modules = [
+    "main",
+    "config",
+    "pipeline",
+    "face_blender",
+    "face_detector",
+    "face_enhancer",
+    "face_recognizer",
+    "face_swapper",
+    "gpu_utils",
+    "video_io",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+addopts = "--tb=short"
 
 [tool.coverage.run]
-source = ["portrait_prep", "vicrop", "videsc"]
+source = [
+    "config",
+    "video_io",
+    "face_blender",
+    "face_detector",
+    "face_recognizer",
+    "face_enhancer",
+    "face_swapper",
+    "gpu_utils",
+    "pipeline",
+    "main",
+]
 omit = ["tests/*"]
 
 [tool.coverage.report]
@@ -82,3 +65,4 @@ exclude_also = [
 "except ImportError:",
 "parser.error",
 ]
+
