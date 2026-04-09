@@ -203,7 +203,24 @@ class VideoWriter:
         self._queue.put(frame)
 
     def stop(self) -> None:
-        self._queue.put(_EOS)
+        self._stop_event.set()
+
+        eos_enqueued = False
+        while not eos_enqueued:
+            try:
+                self._queue.put(_EOS, timeout=0.1)
+                eos_enqueued = True
+            except Full:
+                if self._thread is None or not self._thread.is_alive():
+                    break
+                try:
+                    while True:
+                        item = self._queue.get_nowait()
+                        if item is _EOS:
+                            eos_enqueued = True
+                            break
+                except Empty:
+                    pass
         if self._thread is not None:
             self._thread.join(timeout=60)
         if self._proc is not None:
