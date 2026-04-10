@@ -145,7 +145,7 @@ class InsightFaceBackend:
         results: list[DetectedFace] = []
         for f in faces:
             x1, y1, x2, y2 = f.bbox.astype(int)
-            bbox: FaceBBox = (int(y1), int(x2), int(y2), int(x1))
+            bbox: FaceBBox = (y1, x2, y2, x1)
 
             emb = None
             if hasattr(f, "normed_embedding") and f.normed_embedding is not None:

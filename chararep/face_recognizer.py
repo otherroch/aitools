@@ -139,29 +139,29 @@ class FaceRecognizer:
                 # image encoder can use it directly without needing the
                 # original image again at swap time.
                 raw_face = best.raw
-                if best.landmarks is not None and raw_face is not None:
-                    M, _ = cv2.estimateAffinePartial2D(
-                        best.landmarks, _ARCFACE_112_V1, method=cv2.RANSAC
-                    )
-                    if M is not None:
-                        raw_face.arcface_crop = cv2.warpAffine(
-                            img, M, (112, 112), flags=cv2.INTER_LINEAR
-                        )
-                        # blendswap uses the same template (arcface_112_v2 ≡
-                        # _ARCFACE_112_V1); alias intentionally shares the
-                        # same array since both attributes are read-only at
-                        # swap time.
-                        raw_face.portrait_crop_arcv2 = raw_face.arcface_crop
-
-                    # Pre-warp to 256×256 (ffhq_512 template) for uniface source.
-                    M_ffhq, _ = cv2.estimateAffinePartial2D(
-                        best.landmarks, _FFHQ_512_256, method=cv2.RANSAC
-                    )
-                    if M_ffhq is not None:
-                        raw_face.portrait_crop_ffhq = cv2.warpAffine(
-                            img, M_ffhq, (256, 256), flags=cv2.INTER_LINEAR
-                        )
                 if raw_face is not None:
+                    if best.landmarks is not None:
+                        M, _ = cv2.estimateAffinePartial2D(
+                            best.landmarks, _ARCFACE_112_V1, method=cv2.RANSAC
+                        )
+                        if M is not None:
+                            raw_face.arcface_crop = cv2.warpAffine(
+                                img, M, (112, 112), flags=cv2.INTER_LINEAR
+                            )
+                            # blendswap uses the same template (arcface_112_v2 ≡
+                            # _ARCFACE_112_V1); alias intentionally shares the
+                            # same array since both attributes are read-only at
+                            # swap time.
+                            raw_face.portrait_crop_arcv2 = raw_face.arcface_crop
+
+                        # Pre-warp to 256×256 (ffhq_512 template) for uniface source.
+                        M_ffhq, _ = cv2.estimateAffinePartial2D(
+                            best.landmarks, _FFHQ_512_256, method=cv2.RANSAC
+                        )
+                        if M_ffhq is not None:
+                            raw_face.portrait_crop_ffhq = cv2.warpAffine(
+                                img, M_ffhq, (256, 256), flags=cv2.INTER_LINEAR
+                            )
                     faces.append(raw_face)
                 logger.debug("appended face image: %s", p)
             else:
