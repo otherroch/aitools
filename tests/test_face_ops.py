@@ -28,6 +28,7 @@ from face_ops import (
 )
 from face_ops.backend import FaceBackend as FaceBackendProtocol
 from face_ops.insightface_backend import InsightFaceBackend
+from face_ops.mixin import FaceBackendMixin
 from face_ops.types import Encoding, FaceBBox
 
 
@@ -42,7 +43,7 @@ def _make_png(path: Path, size: tuple = (100, 100)) -> Path:
     return path
 
 
-class _StubBackend:
+class _StubBackend(FaceBackendMixin):
     """Minimal backend for testing clustering/ref-loading in isolation.
     
     Inherits ``cluster_faces`` and ``load_reference_encodings`` from
@@ -87,11 +88,6 @@ class _StubBackend:
 
     def face_landmarks(self, image, face_locations):
         return [None] * len(face_locations)
-
-    # Delegate to mixin for cluster_faces / load_reference_encodings
-    from face_ops.mixin import FaceBackendMixin as _Mixin
-    cluster_faces = _Mixin.cluster_faces
-    load_reference_encodings = _Mixin.load_reference_encodings
 
 
 # ---------------------------------------------------------------------------
