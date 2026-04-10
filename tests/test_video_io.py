@@ -166,7 +166,6 @@ class TestVideoReaderIteration:
             mock_cap_cls.return_value = _make_fake_capture(frames=[])
             reader = VideoReader("fake.mp4", queue_size=4)
 
-        collected = list(reader.__iter__() if False else [])
         with reader:
             collected = [f for f in reader]
 
@@ -189,19 +188,22 @@ class TestVideoReaderIteration:
         assert first is not None
         assert second is None
 
-    def test_read_returns_none_when_stopped(self):
-        """read() returns None when stop_event is set and queue is empty."""
+    def test_read_returns_none_when_stop_event_set(self):
+        """read() returns None when stop_event is set before any data arrives."""
         from chararep.video_io import VideoReader
 
         with patch("chararep.video_io.cv2.VideoCapture") as mock_cap_cls:
             mock_cap_cls.return_value = _make_fake_capture(frames=[])
             reader = VideoReader("fake.mp4", queue_size=4)
 
+        # Set the stop event before starting so the decode thread exits immediately
+        # and no EOS is placed in the queue; read() must detect the stopped state.
+        reader._stop_event.set()
         reader.start()
-        # Give the decode thread a moment to finish and put _EOS
-        time.sleep(0.1)
-        result = reader.read(timeout=0.5)
-        reader.stop()
+        if reader._thread is not None:
+            reader._thread.join(timeout=2)
+        result = reader.read(timeout=0.2)
+        reader._cap.release()
         assert result is None
 
 
