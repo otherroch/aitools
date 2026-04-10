@@ -16,7 +16,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from face_ops import backend_for_model
+from face_ops import backend_for_model, _DLIB_MODELS
 from face_ops.backend import FaceBackend
 
 from .config import PipelineConfig
@@ -38,9 +38,6 @@ class TrackedFace:
     identity_sim: float = 0.0  # confidence of the last identity match
     # The backend-specific face object for the swap engine
     face_obj: object = None
-
-
-_DLIB_MODELS = frozenset({"dlib", "hog", "cnn"})
 
 
 class FaceDetector:
