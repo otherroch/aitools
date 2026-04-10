@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from portrait_prep.face_utils import load_reference_encodings
 from vicrop.crop import (
     SUPPORTED_VIDEO_EXTS,
     DEFAULT_EVERY_N_FRAMES,

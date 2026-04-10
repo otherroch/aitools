@@ -30,6 +30,7 @@ from face_ops.clustering import (
     cluster_faces,
     load_reference_encodings,
 )
+from face_ops.testing import MockBackendShim, backend_from_fr
 from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 __all__ = [
@@ -45,6 +46,9 @@ __all__ = [
     "cluster_faces",
     "load_reference_encodings",
     "SUPPORTED_IMAGE_EXTS",
+    # testing / compat
+    "MockBackendShim",
+    "backend_from_fr",
 ]
 
 

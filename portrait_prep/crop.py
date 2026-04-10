@@ -24,17 +24,28 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from portrait_prep.face_utils import (
-    DEFAULT_CROP_SIZE,
-    DEFAULT_MARGIN_RATIO,
-    cluster_faces as _cluster_faces_shared,
-    load_face_recognition as _load_face_recognition,
-    load_reference_encodings,
-)
+from face_ops import cluster_faces as _cluster_faces_backend, load_reference_encodings
+from face_ops.testing import backend_from_fr as _backend_from_fr
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MARGIN_RATIO: float = 0.4
+DEFAULT_CROP_SIZE: int = 1024
+
 SUPPORTED_EXTS: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
+
+
+def _load_face_recognition():
+    """Lazily import the face_recognition package, raising a clear error if absent."""
+    try:
+        import face_recognition
+
+        return face_recognition
+    except ImportError as exc:
+        raise ImportError(
+            "face_recognition is required for the crop task.\n"
+            "Install it with: pip install face_recognition"
+        ) from exc
 
 
 def crop_faces_from_image(
@@ -116,11 +127,12 @@ def _cluster_faces(
 ) -> dict[str, list[Path]]:
     """Group saved face crops by identity using face distance clustering.
 
-    Delegates to :func:`portrait_prep.face_utils.cluster_faces`.
+    Delegates to :func:`face_ops.cluster_faces`.
     """
     fr = _load_face_recognition()
-    return _cluster_faces_shared(
-        all_results, output_dir, tolerance=tolerance, fr=fr,
+    backend = _backend_from_fr(fr)
+    return _cluster_faces_backend(
+        all_results, output_dir, backend, tolerance=tolerance,
         reference_encodings=reference_encodings,
         reference_names=reference_names,
     )
@@ -196,8 +208,10 @@ def crop_folder(
         ref_enc: list[np.ndarray] | None = None
         ref_names: list[str] | None = None
         if classified_path is not None:
+            fr = _load_face_recognition()
+            backend = _backend_from_fr(fr)
             ref_enc, ref_names = load_reference_encodings(
-                classified_path, model=model,
+                classified_path, backend, model=model,
                 max_per_identity=classified_max,
             )
         person_dirs = _cluster_faces(

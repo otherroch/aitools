@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from portrait_prep.crop import crop_folder
-from portrait_prep.face_utils import cluster_faces, load_reference_encodings
 from portrait_prep.cpcap import infer_original_stem
+
+from face_ops import cluster_faces, load_reference_encodings
+from face_ops.testing import MockBackendShim
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +162,6 @@ def _run_crop_folder_mocked(
 
 class TestLoadReferenceEncodings:
     def test_loads_encodings_from_identity_dirs(self, tmp_path):
-        from unittest.mock import MagicMock, patch
-
         ref_dir = tmp_path / "classified"
         (ref_dir / "alice").mkdir(parents=True)
         _make_png(ref_dir / "alice" / "ref1.png")
@@ -181,33 +181,35 @@ class TestLoadReferenceEncodings:
             call_counter["n"] += 1
             return [enc_a] if idx < 2 else [enc_b]
 
+        from unittest.mock import MagicMock
+
         fr_mock = MagicMock()
         fr_mock.load_image_file.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
         fr_mock.face_locations.side_effect = mock_face_locations
         fr_mock.face_encodings.side_effect = mock_face_encodings
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            encodings, names = load_reference_encodings(ref_dir)
+        backend = MockBackendShim(fr_mock)
+        encodings, names = load_reference_encodings(ref_dir, backend)
 
         assert len(encodings) == 3
         assert names.count("alice") == 2
         assert names.count("bob") == 1
 
     def test_empty_classified_dir(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         ref_dir = tmp_path / "classified"
         ref_dir.mkdir()
 
         fr_mock = MagicMock()
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            encodings, names = load_reference_encodings(ref_dir)
+        backend = MockBackendShim(fr_mock)
+        encodings, names = load_reference_encodings(ref_dir, backend)
 
         assert len(encodings) == 0
         assert len(names) == 0
 
     def test_no_face_in_reference_image(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         ref_dir = tmp_path / "classified"
         (ref_dir / "alice").mkdir(parents=True)
@@ -218,13 +220,13 @@ class TestLoadReferenceEncodings:
         fr_mock.face_locations.return_value = []
         fr_mock.face_encodings.return_value = []
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            encodings, names = load_reference_encodings(ref_dir)
+        backend = MockBackendShim(fr_mock)
+        encodings, names = load_reference_encodings(ref_dir, backend)
 
         assert len(encodings) == 0
 
     def test_max_per_identity_limits_loaded_encodings(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         ref_dir = tmp_path / "classified"
         (ref_dir / "alice").mkdir(parents=True)
@@ -237,8 +239,8 @@ class TestLoadReferenceEncodings:
         fr_mock.face_locations.return_value = [(10, 90, 90, 10)]
         fr_mock.face_encodings.return_value = [np.zeros(128)]
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            encodings, names = load_reference_encodings(ref_dir, max_per_identity=2)
+        backend = MockBackendShim(fr_mock)
+        encodings, names = load_reference_encodings(ref_dir, backend, max_per_identity=2)
 
         assert len(encodings) == 2
         assert names.count("alice") == 2
@@ -252,7 +254,7 @@ class TestLoadReferenceEncodings:
 class TestClusterFacesWithReferences:
     def test_new_face_matches_reference_uses_original_name(self, tmp_path):
         """A new face close to a reference encoding uses the reference folder name."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         staging = tmp_path / "staging"
         staging.mkdir()
@@ -264,21 +266,22 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([0.0])
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            result = cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["alice"],
-            )
+        backend = MockBackendShim(fr_mock)
+        result = cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            backend,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["alice"],
+        )
 
         assert "alice" in result
         assert (tmp_path / "alice" / "face1.png").exists()
 
     def test_unknown_face_gets_person_nn_label(self, tmp_path):
         """A face far from all references creates a new person_NN folder."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         staging = tmp_path / "staging"
         staging.mkdir()
@@ -290,14 +293,15 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([1.5])
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            result = cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["alice"],
-            )
+        backend = MockBackendShim(fr_mock)
+        result = cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            backend,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["alice"],
+        )
 
         assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
@@ -305,7 +309,7 @@ class TestClusterFacesWithReferences:
 
     def test_person_nn_numbering_avoids_reference_collision(self, tmp_path):
         """Auto-generated labels start after any person_NN in the references."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         staging = tmp_path / "staging"
         staging.mkdir()
@@ -317,14 +321,15 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([1.5])
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            result = cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["person_05"],
-            )
+        backend = MockBackendShim(fr_mock)
+        result = cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            backend,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["person_05"],
+        )
 
         # Should skip person_01..05 and start at person_06
         assert "person_06" in result
@@ -332,7 +337,7 @@ class TestClusterFacesWithReferences:
 
     def test_no_folder_created_for_unmatched_reference(self, tmp_path):
         """Reference identity folder is NOT created if no new photos match it."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         staging = tmp_path / "staging"
         staging.mkdir()
@@ -344,14 +349,15 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([1.5])
 
-        with patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
-            result = cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["alice"],
-            )
+        backend = MockBackendShim(fr_mock)
+        result = cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            backend,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["alice"],
+        )
 
         # alice had no match → no alice/ folder
         assert not (tmp_path / "alice").exists()
@@ -400,8 +406,7 @@ class TestCropFolderWithClassifiedPath:
         fr_mock.face_distance.side_effect = mock_face_distance
 
         out_dir = tmp_path / "out"
-        with patch("portrait_prep.crop._load_face_recognition", return_value=fr_mock), \
-             patch("portrait_prep.face_utils.load_face_recognition", return_value=fr_mock):
+        with patch("portrait_prep.crop._load_face_recognition", return_value=fr_mock):
             result = crop_folder(
                 in_dir, out_dir, classify=True,
                 classified_path=tmp_path / "classified",
