@@ -1,8 +1,8 @@
 """Face identity recognition and matching against portrait galleries.
 
-Uses ArcFace embeddings from the shared InsightFace ``FaceAnalysis``
-model (loaded once by ``FaceDetector``) to build two galleries per
-character:
+Uses ArcFace embeddings from the shared
+:class:`face_ops.insightface_backend.InsightFaceBackend` (loaded once
+by ``FaceDetector``) to build two galleries per character:
 
 *   **Recognition gallery** (from ``reference_paths``):
     embeddings of the original character in the video, used to
@@ -17,7 +17,8 @@ import logging
 
 import cv2
 import numpy as np
-from insightface.app import FaceAnalysis
+
+from face_ops.insightface_backend import InsightFaceBackend
 
 from .config import CharacterMapping, PipelineConfig
 from .face_detector import TrackedFace
@@ -85,8 +86,9 @@ class TargetIdentity:
 class FaceRecognizer:
     """Computes ArcFace embeddings and matches detected faces to targets.
 
-    Accepts an *existing* ``FaceAnalysis`` instance (from ``FaceDetector``)
-    so that the heavy ONNX models are loaded into VRAM only once.
+    Accepts an *existing* :class:`InsightFaceBackend` instance (from
+    ``FaceDetector``) so that the heavy ONNX models are loaded into
+    VRAM only once.
 
     On initialisation it encodes reference images (find folder) into
     the recognition gallery and portrait images (replace folder) into
@@ -95,9 +97,9 @@ class FaceRecognizer:
     gallery and assigns identity labels.
     """
 
-    def __init__(self, cfg: PipelineConfig, app: FaceAnalysis):
+    def __init__(self, cfg: PipelineConfig, backend: InsightFaceBackend):
         self._cfg = cfg
-        self._app = app  # shared – DO NOT re-prepare / reload
+        self._backend = backend  # shared – DO NOT re-prepare / reload
         self._targets: list[TargetIdentity] = []
         self._build_gallery(cfg.characters)
 
@@ -119,7 +121,7 @@ class FaceRecognizer:
                 logger.warning("Could not read %s image: %s", kind, p)
                 continue
             logger.debug("looking at %s image: %s", kind, p)
-            detected = self._app.get(img)
+            detected = self._backend.app.get(img)
             if not detected:
                 logger.warning("No face detected in %s image: %s", kind, p)
                 continue

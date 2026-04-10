@@ -361,6 +361,34 @@ class TestInsightFaceDistance:
 
 
 # ---------------------------------------------------------------------------
+# InsightFaceBackend extended init & app property
+# ---------------------------------------------------------------------------
+
+
+class TestInsightFaceBackendInit:
+    """Test the InsightFaceBackend's configurable __init__ and app property."""
+
+    def test_app_property_returns_face_analysis(self):
+        """The ``app`` property exposes the underlying FaceAnalysis."""
+        backend = InsightFaceBackend()
+        assert backend.app is not None
+        # Should have a 'get' method (the FaceAnalysis stub from conftest)
+        assert hasattr(backend.app, "get")
+
+    def test_custom_providers_accepted(self):
+        """Passing explicit providers bypasses the auto-detection path."""
+        backend = InsightFaceBackend(
+            providers=[("CPUExecutionProvider", {})],
+        )
+        assert backend.app is not None
+
+    def test_det_thresh_forwarded(self):
+        """The det_thresh parameter is accepted without error."""
+        backend = InsightFaceBackend(det_thresh=0.3)
+        assert backend.app is not None
+
+
+# ---------------------------------------------------------------------------
 # FaceBBox / Encoding type aliases
 # ---------------------------------------------------------------------------
 

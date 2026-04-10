@@ -115,6 +115,19 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
         assert det.app is not None
 
+    def test_backend_is_insightface_backend(self):
+        """FaceDetector creates an InsightFaceBackend from face_ops."""
+        from face_ops.insightface_backend import InsightFaceBackend
+        cfg = _make_cfg()
+        det = FaceDetector(cfg)
+        assert isinstance(det.backend, InsightFaceBackend)
+
+    def test_app_delegates_to_backend(self):
+        """det.app is the same object as det.backend.app."""
+        cfg = _make_cfg()
+        det = FaceDetector(cfg)
+        assert det.app is det.backend.app
+
     def test_detect_empty_frame_no_faces(self):
         """When the stub returns no faces, detect() returns empty list."""
         cfg = _make_cfg()
@@ -129,7 +142,7 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
 
         fake_face = _make_face([10, 10, 60, 60])
-        monkeypatch.setattr(det._app, "get", lambda img: [fake_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [fake_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         result = det.detect(frame)
@@ -143,7 +156,7 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
 
         fake_face = _make_face([10, 10, 60, 60])
-        monkeypatch.setattr(det._app, "get", lambda img: [fake_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [fake_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         det.detect(frame)
@@ -158,13 +171,13 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
 
         fake_face = _make_face([10, 10, 60, 60])
-        monkeypatch.setattr(det._app, "get", lambda img: [fake_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [fake_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         det.detect(frame)
 
         # Now no faces – track should age
-        monkeypatch.setattr(det._app, "get", lambda img: [])
+        monkeypatch.setattr(det.app, "get", lambda img: [])
 
         det.detect(frame)  # age 1
         det.detect(frame)  # age 2
@@ -177,12 +190,12 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
 
         fake_face = _make_face([10, 10, 60, 60])
-        monkeypatch.setattr(det._app, "get", lambda img: [fake_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [fake_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         det.detect(frame)
 
-        monkeypatch.setattr(det._app, "get", lambda img: [])
+        monkeypatch.setattr(det.app, "get", lambda img: [])
         result = det.detect(frame)  # age 1 – should still be retained
         assert len(result) == 1
         assert result[0].age_since_seen == 1
@@ -193,12 +206,12 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
 
         fake_face = _make_face([10, 10, 60, 60])
-        monkeypatch.setattr(det._app, "get", lambda img: [fake_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [fake_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         det.detect(frame)
 
-        monkeypatch.setattr(det._app, "get", lambda img: [])
+        monkeypatch.setattr(det.app, "get", lambda img: [])
         det.detect(frame)  # face ages
 
         active = det.active_tracks()
@@ -215,7 +228,7 @@ class TestFaceDetector:
             kps=np.array([[10, 10], [20, 10], [15, 20], [12, 28], [22, 28]]),
             normed_embedding=None,
         )
-        monkeypatch.setattr(det._app, "get", lambda img: [no_emb_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [no_emb_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         result = det.detect(frame)
@@ -229,7 +242,7 @@ class TestFaceDetector:
 
         bbox = [10, 10, 60, 60]
         fake_face = _make_face(bbox)
-        monkeypatch.setattr(det._app, "get", lambda img: [fake_face])
+        monkeypatch.setattr(det.app, "get", lambda img: [fake_face])
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         result = det.detect(frame)
@@ -244,7 +257,7 @@ class TestFaceDetector:
         det = FaceDetector(cfg)
 
         faces = [_make_face([0, 0, 30, 30]), _make_face([100, 100, 150, 150])]
-        monkeypatch.setattr(det._app, "get", lambda img: faces)
+        monkeypatch.setattr(det.app, "get", lambda img: faces)
 
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         result = det.detect(frame)

@@ -1,9 +1,12 @@
 """Face detection and lightweight IoU-based tracking.
 
-Uses InsightFace's RetinaFace detector for bounding boxes + 5-point
-landmarks, wrapped with a greedy IoU tracker that maintains temporally
-consistent track IDs.  The shared ``FaceAnalysis`` instance is also
-used by the recognizer so we avoid loading duplicate models.
+Uses the shared :class:`face_ops.insightface_backend.InsightFaceBackend`
+for face detection (RetinaFace) and encoding (ArcFace), wrapped with a
+greedy IoU tracker that maintains temporally consistent track IDs.
+
+The ``InsightFaceBackend`` instance is exposed via the :attr:`backend`
+property so that it can be shared with ``FaceRecognizer`` (avoids
+loading duplicate ONNX models into VRAM).
 """
 
 import logging
@@ -12,7 +15,8 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from insightface.app import FaceAnalysis
+
+from face_ops.insightface_backend import InsightFaceBackend
 
 from .config import PipelineConfig
 from .gpu_utils import get_onnx_providers
@@ -41,9 +45,9 @@ class FaceDetector:
     Each call to ``detect(frame)`` returns a list of TrackedFace objects
     with temporally-consistent ``track_id`` values.
 
-    The internal ``FaceAnalysis`` model is exposed via the ``app``
-    property so it can be shared with ``FaceRecognizer`` (avoids loading
-    duplicate ONNX models into VRAM).
+    The internal :class:`InsightFaceBackend` is exposed via the
+    :attr:`backend` property so it can be shared with
+    ``FaceRecognizer`` (avoids loading duplicate ONNX models into VRAM).
     """
 
     def __init__(self, cfg: PipelineConfig):
@@ -52,14 +56,12 @@ class FaceDetector:
         self._tracks: list[TrackedFace] = []
 
         providers = get_onnx_providers(cfg.device_id)
-        self._app = FaceAnalysis(
-            name=cfg.detection_model,
-            providers=providers,
-        )
-        self._app.prepare(
+        self._backend = InsightFaceBackend(
+            model_name=cfg.detection_model,
             ctx_id=cfg.device_id,
             det_size=cfg.detection_size,
             det_thresh=cfg.detection_threshold,
+            providers=providers,
         )
         logger.info(
             "FaceDetector ready (model=%s, det_size=%s).",
@@ -68,13 +70,18 @@ class FaceDetector:
         )
 
     @property
-    def app(self) -> FaceAnalysis:
-        """Shared FaceAnalysis instance (detector + recognizer models)."""
-        return self._app
+    def backend(self) -> InsightFaceBackend:
+        """Shared :class:`InsightFaceBackend` instance."""
+        return self._backend
+
+    @property
+    def app(self):
+        """Shared FaceAnalysis instance (backward-compatible shortcut)."""
+        return self._backend.app
 
     def detect(self, frame: np.ndarray) -> list[TrackedFace]:
         """Detect and track faces in a single BGR frame."""
-        faces = self._app.get(frame)
+        faces = self._backend.app.get(frame)
         detections: list[TrackedFace] = []
         if faces:
             for f in faces:

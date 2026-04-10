@@ -13,12 +13,12 @@ Video File
 └────────┬─────────┘
          ▼
 ┌──────────────────┐
-│  Face Detection   │  (face_detector.py – InsightFace RetinaFace)
+│  Face Detection   │  (face_detector.py – via face_ops InsightFaceBackend)
 │  & IoU Tracking   │
 └────────┬─────────┘
          ▼
 ┌──────────────────┐
-│  Face Recognition │  (face_recognizer.py – ArcFace embeddings)
+│  Face Recognition │  (face_recognizer.py – ArcFace via face_ops)
 │  (ID matching)    │
 └────────┬─────────┘
          ▼
@@ -39,6 +39,11 @@ Video File
 │  + Audio Muxing   │
 └──────────────────┘
 ```
+
+> **Shared code:** Face detection and recognition use the
+> :mod:`face_ops` package (``InsightFaceBackend``), the same backend
+> shared by *vicrop* and *portrait_prep*.  This avoids duplicating
+> InsightFace / ArcFace initialisation code across applications.
 
 ## Prerequisites
 
@@ -349,7 +354,7 @@ To replace more than 3 characters, run the pipeline in multiple passes.
 
 ## How it works
 
-1. **Detection & Tracking**: Each frame is processed by InsightFace's RetinaFace detector. A lightweight IoU tracker maintains consistent face IDs across frames.
+1. **Detection & Tracking**: Each frame is processed by the shared `face_ops.InsightFaceBackend` (RetinaFace detector). A lightweight IoU tracker maintains consistent face IDs across frames.
 
 2. **Identity Matching**: ArcFace embeddings are computed for each detected face and compared (cosine similarity) against the **recognition gallery** built from the *find* folder images. Faces matching above the similarity threshold are queued for swapping with the corresponding *replace* identity.
 
@@ -375,8 +380,8 @@ To replace more than 3 characters, run the pipeline in multiple passes.
 | `config.py` | Dataclass-based configuration |
 | `gpu_utils.py` | CUDA/ONNX provider setup, GPU diagnostics |
 | `video_io.py` | Threaded video reader & ffmpeg-based writer |
-| `face_detector.py` | Face detection (RetinaFace) + IoU tracker |
-| `face_recognizer.py` | ArcFace gallery + identity matching |
+| `face_detector.py` | Face detection via `face_ops.InsightFaceBackend` + IoU tracker |
+| `face_recognizer.py` | ArcFace gallery + identity matching (via shared `face_ops` backend) |
 | `face_swapper.py` | inswapper_128 face transfer |
 | `face_enhancer.py` | GFPGAN face restoration |
 | `face_blender.py` | Poisson / alpha mask blending |

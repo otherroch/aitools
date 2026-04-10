@@ -30,6 +30,10 @@ class InsightFaceBackend:
             ``"buffalo_sc"`` (CPU-friendly).
         ctx_id: ONNX Runtime device id.  ``0`` = first GPU, ``-1`` = CPU.
         det_size: Detection input resolution as ``(width, height)``.
+        det_thresh: Detection confidence threshold (default ``0.5``).
+        providers: Optional explicit list of ONNX Runtime execution
+            providers.  When *None* (the default), providers are chosen
+            automatically via :meth:`_providers`.
     """
 
     def __init__(
@@ -37,6 +41,8 @@ class InsightFaceBackend:
         model_name: str = "buffalo_l",
         ctx_id: int = 0,
         det_size: tuple[int, int] = (640, 640),
+        det_thresh: float = 0.5,
+        providers: list | None = None,
     ) -> None:
         try:
             from insightface.app import FaceAnalysis
@@ -46,12 +52,36 @@ class InsightFaceBackend:
                 "Install it with: pip install insightface onnxruntime"
             ) from exc
 
-        providers, effective_ctx_id = self._providers(ctx_id)
+        if providers is not None:
+            effective_providers = providers
+            effective_ctx_id = ctx_id
+        else:
+            effective_providers, effective_ctx_id = self._providers(ctx_id)
+
         self._app = FaceAnalysis(
             name=model_name,
-            providers=providers,
+            providers=effective_providers,
         )
-        self._app.prepare(ctx_id=effective_ctx_id, det_size=det_size)
+        self._app.prepare(
+            ctx_id=effective_ctx_id,
+            det_size=det_size,
+            det_thresh=det_thresh,
+        )
+
+    # ------------------------------------------------------------------
+    # public access to underlying FaceAnalysis
+    # ------------------------------------------------------------------
+
+    @property
+    def app(self):
+        """The underlying InsightFace ``FaceAnalysis`` instance.
+
+        Useful for callers (e.g. *chararep*) that need access to raw
+        ``Face`` objects returned by ``app.get()`` — data that is richer
+        than the backend-agnostic :class:`FaceBBox` / :class:`Encoding`
+        types.
+        """
+        return self._app
 
     # ------------------------------------------------------------------
     # helpers
