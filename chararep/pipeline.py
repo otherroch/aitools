@@ -3,7 +3,7 @@
 Flow per frame:
   detect → track → identify → swap → enhance → blend → write
 
-The ``InsightFaceBackend`` (from :mod:`face_ops`) is loaded once and
+The :class:`FaceBackend` (from :mod:`face_ops`) is loaded once and
 shared between the detector and recognizer to avoid duplicated VRAM
 usage.
 """
@@ -45,7 +45,7 @@ class CharacterReplacementPipeline:
 
         logger.info("Initialising pipeline components...")
 
-        # Detector owns the shared InsightFaceBackend instance
+        # Detector owns the shared FaceBackend instance
         self._detector = FaceDetector(cfg)
         # Recognizer re-uses the same backend (no extra VRAM)
         self._recognizer = FaceRecognizer(cfg, backend=self._detector.backend)

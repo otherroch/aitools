@@ -1,12 +1,12 @@
 """Face detection and lightweight IoU-based tracking.
 
-Uses the shared :class:`face_ops.insightface_backend.InsightFaceBackend`
-for face detection (RetinaFace) and encoding (ArcFace), wrapped with a
-greedy IoU tracker that maintains temporally consistent track IDs.
+Uses a :class:`~face_ops.FaceBackend` obtained via
+:func:`face_ops.get_backend` for face detection and encoding, wrapped
+with a greedy IoU tracker that maintains temporally consistent track IDs.
 
-The ``InsightFaceBackend`` instance is exposed via the :attr:`backend`
-property so that it can be shared with ``FaceRecognizer`` (avoids
-loading duplicate ONNX models into VRAM).
+The backend instance is exposed via the :attr:`backend` property so it
+can be shared with ``FaceRecognizer`` (avoids loading duplicate ONNX
+models into VRAM).
 """
 
 import logging
@@ -16,7 +16,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from face_ops.insightface_backend import InsightFaceBackend
+from face_ops import get_backend
+from face_ops.backend import FaceBackend
 
 from .config import PipelineConfig
 from .gpu_utils import get_onnx_providers
@@ -35,19 +36,19 @@ class TrackedFace:
     age_since_seen: int = 0
     identity_label: Optional[str] = None
     identity_sim: float = 0.0  # confidence of the last identity match
-    # The full InsightFace Face object for the swap engine
+    # The backend-specific face object for the swap engine
     face_obj: object = None
 
 
 class FaceDetector:
-    """Wraps InsightFace detection with a simple IoU tracker.
+    """Wraps a :class:`FaceBackend` with a simple IoU tracker.
 
     Each call to ``detect(frame)`` returns a list of TrackedFace objects
     with temporally-consistent ``track_id`` values.
 
-    The internal :class:`InsightFaceBackend` is exposed via the
-    :attr:`backend` property so it can be shared with
-    ``FaceRecognizer`` (avoids loading duplicate ONNX models into VRAM).
+    The :class:`FaceBackend` is exposed via :attr:`backend` so it can be
+    shared with ``FaceRecognizer`` (avoids loading duplicate ONNX models
+    into VRAM).
     """
 
     def __init__(self, cfg: PipelineConfig):
@@ -56,7 +57,8 @@ class FaceDetector:
         self._tracks: list[TrackedFace] = []
 
         providers = get_onnx_providers(cfg.device_id)
-        self._backend = InsightFaceBackend(
+        self._backend: FaceBackend = get_backend(
+            "insightface",
             model_name=cfg.detection_model,
             ctx_id=cfg.device_id,
             det_size=cfg.detection_size,
@@ -70,35 +72,37 @@ class FaceDetector:
         )
 
     @property
-    def backend(self) -> InsightFaceBackend:
-        """Shared :class:`InsightFaceBackend` instance."""
+    def backend(self) -> FaceBackend:
+        """Shared :class:`FaceBackend` instance."""
         return self._backend
-
-    @property
-    def app(self):
-        """Shared FaceAnalysis instance (backward-compatible shortcut)."""
-        return self._backend.app
 
     def detect(self, frame: np.ndarray) -> list[TrackedFace]:
         """Detect and track faces in a single BGR frame."""
-        faces = self._backend.app.get(frame)
+        detected = self._backend.detect(frame)
         detections: list[TrackedFace] = []
-        if faces:
-            for f in faces:
-                emb = None
-                if hasattr(f, "normed_embedding") and f.normed_embedding is not None:
-                    emb = np.array(f.normed_embedding, dtype=np.float32)
-                detections.append(
-                    TrackedFace(
-                        track_id=-1,
-                        bbox=np.array(f.bbox, dtype=np.float32),
-                        landmarks=np.array(f.kps, dtype=np.float32),
-                        embedding=emb,
-                        face_obj=f,
-                    )
+        for df in detected:
+            top, right, bottom, left = df.bbox
+            emb = None
+            if df.embedding is not None:
+                emb = np.array(df.embedding, dtype=np.float32)
+            landmarks = (
+                np.array(df.landmarks, dtype=np.float32)
+                if df.landmarks is not None
+                else np.zeros((5, 2), dtype=np.float32)
+            )
+            detections.append(
+                TrackedFace(
+                    track_id=-1,
+                    bbox=np.array(
+                        [left, top, right, bottom], dtype=np.float32
+                    ),
+                    landmarks=landmarks,
+                    embedding=emb,
+                    face_obj=df.raw,
                 )
+            )
 
-        if not detections and faces:
+        if not detections and detected:
             logger.debug("Faces detected but no valid embeddings found.")
 
         # Always run the tracker so that existing tracks age out correctly

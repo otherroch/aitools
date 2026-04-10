@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from face_ops.types import Encoding, FaceBBox
+from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 
 class DlibBackend:
@@ -38,6 +38,22 @@ class DlibBackend:
         model: str = "hog",
     ) -> list[FaceBBox]:
         return self._fr.face_locations(image, model=model)
+
+    def detect(
+        self,
+        image: np.ndarray,
+        *,
+        model: str = "hog",
+    ) -> list[DetectedFace]:
+        locations = self._fr.face_locations(image, model=model)
+        if not locations:
+            return []
+        encodings = self._fr.face_encodings(image, locations)
+        results: list[DetectedFace] = []
+        for i, loc in enumerate(locations):
+            emb = encodings[i] if i < len(encodings) else None
+            results.append(DetectedFace(bbox=loc, embedding=emb))
+        return results
 
     # ------------------------------------------------------------------
     # Encoding

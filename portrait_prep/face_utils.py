@@ -90,6 +90,17 @@ class _MockBackendShim:
     def detect_faces(self, image, *, model="hog"):
         return self._fr.face_locations(image, model=model)
 
+    def detect(self, image, *, model="hog"):
+        from face_ops.types import DetectedFace
+
+        locations = self.detect_faces(image, model=model)
+        encodings = self.encode_faces(image, locations)
+        results = []
+        for i, loc in enumerate(locations):
+            emb = encodings[i] if i < len(encodings) else None
+            results.append(DetectedFace(bbox=loc, embedding=emb))
+        return results
+
     def encode_faces(self, image, face_locations):
         return self._fr.face_encodings(image, face_locations)
 

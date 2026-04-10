@@ -30,12 +30,13 @@ from face_ops.clustering import (
     cluster_faces,
     load_reference_encodings,
 )
-from face_ops.types import Encoding, FaceBBox
+from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 __all__ = [
     # protocol
     "FaceBackend",
     # types
+    "DetectedFace",
     "FaceBBox",
     "Encoding",
     # factory

@@ -58,6 +58,16 @@ class _StubBackend:
     def detect_faces(self, image, *, model="hog"):
         return self._locs
 
+    def detect(self, image, *, model="hog"):
+        from face_ops.types import DetectedFace
+        boxes = self.detect_faces(image, model=model)
+        encs = self.encode_faces(image, boxes)
+        results = []
+        for i, b in enumerate(boxes):
+            emb = encs[i] if i < len(encs) else None
+            results.append(DetectedFace(bbox=b, embedding=emb))
+        return results
+
     def encode_faces(self, image, face_locations):
         return self._encs
 
@@ -386,6 +396,51 @@ class TestInsightFaceBackendInit:
         """The det_thresh parameter is accepted without error."""
         backend = InsightFaceBackend(det_thresh=0.3)
         assert backend.app is not None
+
+
+class TestInsightFaceDetect:
+    """Test InsightFaceBackend.detect() rich results."""
+
+    def test_detect_returns_empty_on_no_faces(self):
+        backend = InsightFaceBackend()
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = backend.detect(image)
+        assert result == []
+
+    def test_detect_returns_detected_face_objects(self):
+        """When the stub returns faces, detect returns DetectedFace objects."""
+        from face_ops.types import DetectedFace
+        import types as _types
+
+        backend = InsightFaceBackend()
+        fake_face = _types.SimpleNamespace(
+            bbox=np.array([10, 20, 50, 60], dtype=np.float32),
+            kps=np.array([[15, 25], [35, 25], [25, 35], [18, 45], [38, 45]], dtype=np.float32),
+            normed_embedding=np.ones(512, dtype=np.float32),
+        )
+        backend._app.get = lambda img: [fake_face]
+
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = backend.detect(image)
+        assert len(result) == 1
+        assert isinstance(result[0], DetectedFace)
+        # bbox should be in (top, right, bottom, left) format
+        top, right, bottom, left = result[0].bbox
+        assert left == 10 and top == 20 and right == 50 and bottom == 60
+        assert result[0].embedding is not None
+        assert result[0].landmarks is not None
+        assert result[0].raw is fake_face
+
+
+class TestGetBackendDetect:
+    """Test detect() via the get_backend() factory."""
+
+    def test_get_backend_insightface_has_detect(self):
+        backend = get_backend("insightface")
+        assert hasattr(backend, "detect")
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = backend.detect(image)
+        assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------

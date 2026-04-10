@@ -16,7 +16,7 @@ import logging
 
 import numpy as np
 
-from face_ops.types import Encoding, FaceBBox
+from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,33 @@ class InsightFaceBackend:
             # Convert (x1, y1, x2, y2) → (top, right, bottom, left)
             bboxes.append((int(y1), int(x2), int(y2), int(x1)))
         return bboxes
+
+    def detect(
+        self,
+        image: np.ndarray,
+        *,
+        model: str = "buffalo_l",
+    ) -> list[DetectedFace]:
+        faces = self._app.get(image)
+        results: list[DetectedFace] = []
+        for f in faces:
+            x1, y1, x2, y2 = f.bbox.astype(int)
+            bbox: FaceBBox = (int(y1), int(x2), int(y2), int(x1))
+
+            emb = None
+            if hasattr(f, "normed_embedding") and f.normed_embedding is not None:
+                emb = np.array(f.normed_embedding, dtype=np.float32)
+            elif hasattr(f, "embedding") and f.embedding is not None:
+                emb = np.array(f.embedding, dtype=np.float32)
+
+            landmarks = None
+            if hasattr(f, "kps") and f.kps is not None:
+                landmarks = np.array(f.kps, dtype=np.float32)
+
+            results.append(
+                DetectedFace(bbox=bbox, embedding=emb, landmarks=landmarks, raw=f)
+            )
+        return results
 
     # ------------------------------------------------------------------
     # Encoding

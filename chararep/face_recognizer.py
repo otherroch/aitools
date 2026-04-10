@@ -1,16 +1,16 @@
 """Face identity recognition and matching against portrait galleries.
 
-Uses ArcFace embeddings from the shared
-:class:`face_ops.insightface_backend.InsightFaceBackend` (loaded once
-by ``FaceDetector``) to build two galleries per character:
+Uses a :class:`~face_ops.FaceBackend` (loaded once by ``FaceDetector``
+and shared via its :attr:`backend` property) to build two galleries per
+character:
 
 *   **Recognition gallery** (from ``reference_paths``):
     embeddings of the original character in the video, used to
     determine which detected face should be replaced.
 
 *   **Swap gallery** (from ``portrait_paths``):
-    ``Face`` objects of the replacement identity, fed to the
-    swap engine so it knows what the new face looks like.
+    backend-specific face objects of the replacement identity, fed to
+    the swap engine so it knows what the new face looks like.
 """
 
 import logging
@@ -18,7 +18,7 @@ import logging
 import cv2
 import numpy as np
 
-from face_ops.insightface_backend import InsightFaceBackend
+from face_ops.backend import FaceBackend
 
 from .config import CharacterMapping, PipelineConfig
 from .face_detector import TrackedFace
@@ -63,7 +63,7 @@ class TargetIdentity:
         Mean ArcFace embedding of the *find* images (the original face
         in the video), used for cosine-similarity matching.
     reference_faces : list
-        InsightFace ``Face`` objects from the *replace* images.
+        Backend-specific face objects from the *replace* images.
         The swap engine picks from these at runtime.
     """
 
@@ -83,12 +83,17 @@ class TargetIdentity:
         self.reference_faces = swap_faces
 
 
-class FaceRecognizer:
-    """Computes ArcFace embeddings and matches detected faces to targets.
+def _bbox_area(bbox) -> float:
+    """Compute the area of a (top, right, bottom, left) bounding box."""
+    top, right, bottom, left = bbox
+    return float(right - left) * float(bottom - top)
 
-    Accepts an *existing* :class:`InsightFaceBackend` instance (from
-    ``FaceDetector``) so that the heavy ONNX models are loaded into
-    VRAM only once.
+
+class FaceRecognizer:
+    """Computes face embeddings and matches detected faces to targets.
+
+    Accepts an existing :class:`FaceBackend` instance (from
+    ``FaceDetector``) so that the heavy models are loaded only once.
 
     On initialisation it encodes reference images (find folder) into
     the recognition gallery and portrait images (replace folder) into
@@ -97,7 +102,7 @@ class FaceRecognizer:
     gallery and assigns identity labels.
     """
 
-    def __init__(self, cfg: PipelineConfig, backend: InsightFaceBackend):
+    def __init__(self, cfg: PipelineConfig, backend: FaceBackend):
         self._cfg = cfg
         self._backend = backend  # shared – DO NOT re-prepare / reload
         self._targets: list[TargetIdentity] = []
@@ -121,44 +126,43 @@ class FaceRecognizer:
                 logger.warning("Could not read %s image: %s", kind, p)
                 continue
             logger.debug("looking at %s image: %s", kind, p)
-            detected = self._backend.app.get(img)
+            detected = self._backend.detect(img)
             if not detected:
                 logger.warning("No face detected in %s image: %s", kind, p)
                 continue
-            best = max(
-                detected,
-                key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-            )
-            if hasattr(best, "normed_embedding") and best.normed_embedding is not None:
+            best = max(detected, key=lambda d: _bbox_area(d.bbox))
+            if best.embedding is not None:
                 embeddings.append(
-                    np.array(best.normed_embedding, dtype=np.float32)
+                    np.array(best.embedding, dtype=np.float32)
                 )
                 # Pre-warp the portrait to 112×112 so the SimSwap ArcFace
                 # image encoder can use it directly without needing the
                 # original image again at swap time.
-                if hasattr(best, "kps") and best.kps is not None:
+                raw_face = best.raw
+                if best.landmarks is not None and raw_face is not None:
                     M, _ = cv2.estimateAffinePartial2D(
-                        best.kps, _ARCFACE_112_V1, method=cv2.RANSAC
+                        best.landmarks, _ARCFACE_112_V1, method=cv2.RANSAC
                     )
                     if M is not None:
-                        best.arcface_crop = cv2.warpAffine(
+                        raw_face.arcface_crop = cv2.warpAffine(
                             img, M, (112, 112), flags=cv2.INTER_LINEAR
                         )
                         # blendswap uses the same template (arcface_112_v2 ≡
                         # _ARCFACE_112_V1); alias intentionally shares the
                         # same array since both attributes are read-only at
                         # swap time.
-                        best.portrait_crop_arcv2 = best.arcface_crop
+                        raw_face.portrait_crop_arcv2 = raw_face.arcface_crop
 
                     # Pre-warp to 256×256 (ffhq_512 template) for uniface source.
                     M_ffhq, _ = cv2.estimateAffinePartial2D(
-                        best.kps, _FFHQ_512_256, method=cv2.RANSAC
+                        best.landmarks, _FFHQ_512_256, method=cv2.RANSAC
                     )
                     if M_ffhq is not None:
-                        best.portrait_crop_ffhq = cv2.warpAffine(
+                        raw_face.portrait_crop_ffhq = cv2.warpAffine(
                             img, M_ffhq, (256, 256), flags=cv2.INTER_LINEAR
                         )
-                faces.append(best)  
+                if raw_face is not None:
+                    faces.append(raw_face)
                 logger.debug("appended face image: %s", p)
             else:
                 logger.warning("No embedding for %s image: %s", kind, p)
@@ -218,8 +222,9 @@ class FaceRecognizer:
     def match(self, tracked_face: TrackedFace) -> tuple[str | None, float]:
         """Match a tracked face against the reference gallery.
 
-        Compares the face's ArcFace embedding against the mean embedding
-        of each character's reference images.
+        Uses :meth:`FaceBackend.face_distance` to compare the face's
+        embedding against the mean embedding of each character's
+        reference images.
 
         Returns ``(label, similarity)`` or ``(None, 0.0)`` if no match
         exceeds the per-character similarity threshold.
@@ -242,7 +247,10 @@ class FaceRecognizer:
         best_sim = 0.0
 
         for target in self._targets:
-            sim = float(np.dot(emb, target.recognition_embedding))
+            distances = self._backend.face_distance(
+                [target.recognition_embedding], emb
+            )
+            sim = 1.0 - float(distances[0])
             logger.debug("Track %d → '%s' (sim=%.3f)", track_id, target.label, sim)    
             if sim > best_sim:
                 best_sim = sim

@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from face_ops.types import Encoding, FaceBBox
+from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 
 @runtime_checkable
@@ -41,6 +41,30 @@ class FaceBackend(Protocol):
 
         Returns:
             List of ``(top, right, bottom, left)`` tuples.
+        """
+        ...
+
+    def detect(
+        self,
+        image: np.ndarray,
+        *,
+        model: str = "hog",
+    ) -> list[DetectedFace]:
+        """Detect faces and return rich per-face metadata.
+
+        A single-call alternative to :meth:`detect_faces` followed by
+        :meth:`encode_faces` that avoids running detection twice.
+
+        Each :class:`DetectedFace` bundles the bounding box, embedding,
+        landmarks, and an opaque backend-specific *raw* object (e.g. an
+        InsightFace ``Face``) for downstream consumers that need it.
+
+        Args:
+            image: RGB uint8 numpy array (H × W × 3).
+            model: Backend-specific model hint.
+
+        Returns:
+            List of :class:`DetectedFace` instances, one per face.
         """
         ...
 
