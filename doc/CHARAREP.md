@@ -166,6 +166,7 @@ Example `swap_config.json`:
 | `--enhance-model-path` | Path to enhancement model file | – |
 | `--enhance-weight` | Enhancement blend weight (`0-1`) | `0.7` |
 | `--device` | CUDA device ID | 0 |
+| `--batch` | Parallel workers for swap/blend/enhance | `4` |
 | `--no-fp16` | Disable FP16 and use FP32 | false |
 | `--codec` | Output video codec | `libx264` |
 | `--blend-mode` | `seamless` or `alpha` | seamless |

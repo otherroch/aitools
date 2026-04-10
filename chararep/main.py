@@ -177,6 +177,18 @@ Config JSON format
 
     # ── GPU / performance ────────────────────────────────────────────────
     p.add_argument(
+        "--batch",
+        type=int,
+        default=4,
+        dest="batch_size",
+        help=(
+            "Number of frames to process in parallel (default: 4). "
+            "When greater than 1, the pipeline detects faces sequentially "
+            "but runs swap/blend/enhance in a thread pool with this many "
+            "workers.  Set to 1 for fully sequential processing."
+        ),
+    )
+    p.add_argument(
         "--device",
         type=int,
         default=0,
@@ -321,6 +333,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         enhance_model_path=args.enhance_model_path,
         enhancement_weight=args.enhance_weight,
         device_id=args.device,
+        batch_size=args.batch_size,
         use_fp16=not args.no_fp16,
         output_codec=args.codec,
         output_quality=args.crf,
