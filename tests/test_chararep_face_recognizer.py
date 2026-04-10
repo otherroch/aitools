@@ -47,10 +47,10 @@ def _make_stub_backend(faces_by_path=None):
     faces_by_path = faces_by_path or {}
 
     class _StubBackend:
-        def detect_faces(self, image, *, model="hog"):
+        def detect_faces(self, image):
             return []
 
-        def detect(self, image, *, model="hog"):
+        def detect(self, image):
             return []
 
         def encode_faces(self, image, face_locations):
@@ -309,9 +309,9 @@ class TestEncodeImages:
         )
 
         class _BackendWithFace:
-            def detect_faces(self, image, *, model="hog"):
+            def detect_faces(self, image):
                 return []
-            def detect(self, image, *, model="hog"):
+            def detect(self, image):
                 return [df]
             def encode_faces(self, image, face_locations):
                 return []
@@ -364,9 +364,9 @@ class TestEncodeImages:
         )
 
         class _BackendWithFace:
-            def detect_faces(self, image, *, model="hog"):
+            def detect_faces(self, image):
                 return []
-            def detect(self, image, *, model="hog"):
+            def detect(self, image):
                 return [df]
             def encode_faces(self, image, face_locations):
                 return []
@@ -418,9 +418,9 @@ class TestEncodeImages:
         )
 
         class _BackendWithFace:
-            def detect_faces(self, image, *, model="hog"):
+            def detect_faces(self, image):
                 return []
-            def detect(self, image, *, model="hog"):
+            def detect(self, image):
                 return [df]
             def encode_faces(self, image, face_locations):
                 return []

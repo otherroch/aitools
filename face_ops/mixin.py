@@ -38,7 +38,6 @@ class FaceBackendMixin:
         self,
         classified_path: Path,
         *,
-        model: str = "hog",
         max_per_identity: int = 0,
     ) -> tuple[list[np.ndarray], list[str]]:
         """Load face encodings from a pre-classified reference directory.
@@ -49,7 +48,6 @@ class FaceBackendMixin:
 
         Args:
             classified_path:  Root directory containing identity sub-folders.
-            model:            Backend-specific detection model hint.
             max_per_identity: Maximum number of reference encodings to load per
                               identity folder.  ``0`` (the default) means no limit.
 
@@ -75,7 +73,7 @@ class FaceBackendMixin:
                 if max_per_identity > 0 and loaded_for_identity >= max_per_identity:
                     break
                 image = self.load_image(str(img_path))  # type: ignore[attr-defined]
-                locs = self.detect_faces(image, model=model)  # type: ignore[attr-defined]
+                locs = self.detect_faces(image)  # type: ignore[attr-defined]
                 face_encs = self.encode_faces(image, locs)  # type: ignore[attr-defined]
                 if face_encs:
                     encodings.append(face_encs[0])

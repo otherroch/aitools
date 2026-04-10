@@ -296,7 +296,6 @@ def run_crop(args: argparse.Namespace, input_dir: Path) -> None:
         crop_size=args.crop_size,
         classify=not args.no_classify,
         tolerance=args.tolerance,
-        model=args.detection_model,
         classified_path=args.classified_path,
         classified_max=args.classified_max,
         backend=backend,

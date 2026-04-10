@@ -31,11 +31,11 @@ class MockBackendShim(FaceBackendMixin):
     def __init__(self, fr) -> None:
         self._fr = fr
 
-    def detect_faces(self, image, *, model="hog"):
-        return self._fr.face_locations(image, model=model)
+    def detect_faces(self, image):
+        return self._fr.face_locations(image)
 
-    def detect(self, image, *, model="hog"):
-        locations = self.detect_faces(image, model=model)
+    def detect(self, image):
+        locations = self.detect_faces(image)
         encodings = self.encode_faces(image, locations)
         results = []
         for i, loc in enumerate(locations):

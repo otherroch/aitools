@@ -18,7 +18,6 @@ from vicrop.crop import (
     DEFAULT_EVERY_N_FRAMES,
     DEFAULT_MARGIN_RATIO,
     DEFAULT_CROP_SIZE,
-    _cluster_faces,
     crop_video,
     crop_folder,
 )
@@ -95,7 +94,7 @@ class TestClusterFaces:
         fr_mock.face_distance.return_value = np.array([0.3])
 
         backend = MockBackendShim(fr_mock)
-        result = _cluster_faces([(face_path, encoding)], tmp_path, backend=backend)
+        result = backend.cluster_faces([(face_path, encoding)], tmp_path)
 
         assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
@@ -114,7 +113,7 @@ class TestClusterFaces:
         fr_mock.face_distance.return_value = np.array([0.2])
 
         backend = MockBackendShim(fr_mock)
-        result = _cluster_faces([(path1, enc1), (path2, enc2)], tmp_path, backend=backend)
+        result = backend.cluster_faces([(path1, enc1), (path2, enc2)], tmp_path)
 
         assert len(result) == 1  # Only one person
 
@@ -131,7 +130,7 @@ class TestClusterFaces:
         fr_mock.face_distance.return_value = np.array([0.8])
 
         backend = MockBackendShim(fr_mock)
-        result = _cluster_faces([(path1, enc1), (path2, enc2)], tmp_path, backend=backend)
+        result = backend.cluster_faces([(path1, enc1), (path2, enc2)], tmp_path)
 
         assert len(result) == 2
 
@@ -442,13 +441,12 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([0.1])
 
         backend = MockBackendShim(fr_mock)
-        result = _cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
-            backend=backend,
         )
 
         assert "alice" in result
@@ -466,13 +464,12 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([1.5])
 
         backend = MockBackendShim(fr_mock)
-        result = _cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
-            backend=backend,
         )
 
         assert "person_01" in result
@@ -491,13 +488,12 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([1.5])
 
         backend = MockBackendShim(fr_mock)
-        _cluster_faces(
+        backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
-            backend=backend,
         )
 
         assert not (tmp_path / "alice").exists()

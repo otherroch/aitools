@@ -17,7 +17,8 @@ from face_ops.types import DetectedFace, Encoding, FaceBBox
 class DlibBackend(FaceBackendMixin):
     """Face detection and encoding via dlib / face_recognition."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: str = "hog") -> None:
+        self._model = model
         try:
             import face_recognition  # noqa: F401
 
@@ -35,18 +36,14 @@ class DlibBackend(FaceBackendMixin):
     def detect_faces(
         self,
         image: np.ndarray,
-        *,
-        model: str = "hog",
     ) -> list[FaceBBox]:
-        return self._fr.face_locations(image, model=model)
+        return self._fr.face_locations(image, model=self._model)
 
     def detect(
         self,
         image: np.ndarray,
-        *,
-        model: str = "hog",
     ) -> list[DetectedFace]:
-        locations = self._fr.face_locations(image, model=model)
+        locations = self._fr.face_locations(image, model=self._model)
         if not locations:
             return []
         encodings = self._fr.face_encodings(image, locations)

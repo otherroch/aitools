@@ -123,11 +123,8 @@ class InsightFaceBackend(FaceBackendMixin):
     def detect_faces(
         self,
         image: np.ndarray,
-        *,
-        model: str = "buffalo_l",
     ) -> list[FaceBBox]:
-        # ``model`` is accepted for API consistency with the FaceBackend
-        # protocol but is not used here — the model is set during __init__.
+        # The model is set during __init__ — no per-call model hint needed.
         faces = self._app.get(image)
         bboxes: list[FaceBBox] = []
         for f in faces:
@@ -139,8 +136,6 @@ class InsightFaceBackend(FaceBackendMixin):
     def detect(
         self,
         image: np.ndarray,
-        *,
-        model: str = "buffalo_l",
     ) -> list[DetectedFace]:
         faces = self._app.get(image)
         results: list[DetectedFace] = []

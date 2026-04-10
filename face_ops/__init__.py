@@ -92,7 +92,9 @@ def backend_for_model(detection_model: str, **kwargs) -> FaceBackend:
                          constructor (e.g. ``ctx_id``, ``providers``).
     """
     if detection_model.lower() in _DLIB_MODELS:
-        return get_backend("dlib")
+        # "dlib" defaults to "hog"; "hog" and "cnn" are passed through.
+        dlib_model = "hog" if detection_model.lower() == "dlib" else detection_model.lower()
+        return get_backend("dlib", model=dlib_model)
     return get_backend("insightface", model_name=detection_model, **kwargs)
 
 

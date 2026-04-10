@@ -29,15 +29,11 @@ class FaceBackend(Protocol):
     def detect_faces(
         self,
         image: np.ndarray,
-        *,
-        model: str = "hog",
     ) -> list[FaceBBox]:
         """Return bounding boxes for all faces found in *image*.
 
         Args:
             image: RGB uint8 numpy array (H × W × 3).
-            model: Backend-specific model hint (e.g. ``"hog"`` / ``"cnn"``
-                   for dlib, ``"buffalo_l"`` for InsightFace).
 
         Returns:
             List of ``(top, right, bottom, left)`` tuples.
@@ -47,8 +43,6 @@ class FaceBackend(Protocol):
     def detect(
         self,
         image: np.ndarray,
-        *,
-        model: str = "hog",
     ) -> list[DetectedFace]:
         """Detect faces and return rich per-face metadata.
 
@@ -61,7 +55,6 @@ class FaceBackend(Protocol):
 
         Args:
             image: RGB uint8 numpy array (H × W × 3).
-            model: Backend-specific model hint.
 
         Returns:
             List of :class:`DetectedFace` instances, one per face.
@@ -156,7 +149,6 @@ class FaceBackend(Protocol):
         self,
         classified_path: Path,
         *,
-        model: str = "hog",
         max_per_identity: int = 0,
     ) -> tuple[list[np.ndarray], list[str]]:
         """Load face encodings from a pre-classified reference directory.

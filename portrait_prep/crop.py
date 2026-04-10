@@ -48,7 +48,6 @@ def crop_faces_from_image(
     output_dir: Path,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
-    model: str = "hog",
     backend: FaceBackend | None = None,
 ) -> list[tuple[Path, np.ndarray]]:
     """Detect, crop, and save each face found in *image_path*.
@@ -58,7 +57,6 @@ def crop_faces_from_image(
         output_dir:   Directory in which cropped face PNGs are saved.
         margin_ratio: Fraction of face bbox added as margin on each side.
         crop_size:    Output square resolution (pixels).
-        model:        face_recognition detection model – "hog" (fast) or "cnn".
         backend:      :class:`FaceBackend` instance for detection and encoding.
                       When *None*, a default dlib backend is created.
 
@@ -69,11 +67,11 @@ def crop_faces_from_image(
         backend = _default_backend()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.debug("crop_faces_from_image: %s  margin_ratio=%.2f crop_size=%d model=%s",
-                 image_path.name, margin_ratio, crop_size, model)
+    logger.debug("crop_faces_from_image: %s  margin_ratio=%.2f crop_size=%d",
+                 image_path.name, margin_ratio, crop_size)
 
     image = backend.load_image(str(image_path))
-    face_locations = backend.detect_faces(image, model=model)
+    face_locations = backend.detect_faces(image)
     face_encodings = backend.encode_faces(image, face_locations)
 
     if not face_locations:
@@ -117,27 +115,6 @@ def crop_faces_from_image(
     return results
 
 
-def _cluster_faces(
-    all_results: list[tuple[Path, np.ndarray]],
-    output_dir: Path,
-    tolerance: float = 0.6,
-    reference_encodings: list[np.ndarray] | None = None,
-    reference_names: list[str] | None = None,
-    backend: FaceBackend | None = None,
-) -> dict[str, list[Path]]:
-    """Group saved face crops by identity using face distance clustering.
-
-    Delegates to :meth:`FaceBackend.cluster_faces`.
-    """
-    if backend is None:
-        backend = _default_backend()
-    return backend.cluster_faces(
-        all_results, output_dir, tolerance,
-        reference_encodings=reference_encodings,
-        reference_names=reference_names,
-    )
-
-
 def crop_folder(
     input_dir: Path,
     output_dir: Path,
@@ -145,7 +122,6 @@ def crop_folder(
     crop_size: int = DEFAULT_CROP_SIZE,
     classify: bool = True,
     tolerance: float = 0.6,
-    model: str = "hog",
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
@@ -160,7 +136,6 @@ def crop_folder(
         classify:        If True, cluster faces by identity, creating
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
-        model:           face_recognition detection model ("hog" or "cnn").
         classified_path: Optional path to a directory of pre-classified
                          reference photos.  Each sub-folder is treated as a
                          known identity; new faces matching a reference are
@@ -191,8 +166,8 @@ def crop_folder(
         return {"faces": 0, "images_processed": 0, "persons": 0}
 
     logger.debug(
-        "crop_folder: found %d image(s) in %s  classify=%s tolerance=%.2f model=%s",
-        len(images), input_dir, classify, tolerance, model,
+        "crop_folder: found %d image(s) in %s  classify=%s tolerance=%.2f",
+        len(images), input_dir, classify, tolerance,
     )
 
     # Flat staging dir when classify=True (moved after clustering)
@@ -205,7 +180,6 @@ def crop_folder(
             staging_dir,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
-            model=model,
             backend=backend,
         )
         all_results.extend(results)
@@ -216,14 +190,13 @@ def crop_folder(
         ref_names: list[str] | None = None
         if classified_path is not None:
             ref_enc, ref_names = backend.load_reference_encodings(
-                classified_path, model=model,
+                classified_path,
                 max_per_identity=classified_max,
             )
-        person_dirs = _cluster_faces(
+        person_dirs = backend.cluster_faces(
             all_results, output_dir, tolerance=tolerance,
             reference_encodings=ref_enc,
             reference_names=ref_names,
-            backend=backend,
         )
         persons = len(person_dirs)
         # Remove staging dir if empty

@@ -61,12 +61,12 @@ class _StubBackend(FaceBackendMixin):
         self._encs = face_encs or []
         self._dist_fn = distance_fn
 
-    def detect_faces(self, image, *, model="hog"):
+    def detect_faces(self, image):
         return self._locs
 
-    def detect(self, image, *, model="hog"):
+    def detect(self, image):
         from face_ops.types import DetectedFace
-        boxes = self.detect_faces(image, model=model)
+        boxes = self.detect_faces(image)
         encs = self.encode_faces(image, boxes)
         results = []
         for i, b in enumerate(boxes):
