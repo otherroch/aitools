@@ -2,7 +2,7 @@
 # can be set at build time with --build-arg BASE_IMAGE=your_image:tag
 # for arm64 use: debian:12-slim 
 # for x86_64 use: nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04 (includes CUDNN for building dlib)
-ARG BASE_IMAGE=nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04
+ARG BASE_IMAGE=nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04
 FROM $BASE_IMAGE
 
 # Set the working directory in the container
