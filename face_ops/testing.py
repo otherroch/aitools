@@ -5,23 +5,27 @@ Test helpers for the ``face_ops`` package.
 
 Provides :class:`MockBackendShim` — a lightweight adapter that wraps a
 mock ``face_recognition`` module into the :class:`FaceBackend` protocol
-so that tests can pass ``fr``-style mocks directly to ``cluster_faces``,
-``load_reference_encodings``, etc.
+so that tests can pass ``fr``-style mocks directly to
+``backend.cluster_faces``, ``backend.load_reference_encodings``, etc.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from face_ops.mixin import FaceBackendMixin
 from face_ops.types import DetectedFace
 
 
-class MockBackendShim:
+class MockBackendShim(FaceBackendMixin):
     """Adapt a mock ``face_recognition`` module to the :class:`FaceBackend` protocol.
 
     This is intentionally a concrete class (not a protocol implementor) so
     that test code can instantiate it with a MagicMock and have all
     backend-protocol methods forwarded to the mock's equivalents.
+
+    Inherits :meth:`cluster_faces` and :meth:`load_reference_encodings`
+    from :class:`FaceBackendMixin`.
     """
 
     def __init__(self, fr) -> None:

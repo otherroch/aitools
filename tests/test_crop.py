@@ -12,7 +12,6 @@ import pytest
 from portrait_prep.crop import crop_folder
 from portrait_prep.cpcap import infer_original_stem
 
-from face_ops import cluster_faces, load_reference_encodings
 from face_ops.testing import MockBackendShim
 
 
@@ -189,7 +188,7 @@ class TestLoadReferenceEncodings:
         fr_mock.face_encodings.side_effect = mock_face_encodings
 
         backend = MockBackendShim(fr_mock)
-        encodings, names = load_reference_encodings(ref_dir, backend)
+        encodings, names = backend.load_reference_encodings(ref_dir)
 
         assert len(encodings) == 3
         assert names.count("alice") == 2
@@ -203,7 +202,7 @@ class TestLoadReferenceEncodings:
 
         fr_mock = MagicMock()
         backend = MockBackendShim(fr_mock)
-        encodings, names = load_reference_encodings(ref_dir, backend)
+        encodings, names = backend.load_reference_encodings(ref_dir)
 
         assert len(encodings) == 0
         assert len(names) == 0
@@ -221,7 +220,7 @@ class TestLoadReferenceEncodings:
         fr_mock.face_encodings.return_value = []
 
         backend = MockBackendShim(fr_mock)
-        encodings, names = load_reference_encodings(ref_dir, backend)
+        encodings, names = backend.load_reference_encodings(ref_dir)
 
         assert len(encodings) == 0
 
@@ -240,7 +239,9 @@ class TestLoadReferenceEncodings:
         fr_mock.face_encodings.return_value = [np.zeros(128)]
 
         backend = MockBackendShim(fr_mock)
-        encodings, names = load_reference_encodings(ref_dir, backend, max_per_identity=2)
+        encodings, names = backend.load_reference_encodings(
+            ref_dir, max_per_identity=2
+        )
 
         assert len(encodings) == 2
         assert names.count("alice") == 2
@@ -267,10 +268,9 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([0.0])
 
         backend = MockBackendShim(fr_mock)
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
@@ -294,10 +294,9 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([1.5])
 
         backend = MockBackendShim(fr_mock)
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
@@ -322,10 +321,9 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([1.5])
 
         backend = MockBackendShim(fr_mock)
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["person_05"],
@@ -350,10 +348,9 @@ class TestClusterFacesWithReferences:
         fr_mock.face_distance.return_value = np.array([1.5])
 
         backend = MockBackendShim(fr_mock)
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc_new)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],

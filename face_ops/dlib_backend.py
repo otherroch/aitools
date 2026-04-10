@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from face_ops.mixin import FaceBackendMixin
 from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 
-class DlibBackend:
+class DlibBackend(FaceBackendMixin):
     """Face detection and encoding via dlib / face_recognition."""
 
     def __init__(self) -> None:

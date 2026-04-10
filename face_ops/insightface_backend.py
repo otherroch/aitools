@@ -16,12 +16,13 @@ import logging
 
 import numpy as np
 
+from face_ops.mixin import FaceBackendMixin
 from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 logger = logging.getLogger(__name__)
 
 
-class InsightFaceBackend:
+class InsightFaceBackend(FaceBackendMixin):
     """Face detection and ArcFace encoding via the insightface library.
 
     Args:
