@@ -31,7 +31,7 @@ class PipelineConfig:
     characters: list[CharacterMapping] = field(default_factory=list)
 
     # ── Detection / tracking ─────────────────────────────────────────────
-    detection_model: str = "buffalo_l"  # InsightFace model pack
+    detection_model: str = "buffalo_l"  # "dlib"/"hog"/"cnn" → dlib backend; else InsightFace model pack
     detection_threshold: float = 0.5
     detection_size: tuple[int, int] = (640, 640)
     tracker_max_age: int = 30  # frames to keep a lost track

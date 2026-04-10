@@ -38,17 +38,35 @@ def _make_tracked(emb=None, track_id=1) -> TrackedFace:
     return tf
 
 
-def _make_stub_app(faces_by_path=None):
-    """Return a stub FaceAnalysis that returns controlled faces per image."""
+def _make_stub_backend(faces_by_path=None):
+    """Return a stub FaceBackend-like object for tests.
+
+    The returned object provides a ``detect()`` method that returns an
+    empty list, matching the :class:`FaceBackend` protocol.
+    """
     faces_by_path = faces_by_path or {}
 
-    class _StubApp:
-        def get(self, img):
-            # We patch cv2.imread, so img will be a numpy array;
-            # the stub ignores the image content.
+    class _StubBackend:
+        def detect_faces(self, image):
             return []
 
-    return _StubApp()
+        def detect(self, image):
+            return []
+
+        def encode_faces(self, image, face_locations):
+            return []
+
+        def face_distance(self, known_encodings, encoding):
+            from face_ops.insightface_backend import InsightFaceBackend
+            return InsightFaceBackend._cosine_distance(known_encodings, encoding)
+
+        def load_image(self, path):
+            return np.zeros((100, 100, 3), dtype=np.uint8)
+
+        def face_landmarks(self, image, face_locations):
+            return [None] * len(face_locations)
+
+    return _StubBackend()
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +96,10 @@ class TestFaceRecognizerMatch:
     def _recognizer_with_target(self, label, emb):
         """Build a recognizer with a manually injected target."""
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         ti = TargetIdentity(label, [emb], [object()])
         rec._targets.append(ti)
@@ -124,10 +142,10 @@ class TestFaceRecognizerMatch:
 
     def test_no_targets_returns_none(self):
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         tf = _make_tracked(emb=np.ones(512, dtype=np.float32), track_id=1)
         label, sim = rec.match(tf)
@@ -141,10 +159,10 @@ class TestFaceRecognizerMatch:
             similarity_threshold=0.9,
         )
         cfg = _make_cfg(characters=[high_threshold_char])
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         emb = _unit(np.ones(512, dtype=np.float32))
         rec._targets.append(TargetIdentity("hero", [emb], [object()]))
@@ -170,10 +188,10 @@ class TestFaceRecognizerMatch:
 class TestFaceRecognizerIdentifyFaces:
     def _recognizer_with_target(self, label, emb):
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         ti = TargetIdentity(label, [emb], [object()])
         rec._targets.append(ti)
@@ -196,10 +214,10 @@ class TestFaceRecognizerIdentifyFaces:
 
     def test_empty_list(self):
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         result = rec.identify_faces([])
         assert result == []
@@ -212,10 +230,10 @@ class TestFaceRecognizerIdentifyFaces:
 class TestFaceRecognizerGetTarget:
     def test_existing_label(self):
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         ti = TargetIdentity("hero", [np.ones(512)], [])
         rec._targets.append(ti)
@@ -224,10 +242,10 @@ class TestFaceRecognizerGetTarget:
 
     def test_missing_label_returns_none(self):
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         assert rec.get_target("nobody") is None
 
@@ -239,10 +257,10 @@ class TestFaceRecognizerGetTarget:
 class TestEncodeImages:
     def test_none_paths_returns_empty(self):
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
         embs, faces = rec._encode_images(None, "reference", "hero")
         assert embs == []
@@ -251,10 +269,10 @@ class TestEncodeImages:
     def test_unreadable_image_skipped(self, monkeypatch, tmp_path):
         """A path that cv2.imread can't read is silently skipped."""
         cfg = _make_cfg()
-        app = _make_stub_app()
+        backend = _make_stub_backend()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
 
         import cv2
@@ -267,6 +285,7 @@ class TestEncodeImages:
     def test_arcface_crop_stored_on_face(self, monkeypatch, tmp_path):
         """Portrait face objects get a 112×112 arcface_crop attached for SimSwap."""
         import cv2
+        from face_ops.types import DetectedFace
 
         cfg = _make_cfg()
 
@@ -275,21 +294,38 @@ class TestEncodeImages:
             [[200, 250], [350, 250], [275, 350], [210, 450], [340, 450]],
             dtype=np.float32,
         )
-        fake_face = types.SimpleNamespace(
+        fake_raw = types.SimpleNamespace(
             kps=kps,
             normed_embedding=np.random.randn(512).astype(np.float32),
             det_score=0.95,
             bbox=np.array([100, 150, 450, 550], dtype=np.float32),
         )
 
-        class _AppWithFace:
-            def get(self, img):
-                return [fake_face]
+        df = DetectedFace(
+            bbox=(150, 450, 550, 100),
+            embedding=np.random.randn(512).astype(np.float32),
+            landmarks=kps,
+            raw=fake_raw,
+        )
 
-        app = _AppWithFace()
+        class _BackendWithFace:
+            def detect_faces(self, image):
+                return []
+            def detect(self, image):
+                return [df]
+            def encode_faces(self, image, face_locations):
+                return []
+            def face_distance(self, known_encodings, encoding):
+                return np.array([])
+            def load_image(self, path):
+                return np.zeros((100, 100, 3), dtype=np.uint8)
+            def face_landmarks(self, image, face_locations):
+                return []
+
+        backend = _BackendWithFace()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
 
         img = np.random.randint(0, 255, (720, 1280, 3), dtype=np.uint8)
@@ -306,27 +342,45 @@ class TestEncodeImages:
     def test_portrait_crop_ffhq_stored_on_face(self, monkeypatch, tmp_path):
         """Portrait face objects get a 256×256 portrait_crop_ffhq for uniface."""
         import cv2
+        from face_ops.types import DetectedFace
 
         cfg = _make_cfg()
         kps = np.array(
             [[200, 250], [350, 250], [275, 350], [210, 450], [340, 450]],
             dtype=np.float32,
         )
-        fake_face = types.SimpleNamespace(
+        fake_raw = types.SimpleNamespace(
             kps=kps,
             normed_embedding=np.random.randn(512).astype(np.float32),
             det_score=0.95,
             bbox=np.array([100, 150, 450, 550], dtype=np.float32),
         )
 
-        class _AppWithFace:
-            def get(self, img):
-                return [fake_face]
+        df = DetectedFace(
+            bbox=(150, 450, 550, 100),
+            embedding=np.random.randn(512).astype(np.float32),
+            landmarks=kps,
+            raw=fake_raw,
+        )
 
-        app = _AppWithFace()
+        class _BackendWithFace:
+            def detect_faces(self, image):
+                return []
+            def detect(self, image):
+                return [df]
+            def encode_faces(self, image, face_locations):
+                return []
+            def face_distance(self, known_encodings, encoding):
+                return np.array([])
+            def load_image(self, path):
+                return np.zeros((100, 100, 3), dtype=np.uint8)
+            def face_landmarks(self, image, face_locations):
+                return []
+
+        backend = _BackendWithFace()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
 
         img = np.random.randint(0, 255, (720, 1280, 3), dtype=np.uint8)
@@ -342,27 +396,45 @@ class TestEncodeImages:
     def test_portrait_crop_arcv2_stored_on_face(self, monkeypatch, tmp_path):
         """Portrait face objects get portrait_crop_arcv2 (same as arcface_crop) for blendswap."""
         import cv2
+        from face_ops.types import DetectedFace
 
         cfg = _make_cfg()
         kps = np.array(
             [[200, 250], [350, 250], [275, 350], [210, 450], [340, 450]],
             dtype=np.float32,
         )
-        fake_face = types.SimpleNamespace(
+        fake_raw = types.SimpleNamespace(
             kps=kps,
             normed_embedding=np.random.randn(512).astype(np.float32),
             det_score=0.95,
             bbox=np.array([100, 150, 450, 550], dtype=np.float32),
         )
 
-        class _AppWithFace:
-            def get(self, img):
-                return [fake_face]
+        df = DetectedFace(
+            bbox=(150, 450, 550, 100),
+            embedding=np.random.randn(512).astype(np.float32),
+            landmarks=kps,
+            raw=fake_raw,
+        )
 
-        app = _AppWithFace()
+        class _BackendWithFace:
+            def detect_faces(self, image):
+                return []
+            def detect(self, image):
+                return [df]
+            def encode_faces(self, image, face_locations):
+                return []
+            def face_distance(self, known_encodings, encoding):
+                return np.array([])
+            def load_image(self, path):
+                return np.zeros((100, 100, 3), dtype=np.uint8)
+            def face_landmarks(self, image, face_locations):
+                return []
+
+        backend = _BackendWithFace()
         rec = FaceRecognizer.__new__(FaceRecognizer)
         rec._cfg = cfg
-        rec._app = app
+        rec._backend = backend
         rec._targets = []
 
         img = np.random.randint(0, 255, (720, 1280, 3), dtype=np.uint8)

@@ -16,12 +16,13 @@ import logging
 
 import numpy as np
 
-from face_ops.types import Encoding, FaceBBox
+from face_ops.mixin import FaceBackendMixin
+from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 logger = logging.getLogger(__name__)
 
 
-class InsightFaceBackend:
+class InsightFaceBackend(FaceBackendMixin):
     """Face detection and ArcFace encoding via the insightface library.
 
     Args:
@@ -30,6 +31,10 @@ class InsightFaceBackend:
             ``"buffalo_sc"`` (CPU-friendly).
         ctx_id: ONNX Runtime device id.  ``0`` = first GPU, ``-1`` = CPU.
         det_size: Detection input resolution as ``(width, height)``.
+        det_thresh: Detection confidence threshold (default ``0.5``).
+        providers: Optional explicit list of ONNX Runtime execution
+            providers.  When *None* (the default), providers are chosen
+            automatically via :meth:`_providers`.
     """
 
     def __init__(
@@ -37,6 +42,8 @@ class InsightFaceBackend:
         model_name: str = "buffalo_l",
         ctx_id: int = 0,
         det_size: tuple[int, int] = (640, 640),
+        det_thresh: float = 0.5,
+        providers: list | None = None,
     ) -> None:
         try:
             from insightface.app import FaceAnalysis
@@ -46,12 +53,36 @@ class InsightFaceBackend:
                 "Install it with: pip install insightface onnxruntime"
             ) from exc
 
-        providers, effective_ctx_id = self._providers(ctx_id)
+        if providers is not None:
+            effective_providers = providers
+            effective_ctx_id = ctx_id
+        else:
+            effective_providers, effective_ctx_id = self._providers(ctx_id)
+
         self._app = FaceAnalysis(
             name=model_name,
-            providers=providers,
+            providers=effective_providers,
         )
-        self._app.prepare(ctx_id=effective_ctx_id, det_size=det_size)
+        self._app.prepare(
+            ctx_id=effective_ctx_id,
+            det_size=det_size,
+            det_thresh=det_thresh,
+        )
+
+    # ------------------------------------------------------------------
+    # public access to underlying FaceAnalysis
+    # ------------------------------------------------------------------
+
+    @property
+    def app(self):
+        """The underlying InsightFace ``FaceAnalysis`` instance.
+
+        Useful for callers (e.g. *chararep*) that need access to raw
+        ``Face`` objects returned by ``app.get()`` — data that is richer
+        than the backend-agnostic :class:`FaceBBox` / :class:`Encoding`
+        types.
+        """
+        return self._app
 
     # ------------------------------------------------------------------
     # helpers
@@ -92,11 +123,8 @@ class InsightFaceBackend:
     def detect_faces(
         self,
         image: np.ndarray,
-        *,
-        model: str = "buffalo_l",
     ) -> list[FaceBBox]:
-        # ``model`` is accepted for API consistency with the FaceBackend
-        # protocol but is not used here — the model is set during __init__.
+        # The model is set during __init__ — no per-call model hint needed.
         faces = self._app.get(image)
         bboxes: list[FaceBBox] = []
         for f in faces:
@@ -104,6 +132,31 @@ class InsightFaceBackend:
             # Convert (x1, y1, x2, y2) → (top, right, bottom, left)
             bboxes.append((int(y1), int(x2), int(y2), int(x1)))
         return bboxes
+
+    def detect(
+        self,
+        image: np.ndarray,
+    ) -> list[DetectedFace]:
+        faces = self._app.get(image)
+        results: list[DetectedFace] = []
+        for f in faces:
+            x1, y1, x2, y2 = f.bbox.astype(int)
+            bbox: FaceBBox = (y1, x2, y2, x1)
+
+            emb = None
+            if hasattr(f, "normed_embedding") and f.normed_embedding is not None:
+                emb = np.array(f.normed_embedding, dtype=np.float32)
+            elif hasattr(f, "embedding") and f.embedding is not None:
+                emb = np.array(f.embedding, dtype=np.float32)
+
+            landmarks = None
+            if hasattr(f, "kps") and f.kps is not None:
+                landmarks = np.array(f.kps, dtype=np.float32)
+
+            results.append(
+                DetectedFace(bbox=bbox, embedding=emb, landmarks=landmarks, raw=f)
+            )
+        return results
 
     # ------------------------------------------------------------------
     # Encoding

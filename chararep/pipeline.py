@@ -3,8 +3,9 @@
 Flow per frame:
   detect → track → identify → swap → enhance → blend → write
 
-The ``FaceAnalysis`` ONNX model is loaded once and shared between
-the detector and recognizer to avoid duplicated VRAM usage.
+The :class:`FaceBackend` (from :mod:`face_ops`) is loaded once and
+shared between the detector and recognizer to avoid duplicated VRAM
+usage.
 """
 
 import logging
@@ -44,10 +45,10 @@ class CharacterReplacementPipeline:
 
         logger.info("Initialising pipeline components...")
 
-        # Detector owns the shared FaceAnalysis instance
+        # Detector owns the shared FaceBackend instance
         self._detector = FaceDetector(cfg)
-        # Recognizer re-uses the same model (no extra VRAM)
-        self._recognizer = FaceRecognizer(cfg, app=self._detector.app)
+        # Recognizer re-uses the same backend (no extra VRAM)
+        self._recognizer = FaceRecognizer(cfg, backend=self._detector.backend)
         self._swapper = FaceSwapper(cfg)
         self._enhancer = FaceEnhancer(cfg)
         self._blender = FaceBlender(cfg)

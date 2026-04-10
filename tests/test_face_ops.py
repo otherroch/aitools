@@ -22,11 +22,13 @@ from PIL import Image
 from face_ops import (
     SUPPORTED_IMAGE_EXTS,
     FaceBackend,
+    cluster_faces,
     get_backend,
+    load_reference_encodings,
 )
 from face_ops.backend import FaceBackend as FaceBackendProtocol
-from face_ops.clustering import cluster_faces, load_reference_encodings
 from face_ops.insightface_backend import InsightFaceBackend
+from face_ops.mixin import FaceBackendMixin
 from face_ops.types import Encoding, FaceBBox
 
 
@@ -41,8 +43,12 @@ def _make_png(path: Path, size: tuple = (100, 100)) -> Path:
     return path
 
 
-class _StubBackend:
-    """Minimal backend for testing clustering/ref-loading in isolation."""
+class _StubBackend(FaceBackendMixin):
+    """Minimal backend for testing clustering/ref-loading in isolation.
+    
+    Inherits ``cluster_faces`` and ``load_reference_encodings`` from
+    :class:`FaceBackendMixin`.
+    """
 
     def __init__(
         self,
@@ -55,8 +61,18 @@ class _StubBackend:
         self._encs = face_encs or []
         self._dist_fn = distance_fn
 
-    def detect_faces(self, image, *, model="hog"):
+    def detect_faces(self, image):
         return self._locs
+
+    def detect(self, image):
+        from face_ops.types import DetectedFace
+        boxes = self.detect_faces(image)
+        encs = self.encode_faces(image, boxes)
+        results = []
+        for i, b in enumerate(boxes):
+            emb = encs[i] if i < len(encs) else None
+            results.append(DetectedFace(bbox=b, embedding=emb))
+        return results
 
     def encode_faces(self, image, face_locations):
         return self._encs
@@ -126,7 +142,7 @@ class TestSupportedExts:
 
 
 # ---------------------------------------------------------------------------
-# cluster_faces (backend-agnostic)
+# cluster_faces (as method on backend)
 # ---------------------------------------------------------------------------
 
 
@@ -139,10 +155,9 @@ class TestClusterFaces:
         enc = np.zeros(128, dtype=np.float64)
         backend = _StubBackend()
 
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc)],
             tmp_path,
-            backend,
         )
         assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
@@ -156,10 +171,9 @@ class TestClusterFaces:
         enc = np.zeros(128, dtype=np.float64)
         backend = _StubBackend()
 
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "f1.png", enc), (staging / "f2.png", enc)],
             tmp_path,
-            backend,
             tolerance=0.6,
         )
         assert len(result) == 1
@@ -174,10 +188,9 @@ class TestClusterFaces:
         enc_b = np.ones(128, dtype=np.float64)
         backend = _StubBackend()
 
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "f1.png", enc_a), (staging / "f2.png", enc_b)],
             tmp_path,
-            backend,
             tolerance=0.6,
         )
         assert len(result) == 2
@@ -191,10 +204,9 @@ class TestClusterFaces:
         ref_enc = np.zeros(128, dtype=np.float64)
         backend = _StubBackend()
 
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
@@ -211,10 +223,9 @@ class TestClusterFaces:
         ref_enc = np.zeros(128, dtype=np.float64)
         backend = _StubBackend()
 
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
@@ -231,10 +242,9 @@ class TestClusterFaces:
         ref_enc = np.zeros(128, dtype=np.float64)
         backend = _StubBackend()
 
-        result = cluster_faces(
+        result = backend.cluster_faces(
             [(staging / "face1.png", enc)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["person_05"],
@@ -250,10 +260,9 @@ class TestClusterFaces:
         ref_enc = np.zeros(128, dtype=np.float64)
         backend = _StubBackend()
 
-        cluster_faces(
+        backend.cluster_faces(
             [(staging / "face1.png", enc)],
             tmp_path,
-            backend,
             tolerance=0.6,
             reference_encodings=[ref_enc],
             reference_names=["alice"],
@@ -262,7 +271,7 @@ class TestClusterFaces:
 
 
 # ---------------------------------------------------------------------------
-# load_reference_encodings (backend-agnostic)
+# load_reference_encodings (as method on backend)
 # ---------------------------------------------------------------------------
 
 
@@ -287,7 +296,7 @@ class TestLoadReferenceEncodings:
         )
         backend.encode_faces = encs
 
-        encodings, names = load_reference_encodings(ref_dir, backend)
+        encodings, names = backend.load_reference_encodings(ref_dir)
         assert len(encodings) == 2
         assert "alice" in names
         assert "bob" in names
@@ -297,7 +306,7 @@ class TestLoadReferenceEncodings:
         ref_dir.mkdir()
         backend = _StubBackend()
 
-        encodings, names = load_reference_encodings(ref_dir, backend)
+        encodings, names = backend.load_reference_encodings(ref_dir)
         assert len(encodings) == 0
         assert len(names) == 0
 
@@ -308,7 +317,7 @@ class TestLoadReferenceEncodings:
 
         backend = _StubBackend(face_locations=[], face_encs=[])
 
-        encodings, names = load_reference_encodings(ref_dir, backend)
+        encodings, names = backend.load_reference_encodings(ref_dir)
         assert len(encodings) == 0
 
     def test_max_per_identity(self, tmp_path):
@@ -323,8 +332,8 @@ class TestLoadReferenceEncodings:
             face_encs=[np.zeros(128)],
         )
 
-        encodings, names = load_reference_encodings(
-            ref_dir, backend, max_per_identity=2
+        encodings, names = backend.load_reference_encodings(
+            ref_dir, max_per_identity=2
         )
         assert len(encodings) == 2
         assert names.count("alice") == 2
@@ -358,6 +367,79 @@ class TestInsightFaceDistance:
     def test_empty_known_encodings(self):
         dist = InsightFaceBackend._cosine_distance([], np.zeros(3))
         assert len(dist) == 0
+
+
+# ---------------------------------------------------------------------------
+# InsightFaceBackend extended init & app property
+# ---------------------------------------------------------------------------
+
+
+class TestInsightFaceBackendInit:
+    """Test the InsightFaceBackend's configurable __init__ and app property."""
+
+    def test_app_property_returns_face_analysis(self):
+        """The ``app`` property exposes the underlying FaceAnalysis."""
+        backend = InsightFaceBackend()
+        assert backend.app is not None
+        # Should have a 'get' method (the FaceAnalysis stub from conftest)
+        assert hasattr(backend.app, "get")
+
+    def test_custom_providers_accepted(self):
+        """Passing explicit providers bypasses the auto-detection path."""
+        backend = InsightFaceBackend(
+            providers=[("CPUExecutionProvider", {})],
+        )
+        assert backend.app is not None
+
+    def test_det_thresh_forwarded(self):
+        """The det_thresh parameter is accepted without error."""
+        backend = InsightFaceBackend(det_thresh=0.3)
+        assert backend.app is not None
+
+
+class TestInsightFaceDetect:
+    """Test InsightFaceBackend.detect() rich results."""
+
+    def test_detect_returns_empty_on_no_faces(self):
+        backend = InsightFaceBackend()
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = backend.detect(image)
+        assert result == []
+
+    def test_detect_returns_detected_face_objects(self):
+        """When the stub returns faces, detect returns DetectedFace objects."""
+        from face_ops.types import DetectedFace
+        import types as _types
+
+        backend = InsightFaceBackend()
+        fake_face = _types.SimpleNamespace(
+            bbox=np.array([10, 20, 50, 60], dtype=np.float32),
+            kps=np.array([[15, 25], [35, 25], [25, 35], [18, 45], [38, 45]], dtype=np.float32),
+            normed_embedding=np.ones(512, dtype=np.float32),
+        )
+        backend._app.get = lambda img: [fake_face]
+
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = backend.detect(image)
+        assert len(result) == 1
+        assert isinstance(result[0], DetectedFace)
+        # bbox should be in (top, right, bottom, left) format
+        top, right, bottom, left = result[0].bbox
+        assert left == 10 and top == 20 and right == 50 and bottom == 60
+        assert result[0].embedding is not None
+        assert result[0].landmarks is not None
+        assert result[0].raw is fake_face
+
+
+class TestGetBackendDetect:
+    """Test detect() via the get_backend() factory."""
+
+    def test_get_backend_insightface_has_detect(self):
+        backend = get_backend("insightface")
+        assert hasattr(backend, "detect")
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = backend.detect(image)
+        assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------

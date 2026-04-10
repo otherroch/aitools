@@ -17,25 +17,25 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from portrait_prep.face_utils import (
-    DEFAULT_CROP_SIZE,
-    DEFAULT_MARGIN_RATIO,
-    cluster_faces as _cluster_faces_shared,
-    load_face_recognition as _load_face_recognition,
-    load_reference_encodings,
-)
 from vicrop.ref import (
     DEFAULT_REF_THRESH,
     collect_ref_photos,
     score_reference_quality,
 )
 
+if TYPE_CHECKING:
+    from face_ops.backend import FaceBackend
+
 logger = logging.getLogger(__name__)
+
+DEFAULT_MARGIN_RATIO: float = 0.4
+DEFAULT_CROP_SIZE: int = 1024
 
 SUPPORTED_VIDEO_EXTS: set[str] = {
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv",
@@ -44,23 +44,11 @@ SUPPORTED_VIDEO_EXTS: set[str] = {
 DEFAULT_EVERY_N_FRAMES: int = 30
 
 
-def _cluster_faces(
-    all_results: list[tuple[Path, np.ndarray]],
-    output_dir: Path,
-    tolerance: float = 0.6,
-    reference_encodings: list[np.ndarray] | None = None,
-    reference_names: list[str] | None = None,
-) -> dict[str, list[Path]]:
-    """Group saved face crops by identity using greedy nearest-neighbour clustering.
+def _default_backend():
+    """Create a default dlib backend when none is provided."""
+    from face_ops import backend_for_model
 
-    Delegates to :func:`portrait_prep.face_utils.cluster_faces`.
-    """
-    fr = _load_face_recognition()
-    return _cluster_faces_shared(
-        all_results, output_dir, tolerance=tolerance, fr=fr,
-        reference_encodings=reference_encodings,
-        reference_names=reference_names,
-    )
+    return backend_for_model("dlib")
 
 
 def crop_video(
@@ -69,13 +57,13 @@ def crop_video(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
-    model: str = "hog",
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
+    backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -89,8 +77,6 @@ def crop_video(
         every_n:         Process every N-th frame (default: 30).
         margin_ratio:    Fractional padding around each detected face bbox.
         crop_size:       Output square resolution in pixels (default: 1024).
-        model:           face_recognition detection model – ``"hog"`` (fast) or
-                         ``"cnn"`` (accurate).
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
@@ -103,19 +89,23 @@ def crop_video(
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        backend:         :class:`FaceBackend` instance for detection, encoding,
+                         and clustering.  When *None*, a default dlib backend
+                         is created.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``,
         ``persons``, ``ref_photos``.
     """
-    fr = _load_face_recognition()
+    if backend is None:
+        backend = _default_backend()
 
     output_dir = output_dir.resolve()
     video_stem_dir = output_dir / video_path.stem
 
     logger.debug(
-        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d model=%s classify=%s",
-        video_path.name, every_n, margin_ratio, crop_size, model, classify,
+        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d classify=%s",
+        video_path.name, every_n, margin_ratio, crop_size, classify,
     )
 
     if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.png")):
@@ -167,8 +157,8 @@ def crop_video(
 
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                face_locations = fr.face_locations(frame_rgb, model=model)
-                face_encodings = fr.face_encodings(frame_rgb, face_locations)
+                face_locations = backend.detect_faces(frame_rgb)
+                face_encodings = backend.encode_faces(frame_rgb, face_locations)
 
                 logger.debug(
                     "crop_video: frame %d  detected %d face(s)",
@@ -204,7 +194,7 @@ def crop_video(
                     faces_detected += 1
 
                     if do_ref:
-                        lm_list = fr.face_landmarks(
+                        lm_list = backend.face_landmarks(
                             frame_rgb, [(top, right, bottom, left)],
                         )
                         lm = lm_list[0] if lm_list else None
@@ -234,11 +224,11 @@ def crop_video(
         ref_enc: list[np.ndarray] | None = None
         ref_names: list[str] | None = None
         if classified_path is not None:
-            ref_enc, ref_names = load_reference_encodings(
-                classified_path, model=model,
+            ref_enc, ref_names = backend.load_reference_encodings(
+                classified_path,
                 max_per_identity=classified_max,
             )
-        person_dirs = _cluster_faces(
+        person_dirs = backend.cluster_faces(
             all_results, video_stem_dir, tolerance=tolerance,
             reference_encodings=ref_enc,
             reference_names=ref_names,
@@ -292,13 +282,13 @@ def crop_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
-    model: str = "hog",
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
+    backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
@@ -308,7 +298,6 @@ def crop_folder(
         every_n:         Process every N-th frame from each video.
         margin_ratio:    Fractional margin around each detected face bbox.
         crop_size:       Output square resolution in pixels.
-        model:           face_recognition detection model (``"hog"`` or ``"cnn"``).
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
@@ -319,11 +308,16 @@ def crop_folder(
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        backend:         :class:`FaceBackend` instance.  When *None*, a
+                         default dlib backend is created.
 
     Returns:
         Aggregate summary dict with keys ``videos_processed``,
         ``frames_processed``, ``faces``, ``persons``, ``ref_photos``.
     """
+    if backend is None:
+        backend = _default_backend()
+
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -359,13 +353,13 @@ def crop_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
-            model=model,
             classify=classify,
             tolerance=tolerance,
             skip_existing=skip_existing,
             ref_thresh=ref_thresh,
             classified_path=classified_path,
             classified_max=classified_max,
+            backend=backend,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]

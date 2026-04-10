@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from face_ops.types import Encoding, FaceBBox
+from face_ops.mixin import FaceBackendMixin
+from face_ops.types import DetectedFace, Encoding, FaceBBox
 
 
-class DlibBackend:
+class DlibBackend(FaceBackendMixin):
     """Face detection and encoding via dlib / face_recognition."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: str = "hog") -> None:
+        self._model = model
         try:
             import face_recognition  # noqa: F401
 
@@ -34,10 +36,22 @@ class DlibBackend:
     def detect_faces(
         self,
         image: np.ndarray,
-        *,
-        model: str = "hog",
     ) -> list[FaceBBox]:
-        return self._fr.face_locations(image, model=model)
+        return self._fr.face_locations(image, model=self._model)
+
+    def detect(
+        self,
+        image: np.ndarray,
+    ) -> list[DetectedFace]:
+        locations = self._fr.face_locations(image, model=self._model)
+        if not locations:
+            return []
+        encodings = self._fr.face_encodings(image, locations)
+        results: list[DetectedFace] = []
+        for i, loc in enumerate(locations):
+            emb = encodings[i] if i < len(encodings) else None
+            results.append(DetectedFace(bbox=loc, embedding=emb))
+        return results
 
     # ------------------------------------------------------------------
     # Encoding

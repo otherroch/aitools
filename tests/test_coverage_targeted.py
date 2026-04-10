@@ -143,6 +143,10 @@ class TestVicropCli:
             SUPPORTED_VIDEO_EXTS={".mp4", ".mov"},
         )
         monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+
+        import face_ops
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(face_ops, "backend_for_model", lambda *a, **kw: MagicMock())
         mod.main([])
         assert called["kwargs"]["skip_existing"] is False
         assert called["kwargs"]["classify"] is True
@@ -179,6 +183,10 @@ class TestVicropCli:
             SUPPORTED_VIDEO_EXTS={".mp4", ".mov"},
         )
         monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+
+        import face_ops
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(face_ops, "backend_for_model", lambda *a, **kw: MagicMock())
         mod.main([])
         assert called["path"] == video_file
         assert called["kwargs"]["classify"] is True
@@ -208,6 +216,10 @@ class TestVicropCli:
             SUPPORTED_VIDEO_EXTS={".mp4", ".mov"},
         )
         monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+
+        import face_ops
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(face_ops, "backend_for_model", lambda *a, **kw: MagicMock())
         with pytest.raises(SystemExit):
             mod.main([])
 

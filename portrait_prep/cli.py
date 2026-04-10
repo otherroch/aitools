@@ -123,9 +123,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     crop_group.add_argument(
         "--detection-model",
-        choices=["hog", "cnn"],
         default="hog",
-        help="face_recognition detection model (default: hog).",
+        help=(
+            "Face detection backend and model. "
+            "Use 'dlib', 'hog', or 'cnn' for the dlib backend; "
+            "any other value (e.g. 'buffalo_l') selects an InsightFace "
+            "model pack (default: hog)."
+        ),
     )
     crop_group.add_argument(
         "--classified-path",
@@ -276,6 +280,7 @@ def run_convert(args: argparse.Namespace) -> None:
 
 
 def run_crop(args: argparse.Namespace, input_dir: Path) -> None:
+    from face_ops import backend_for_model
     from portrait_prep.crop import crop_folder
 
     if args.output_dir is None:
@@ -283,6 +288,7 @@ def run_crop(args: argparse.Namespace, input_dir: Path) -> None:
         sys.exit(1)
 
     logger.info("=== STEP: crop ===")
+    backend = backend_for_model(args.detection_model)
     stats = crop_folder(
         input_dir,
         args.output_dir,
@@ -290,9 +296,9 @@ def run_crop(args: argparse.Namespace, input_dir: Path) -> None:
         crop_size=args.crop_size,
         classify=not args.no_classify,
         tolerance=args.tolerance,
-        model=args.detection_model,
         classified_path=args.classified_path,
         classified_max=args.classified_max,
+        backend=backend,
     )
     logger.info(
         "crop: %d faces found in %d images, %d persons identified",
