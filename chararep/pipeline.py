@@ -161,7 +161,10 @@ class CharacterReplacementPipeline:
         batch_size = self._cfg.batch_size
         logger.info("Parallel pipeline: %d workers", batch_size)
 
-        with ThreadPoolExecutor(max_workers=batch_size) as pool:
+        with ThreadPoolExecutor(
+            max_workers=batch_size,
+            thread_name_prefix="ChararepWorker",
+        ) as pool:
             pending: deque = deque()
             frame_count = 0
 
