@@ -54,30 +54,3 @@ class MockBackendShim(FaceBackendMixin):
 
     def face_landmarks(self, image, face_locations):
         return self._fr.face_landmarks(image, face_locations)
-
-
-def backend_from_fr(fr=None):
-    """Return a :class:`FaceBackend` wrapping an ``fr`` module.
-
-    When *fr* is the real ``face_recognition`` module (or ``None``), we
-    return a :class:`DlibBackend`.  When *fr* is a mock object (unit
-    tests), we wrap it in a :class:`MockBackendShim` that satisfies the
-    :class:`FaceBackend` protocol.
-    """
-    if fr is None:
-        from face_ops.dlib_backend import DlibBackend
-
-        return DlibBackend()
-
-    # Check whether ``fr`` is the real face_recognition module.
-    module_name = getattr(fr, "__name__", "")
-    if module_name == "face_recognition":
-        from face_ops.dlib_backend import DlibBackend
-
-        backend = DlibBackend.__new__(DlibBackend)
-        backend._fr = fr
-        return backend
-
-    # ``fr`` is a mock — wrap it so cluster_faces/load_reference_encodings
-    # can call the backend protocol methods.
-    return MockBackendShim(fr)

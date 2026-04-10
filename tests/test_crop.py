@@ -112,7 +112,7 @@ def _run_crop_folder_mocked(
     classify: bool = False,
 ):
     """Run crop_folder with face_recognition fully mocked out."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
     import numpy as np
 
     # Build per-image face data
@@ -150,8 +150,8 @@ def _run_crop_folder_mocked(
     fr_mock.face_encodings.side_effect = mock_face_encodings
     fr_mock.face_distance.side_effect = mock_face_distance
 
-    with patch("portrait_prep.crop._load_face_recognition", return_value=fr_mock):
-        return crop_folder(input_dir, output_dir, classify=classify)
+    backend = MockBackendShim(fr_mock)
+    return crop_folder(input_dir, output_dir, classify=classify, backend=backend)
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +367,7 @@ class TestClusterFacesWithReferences:
 
 class TestCropFolderWithClassifiedPath:
     def test_classified_path_seeds_clustering(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         ref_dir = tmp_path / "classified" / "alice"
         ref_dir.mkdir(parents=True)
@@ -403,11 +403,12 @@ class TestCropFolderWithClassifiedPath:
         fr_mock.face_distance.side_effect = mock_face_distance
 
         out_dir = tmp_path / "out"
-        with patch("portrait_prep.crop._load_face_recognition", return_value=fr_mock):
-            result = crop_folder(
-                in_dir, out_dir, classify=True,
-                classified_path=tmp_path / "classified",
-            )
+        backend = MockBackendShim(fr_mock)
+        result = crop_folder(
+            in_dir, out_dir, classify=True,
+            classified_path=tmp_path / "classified",
+            backend=backend,
+        )
 
         assert result["persons"] == 1
         assert (out_dir / "alice").exists()

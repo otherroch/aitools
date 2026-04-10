@@ -16,7 +16,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from face_ops import get_backend
+from face_ops import backend_for_model
 from face_ops.backend import FaceBackend
 
 from .config import PipelineConfig
@@ -40,6 +40,9 @@ class TrackedFace:
     face_obj: object = None
 
 
+_DLIB_MODELS = frozenset({"dlib", "hog", "cnn"})
+
+
 class FaceDetector:
     """Wraps a :class:`FaceBackend` with a simple IoU tracker.
 
@@ -56,20 +59,26 @@ class FaceDetector:
         self._next_id = 0
         self._tracks: list[TrackedFace] = []
 
-        providers = get_onnx_providers(cfg.device_id)
-        self._backend: FaceBackend = get_backend(
-            "insightface",
-            model_name=cfg.detection_model,
-            ctx_id=cfg.device_id,
-            det_size=cfg.detection_size,
-            det_thresh=cfg.detection_threshold,
-            providers=providers,
-        )
-        logger.info(
-            "FaceDetector ready (model=%s, det_size=%s).",
-            cfg.detection_model,
-            cfg.detection_size,
-        )
+        if cfg.detection_model.lower() in _DLIB_MODELS:
+            self._backend: FaceBackend = backend_for_model(cfg.detection_model)
+            logger.info(
+                "FaceDetector ready (backend=dlib, model=%s).",
+                cfg.detection_model,
+            )
+        else:
+            providers = get_onnx_providers(cfg.device_id)
+            self._backend = backend_for_model(
+                cfg.detection_model,
+                ctx_id=cfg.device_id,
+                det_size=cfg.detection_size,
+                det_thresh=cfg.detection_threshold,
+                providers=providers,
+            )
+            logger.info(
+                "FaceDetector ready (backend=insightface, model=%s, det_size=%s).",
+                cfg.detection_model,
+                cfg.detection_size,
+            )
 
     @property
     def backend(self) -> FaceBackend:

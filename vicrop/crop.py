@@ -17,17 +17,20 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from face_ops.testing import backend_from_fr as _backend_from_fr
 from vicrop.ref import (
     DEFAULT_REF_THRESH,
     collect_ref_photos,
     score_reference_quality,
 )
+
+if TYPE_CHECKING:
+    from face_ops.backend import FaceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +44,11 @@ SUPPORTED_VIDEO_EXTS: set[str] = {
 DEFAULT_EVERY_N_FRAMES: int = 30
 
 
-def _load_face_recognition():
-    """Lazily import the face_recognition package, raising a clear error if absent."""
-    try:
-        import face_recognition
+def _default_backend():
+    """Create a default dlib backend when none is provided."""
+    from face_ops import backend_for_model
 
-        return face_recognition
-    except ImportError as exc:
-        raise ImportError(
-            "face_recognition is required for the crop task.\n"
-            "Install it with: pip install face_recognition"
-        ) from exc
+    return backend_for_model("dlib")
 
 
 def _cluster_faces(
@@ -60,13 +57,14 @@ def _cluster_faces(
     tolerance: float = 0.6,
     reference_encodings: list[np.ndarray] | None = None,
     reference_names: list[str] | None = None,
+    backend: FaceBackend | None = None,
 ) -> dict[str, list[Path]]:
     """Group saved face crops by identity using greedy nearest-neighbour clustering.
 
     Delegates to :meth:`FaceBackend.cluster_faces`.
     """
-    fr = _load_face_recognition()
-    backend = _backend_from_fr(fr)
+    if backend is None:
+        backend = _default_backend()
     return backend.cluster_faces(
         all_results, output_dir, tolerance,
         reference_encodings=reference_encodings,
@@ -87,6 +85,7 @@ def crop_video(
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
+    backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -114,12 +113,16 @@ def crop_video(
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        backend:         :class:`FaceBackend` instance for detection, encoding,
+                         and clustering.  When *None*, a default dlib backend
+                         is created.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``,
         ``persons``, ``ref_photos``.
     """
-    fr = _load_face_recognition()
+    if backend is None:
+        backend = _default_backend()
 
     output_dir = output_dir.resolve()
     video_stem_dir = output_dir / video_path.stem
@@ -178,8 +181,8 @@ def crop_video(
 
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                face_locations = fr.face_locations(frame_rgb, model=model)
-                face_encodings = fr.face_encodings(frame_rgb, face_locations)
+                face_locations = backend.detect_faces(frame_rgb, model=model)
+                face_encodings = backend.encode_faces(frame_rgb, face_locations)
 
                 logger.debug(
                     "crop_video: frame %d  detected %d face(s)",
@@ -215,7 +218,7 @@ def crop_video(
                     faces_detected += 1
 
                     if do_ref:
-                        lm_list = fr.face_landmarks(
+                        lm_list = backend.face_landmarks(
                             frame_rgb, [(top, right, bottom, left)],
                         )
                         lm = lm_list[0] if lm_list else None
@@ -245,7 +248,6 @@ def crop_video(
         ref_enc: list[np.ndarray] | None = None
         ref_names: list[str] | None = None
         if classified_path is not None:
-            backend = _backend_from_fr(fr)
             ref_enc, ref_names = backend.load_reference_encodings(
                 classified_path, model=model,
                 max_per_identity=classified_max,
@@ -254,6 +256,7 @@ def crop_video(
             all_results, video_stem_dir, tolerance=tolerance,
             reference_encodings=ref_enc,
             reference_names=ref_names,
+            backend=backend,
         )
         persons = len(person_dirs)
         try:
@@ -311,6 +314,7 @@ def crop_folder(
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
+    backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
@@ -331,11 +335,16 @@ def crop_folder(
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        backend:         :class:`FaceBackend` instance.  When *None*, a
+                         default dlib backend is created.
 
     Returns:
         Aggregate summary dict with keys ``videos_processed``,
         ``frames_processed``, ``faces``, ``persons``, ``ref_photos``.
     """
+    if backend is None:
+        backend = _default_backend()
+
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -378,6 +387,7 @@ def crop_folder(
             ref_thresh=ref_thresh,
             classified_path=classified_path,
             classified_max=classified_max,
+            backend=backend,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]

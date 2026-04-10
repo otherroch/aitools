@@ -39,11 +39,15 @@ __all__ = [
     "Encoding",
     # factory
     "get_backend",
+    "backend_for_model",
     # backward-compat standalone helpers
     "cluster_faces",
     "load_reference_encodings",
     "SUPPORTED_IMAGE_EXTS",
 ]
+
+# Model names that select the dlib backend.
+_DLIB_MODELS: frozenset[str] = frozenset({"dlib", "hog", "cnn"})
 
 
 def get_backend(name: str = "dlib", **kwargs) -> FaceBackend:
@@ -73,6 +77,23 @@ def get_backend(name: str = "dlib", **kwargs) -> FaceBackend:
         f"Unknown face_ops backend: {name!r}. "
         f"Choose 'dlib' or 'insightface'."
     )
+
+
+def backend_for_model(detection_model: str, **kwargs) -> FaceBackend:
+    """Create a :class:`FaceBackend` based on a ``--detection-model`` value.
+
+    ``"dlib"``, ``"hog"``, and ``"cnn"`` select the dlib backend.
+    Any other value (e.g. ``"buffalo_l"``) selects the InsightFace
+    backend and is forwarded as the *model_name* parameter.
+
+    Args:
+        detection_model: Value from the CLI ``--detection-model`` argument.
+        kwargs:          Extra keyword arguments forwarded to the backend
+                         constructor (e.g. ``ctx_id``, ``providers``).
+    """
+    if detection_model.lower() in _DLIB_MODELS:
+        return get_backend("dlib")
+    return get_backend("insightface", model_name=detection_model, **kwargs)
 
 
 # ------------------------------------------------------------------

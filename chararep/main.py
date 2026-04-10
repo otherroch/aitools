@@ -127,7 +127,12 @@ Config JSON format
     p.add_argument(
         "--detection-model",
         default="buffalo_l",
-        help="InsightFace model pack (default: buffalo_l).",
+        help=(
+            "Face detection backend and model. "
+            "Use 'dlib', 'hog', or 'cnn' for the dlib backend; "
+            "any other value (e.g. 'buffalo_l', 'buffalo_sc') selects "
+            "an InsightFace model pack (default: buffalo_l)."
+        ),
     )
     p.add_argument(
         "--detect-size",

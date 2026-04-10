@@ -23,6 +23,8 @@ from vicrop.crop import (
     crop_folder,
 )
 
+from face_ops.testing import MockBackendShim
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,8 +94,8 @@ class TestClusterFaces:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([0.3])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            result = _cluster_faces([(face_path, encoding)], tmp_path)
+        backend = MockBackendShim(fr_mock)
+        result = _cluster_faces([(face_path, encoding)], tmp_path, backend=backend)
 
         assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
@@ -111,8 +113,8 @@ class TestClusterFaces:
         # Second face: distance 0.2 ≤ 0.6 → same person
         fr_mock.face_distance.return_value = np.array([0.2])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            result = _cluster_faces([(path1, enc1), (path2, enc2)], tmp_path)
+        backend = MockBackendShim(fr_mock)
+        result = _cluster_faces([(path1, enc1), (path2, enc2)], tmp_path, backend=backend)
 
         assert len(result) == 1  # Only one person
 
@@ -128,8 +130,8 @@ class TestClusterFaces:
         # Distance > tolerance → different person
         fr_mock.face_distance.return_value = np.array([0.8])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            result = _cluster_faces([(path1, enc1), (path2, enc2)], tmp_path)
+        backend = MockBackendShim(fr_mock)
+        result = _cluster_faces([(path1, enc1), (path2, enc2)], tmp_path, backend=backend)
 
         assert len(result) == 2
 
@@ -150,13 +152,13 @@ class TestCropVideo:
         bad_video.write_bytes(b"not a video")
 
         fr_mock = MagicMock()
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            with patch("vicrop.crop.cv2.VideoCapture") as mock_vc:
-                mock_cap = MagicMock()
-                mock_cap.isOpened.return_value = False
-                mock_vc.return_value = mock_cap
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture") as mock_vc:
+            mock_cap = MagicMock()
+            mock_cap.isOpened.return_value = False
+            mock_vc.return_value = mock_cap
 
-                stats = crop_video(bad_video, tmp_path / "out")
+            stats = crop_video(bad_video, tmp_path / "out", backend=backend)
 
         assert stats["frames_processed"] == 0
         assert stats["faces"] == 0
@@ -170,8 +172,8 @@ class TestCropVideo:
         make_png(stem_dir / "existing.png")
 
         fr_mock = MagicMock()
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            stats = crop_video(video_path, out_dir, skip_existing=True)
+        backend = MockBackendShim(fr_mock)
+        stats = crop_video(video_path, out_dir, skip_existing=True, backend=backend)
 
         assert stats["frames_processed"] == 0  # skipped
 
@@ -187,10 +189,10 @@ class TestCropVideo:
         fr_mock.face_locations.return_value = []
         fr_mock.face_encodings.return_value = []
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
-                with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
-                    stats = crop_video(video_path, out_dir, every_n=1, classify=False)
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_video(video_path, out_dir, every_n=1, classify=False, backend=backend)
 
         assert stats["faces"] == 0
 
@@ -212,16 +214,17 @@ class TestCropVideo:
         fr_mock.face_locations.return_value = [face_location]
         fr_mock.face_encodings.return_value = [fake_encoding]
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
-                with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
-                    stats = crop_video(
-                        video_path,
-                        out_dir,
-                        every_n=1,
-                        classify=False,
-                        crop_size=64,
-                    )
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_video(
+                    video_path,
+                    out_dir,
+                    every_n=1,
+                    classify=False,
+                    crop_size=64,
+                    backend=backend,
+                )
 
         assert stats["faces"] == 1
         saved = list((out_dir / "clip").rglob("*.png"))
@@ -240,12 +243,12 @@ class TestCropVideo:
         fr_mock.face_locations.return_value = []
         fr_mock.face_encodings.return_value = []
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
-                with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
-                    stats = crop_video(
-                        video_path, out_dir, every_n=2, classify=False
-                    )
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_video(
+                    video_path, out_dir, every_n=2, classify=False, backend=backend,
+                )
 
         # frames 0, 2, 4 → 3 processed
         assert stats["frames_processed"] == 3
@@ -259,8 +262,8 @@ class TestCropVideo:
 class TestCropFolder:
     def test_empty_directory_returns_zeros(self, tmp_path):
         fr_mock = MagicMock()
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            stats = crop_folder(tmp_path / "in", tmp_path / "out")
+        backend = MockBackendShim(fr_mock)
+        stats = crop_folder(tmp_path / "in", tmp_path / "out", backend=backend)
 
         assert stats["videos_processed"] == 0
         assert stats["frames_processed"] == 0
@@ -273,8 +276,8 @@ class TestCropFolder:
         (src / "photo.png").write_bytes(b"fake image")
 
         fr_mock = MagicMock()
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            stats = crop_folder(src, tmp_path / "out")
+        backend = MockBackendShim(fr_mock)
+        stats = crop_folder(src, tmp_path / "out", backend=backend)
 
         assert stats["videos_processed"] == 0
 
@@ -296,10 +299,10 @@ class TestCropFolder:
         fr_mock.face_locations.return_value = []
         fr_mock.face_encodings.return_value = []
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            with patch("vicrop.crop.cv2.VideoCapture", side_effect=lambda _: make_cap()):
-                with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
-                    stats = crop_folder(src, tmp_path / "out", every_n=1, classify=False)
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", side_effect=lambda _: make_cap()):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_folder(src, tmp_path / "out", every_n=1, classify=False, backend=backend)
 
         assert stats["videos_processed"] == 2
 
@@ -332,8 +335,8 @@ class TestRefThreshIntegration:
         fr_mock.face_landmarks.return_value = []
         fr_mock.face_distance.return_value = np.array([0.2])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock), \
-             patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
              patch("vicrop.crop.cv2.cvtColor", return_value=frame), \
              patch("vicrop.crop.score_reference_quality", return_value=ref_score_val):
             stats = crop_video(
@@ -344,6 +347,7 @@ class TestRefThreshIntegration:
                 tolerance=0.6,
                 crop_size=64,
                 ref_thresh=ref_thresh,
+                backend=backend,
             )
 
         return stats, out_dir
@@ -409,8 +413,8 @@ class TestRefThreshIntegration:
         make_png(stem_dir / "existing.png")
 
         fr_mock = MagicMock()
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            stats = crop_video(video_path, out_dir, skip_existing=True)
+        backend = MockBackendShim(fr_mock)
+        stats = crop_video(video_path, out_dir, skip_existing=True, backend=backend)
 
         assert "ref_photos" in stats
         assert stats["ref_photos"] == 0
@@ -437,14 +441,15 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([0.1])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            result = _cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["alice"],
-            )
+        backend = MockBackendShim(fr_mock)
+        result = _cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["alice"],
+            backend=backend,
+        )
 
         assert "alice" in result
         assert (tmp_path / "alice" / "face1.png").exists()
@@ -460,14 +465,15 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([1.5])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            result = _cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["alice"],
-            )
+        backend = MockBackendShim(fr_mock)
+        result = _cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["alice"],
+            backend=backend,
+        )
 
         assert "person_01" in result
         assert (tmp_path / "person_01" / "face1.png").exists()
@@ -484,13 +490,14 @@ class TestClusterFacesWithReferences:
         fr_mock = MagicMock()
         fr_mock.face_distance.return_value = np.array([1.5])
 
-        with patch("vicrop.crop._load_face_recognition", return_value=fr_mock):
-            _cluster_faces(
-                [(staging / "face1.png", enc_new)],
-                tmp_path,
-                tolerance=0.6,
-                reference_encodings=[ref_enc],
-                reference_names=["alice"],
-            )
+        backend = MockBackendShim(fr_mock)
+        _cluster_faces(
+            [(staging / "face1.png", enc_new)],
+            tmp_path,
+            tolerance=0.6,
+            reference_encodings=[ref_enc],
+            reference_names=["alice"],
+            backend=backend,
+        )
 
         assert not (tmp_path / "alice").exists()

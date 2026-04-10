@@ -20,11 +20,13 @@ from __future__ import annotations
 import logging
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from PIL import Image
 
-from face_ops.testing import backend_from_fr as _backend_from_fr
+if TYPE_CHECKING:
+    from face_ops.backend import FaceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +36,11 @@ DEFAULT_CROP_SIZE: int = 1024
 SUPPORTED_EXTS: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 
 
-def _load_face_recognition():
-    """Lazily import the face_recognition package, raising a clear error if absent."""
-    try:
-        import face_recognition
+def _default_backend():
+    """Create a default dlib backend when none is provided."""
+    from face_ops import backend_for_model
 
-        return face_recognition
-    except ImportError as exc:
-        raise ImportError(
-            "face_recognition is required for the crop task.\n"
-            "Install it with: pip install face_recognition"
-        ) from exc
+    return backend_for_model("dlib")
 
 
 def crop_faces_from_image(
@@ -53,6 +49,7 @@ def crop_faces_from_image(
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
     model: str = "hog",
+    backend: FaceBackend | None = None,
 ) -> list[tuple[Path, np.ndarray]]:
     """Detect, crop, and save each face found in *image_path*.
 
@@ -62,19 +59,22 @@ def crop_faces_from_image(
         margin_ratio: Fraction of face bbox added as margin on each side.
         crop_size:    Output square resolution (pixels).
         model:        face_recognition detection model – "hog" (fast) or "cnn".
+        backend:      :class:`FaceBackend` instance for detection and encoding.
+                      When *None*, a default dlib backend is created.
 
     Returns:
         List of ``(saved_path, face_encoding)`` tuples for every face saved.
     """
-    fr = _load_face_recognition()
+    if backend is None:
+        backend = _default_backend()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.debug("crop_faces_from_image: %s  margin_ratio=%.2f crop_size=%d model=%s",
                  image_path.name, margin_ratio, crop_size, model)
 
-    image = fr.load_image_file(str(image_path))
-    face_locations = fr.face_locations(image, model=model)
-    face_encodings = fr.face_encodings(image, face_locations)
+    image = backend.load_image(str(image_path))
+    face_locations = backend.detect_faces(image, model=model)
+    face_encodings = backend.encode_faces(image, face_locations)
 
     if not face_locations:
         logger.warning("No face found in %s", image_path.name)
@@ -123,13 +123,14 @@ def _cluster_faces(
     tolerance: float = 0.6,
     reference_encodings: list[np.ndarray] | None = None,
     reference_names: list[str] | None = None,
+    backend: FaceBackend | None = None,
 ) -> dict[str, list[Path]]:
     """Group saved face crops by identity using face distance clustering.
 
     Delegates to :meth:`FaceBackend.cluster_faces`.
     """
-    fr = _load_face_recognition()
-    backend = _backend_from_fr(fr)
+    if backend is None:
+        backend = _default_backend()
     return backend.cluster_faces(
         all_results, output_dir, tolerance,
         reference_encodings=reference_encodings,
@@ -147,6 +148,7 @@ def crop_folder(
     model: str = "hog",
     classified_path: Path | None = None,
     classified_max: int = 0,
+    backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Crop all faces found in *input_dir* and write them to *output_dir*.
 
@@ -165,10 +167,15 @@ def crop_folder(
                          placed in a folder with the same name.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        backend:         :class:`FaceBackend` instance.  When *None*, a
+                         default dlib backend is created.
 
     Returns:
         Summary dict with keys ``faces``, ``images_processed``, ``persons``.
     """
+    if backend is None:
+        backend = _default_backend()
+
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -199,6 +206,7 @@ def crop_folder(
             margin_ratio=margin_ratio,
             crop_size=crop_size,
             model=model,
+            backend=backend,
         )
         all_results.extend(results)
 
@@ -207,8 +215,6 @@ def crop_folder(
         ref_enc: list[np.ndarray] | None = None
         ref_names: list[str] | None = None
         if classified_path is not None:
-            fr = _load_face_recognition()
-            backend = _backend_from_fr(fr)
             ref_enc, ref_names = backend.load_reference_encodings(
                 classified_path, model=model,
                 max_per_identity=classified_max,
@@ -217,6 +223,7 @@ def crop_folder(
             all_results, output_dir, tolerance=tolerance,
             reference_encodings=ref_enc,
             reference_names=ref_names,
+            backend=backend,
         )
         persons = len(person_dirs)
         # Remove staging dir if empty

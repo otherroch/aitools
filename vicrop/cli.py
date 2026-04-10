@@ -88,9 +88,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--detection-model",
-        choices=["hog", "cnn"],
         default="hog",
-        help="face_recognition detection model (default: hog).",
+        help=(
+            "Face detection backend and model. "
+            "Use 'dlib', 'hog', or 'cnn' for the dlib backend; "
+            "any other value (e.g. 'buffalo_l') selects an InsightFace "
+            "model pack (default: hog)."
+        ),
     )
     parser.add_argument(
         "--ref-thresh",
@@ -144,7 +148,10 @@ def main(argv: list[str] | None = None) -> None:
     logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
     logger.info("vicrop starting with args: %s", args)
 
+    from face_ops import backend_for_model
     from vicrop.crop import SUPPORTED_VIDEO_EXTS, crop_folder, crop_video
+
+    backend = backend_for_model(args.detection_model)
 
     if args.input.is_file():
         if args.input.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
@@ -169,6 +176,7 @@ def main(argv: list[str] | None = None) -> None:
             ref_thresh=args.ref_thresh,
             classified_path=args.classified_path,
             classified_max=args.classified_max,
+            backend=backend,
         )
         stats = {**video_stats, "videos_processed": 1}
     else:
@@ -186,6 +194,7 @@ def main(argv: list[str] | None = None) -> None:
             ref_thresh=args.ref_thresh,
             classified_path=args.classified_path,
             classified_max=args.classified_max,
+            backend=backend,
         )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
