@@ -6,10 +6,10 @@ Generate AI-powered text descriptions for video files.
 
 | | WD14 mode (default) | VL mode (`--vl`) |
 |---|---|---|
-| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni (LLM) |
+| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Gemma 4 (LLM) |
 | **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
 | **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
-| **Audio support** | No | Yes (Whisper ASR integration) |
+| **Audio support** | No | Yes (Whisper ASR integration, Qwen models only) |
 | **Custom prompts** | No | Yes (`--prompt` / `--system`) |
 | **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling |
 
@@ -83,6 +83,38 @@ videsc --vl --video ./clip.mp4 --model /path/to/Qwen3-VL-8B-Instruct --model_ful
 videsc --vl --video ./clip.mp4 --omni --model Qwen/Qwen3-Omni-8B --model_hf
 ```
 
+## Gemma 4 mode (`--vl --gemma4`)
+
+Gemma 4 is a multimodal model family from Google.  Unlike Qwen-VL models, Gemma 4
+is limited to **60 seconds of video per inference call**; `videsc` handles this
+automatically by splitting the video into consecutive chunks and concatenating the
+descriptions.
+
+```bash
+# Describe a single video with the default Gemma 4 4B model
+videsc --vl --gemma4 --video ./clip.mp4
+
+# Use the 27B model with 4-bit quantisation (recommended for RTX 5090)
+videsc --vl --gemma4 --video ./clip.mp4 \
+       --model google/gemma-4-27b-it --model_hf --quant 4bit
+
+# Adjust chunk duration and frame sampling rate
+videsc --vl --gemma4 --video ./clip.mp4 \
+       --gemma4-chunk-duration 45 --gemma4-fps 2.0
+
+# Batch-describe a directory of videos
+videsc --vl --gemma4 --indir ./videos --ext .mp4 --outdir ./captions
+```
+
+Key differences from Qwen-VL mode:
+- Frames are extracted as still images via OpenCV (no `qwen-vl-utils` needed).
+- Videos longer than `--gemma4-chunk-duration` (default 60 s) are automatically
+  split into chunks and their descriptions are joined with blank lines.
+- Audio transcription (`--audio`) is not supported in Gemma 4 mode.
+- `--attn` defaults to `sdpa`; `flash_attention_2` may also work.
+
+
+
 Output `.txt` files are placed alongside each video in a `desc-<model>` subdirectory by default, or in the directory specified by `--outdir`.
 
 ## CLI reference
@@ -146,6 +178,10 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--model_hf` | — | Treat `--model` as a HuggingFace model id or local directory |
 | `--model_full` | — | Treat `--model` as a full filesystem path |
 | `--omni` | — | Load as Qwen3-Omni (multimodal audio + video model) |
+| `--qwen35` | — | Load as Qwen3.5; defaults `--model` to `Qwen/Qwen3.5-4B` |
+| `--gemma4` | — | Load as Gemma 4; defaults `--model` to `google/gemma-4-4b-it` |
+| `--gemma4-chunk-duration` | `60.0` | Max seconds per video chunk when using `--gemma4` |
+| `--gemma4-fps` | `1.0` | Frames per second to sample from each Gemma 4 chunk |
 | `--attn` | `flash_attention_2` | Attention implementation: `flash_attention_2`, `sdpa`, or `eager` |
 | `--quant` | `none` | Weight quantisation: `none`, `8bit`, or `4bit` |
 | `--max-new-tokens` | `8192` | Maximum tokens to generate |

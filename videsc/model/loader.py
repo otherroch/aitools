@@ -10,6 +10,7 @@ from transformers import (
     Qwen3VLForConditionalGeneration,
     Qwen3VLMoeForConditionalGeneration,
     AutoProcessor,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     Qwen3OmniMoeForConditionalGeneration,
     Qwen3OmniMoeProcessor,
@@ -265,6 +266,80 @@ def load_qwen35_model_and_processor(args):
     )
 
     logger.debug("load_qwen35_model_and_processor: model loaded")
+    print("model loaded")
+
+    _SHARED_MODEL = model
+    _SHARED_PROCESSOR = processor
+    return model, processor
+
+
+def load_gemma4_model_and_processor(args):
+    """
+    Load Gemma 4 model and processor once and reuse across videos.
+    Uses AutoModelForImageTextToText which is the standard class for Gemma 4.
+    In threaded batch mode, this lets all threads share the same CUDA weights.
+    """
+    global _SHARED_MODEL, _SHARED_PROCESSOR
+
+    if _SHARED_MODEL is not None and _SHARED_PROCESSOR is not None:
+        logger.debug("load_gemma4_model_and_processor: reusing cached model/processor")
+        return _SHARED_MODEL, _SHARED_PROCESSOR
+
+    # Resolve model path
+    if getattr(args, "model_hf", False):
+        model_path_local = args.model
+    elif getattr(args, "model_full", False):
+        model_path_local = args.model
+    else:
+        model_path_local = model_dir + args.model
+
+    logger.debug("load_gemma4_model_and_processor: model_path=%s  quant=%s  attn=%s",
+                 model_path_local, getattr(args, "quant", None), getattr(args, "attn", None))
+    print("model_path=", model_path_local)
+
+    # Optional CPU thread limiting
+    if getattr(args, "half_cpu", False):
+        cpu_count = os.cpu_count()
+        print(f"Number of CPU cores in the system: {cpu_count}")
+        half_cpu_count = cpu_count // 2
+        logger.debug("load_gemma4_model_and_processor: limiting to %d CPU threads", half_cpu_count)
+        os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
+        os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
+        torch.set_num_threads(half_cpu_count)
+
+    # Log start time
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    logger.debug("load_gemma4_model_and_processor: start time %s", current_time)
+    print(f"✅ start time (model load): {current_time}")
+
+    quant_cfg = _quant_config(args.quant)
+
+    # Load model using AutoModelForImageTextToText (standard for Gemma 4)
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_path_local,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        attn_implementation=args.attn,
+        quantization_config=quant_cfg,
+    )
+
+    if args.optimize:
+        logger.debug("load_gemma4_model_and_processor: compiling model with torch.compile")
+        model = torch.compile(
+            model,
+            mode="reduce-overhead",
+            fullgraph=True,
+            backend="inductor",
+        )
+
+    # Gemma 4 processor requires padding_side="left" for batched generation
+    processor = AutoProcessor.from_pretrained(
+        model_path_local,
+        padding_side="left",
+    )
+
+    logger.debug("load_gemma4_model_and_processor: model loaded")
     print("model loaded")
 
     _SHARED_MODEL = model

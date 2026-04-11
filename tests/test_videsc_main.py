@@ -383,3 +383,183 @@ class TestVidescUnifiedCommand:
         assert "args.save_video is not None" in source, (
             "_run_vl must check args.save_video before loading the model"
         )
+
+    # ------------------------------------------------------------------
+    # Gemma 4 tests
+    # ------------------------------------------------------------------
+
+    def test_parse_args_gemma4_flag_default_false(self):
+        """--gemma4 flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--video", "/tmp/test.mp4"])
+        assert args.gemma4 is False
+
+    def test_parse_args_gemma4_flag_true(self):
+        """--gemma4 flag is True when specified and defaults model to gemma-4-4b-it."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--video", "/tmp/test.mp4"])
+        assert args.gemma4 is True
+        assert args.model == "google/gemma-4-4b-it"
+        assert args.model_hf is True
+
+    def test_parse_args_gemma4_explicit_model_not_overridden(self):
+        """--gemma4 with explicit --model keeps the user's model choice."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4",
+            "--model", "google/gemma-4-27b-it",
+            "--model_hf",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.gemma4 is True
+        assert args.model == "google/gemma-4-27b-it"
+        assert args.model_hf is True
+
+    def test_parse_args_gemma4_chunk_duration_default(self):
+        """--gemma4-chunk-duration defaults to 60.0 seconds."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--video", "/tmp/test.mp4"])
+        assert args.gemma4_chunk_duration == 60.0
+
+    def test_parse_args_gemma4_chunk_duration_custom(self):
+        """--gemma4-chunk-duration accepts a custom value."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4",
+            "--gemma4-chunk-duration", "45",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.gemma4_chunk_duration == 45.0
+
+    def test_parse_args_gemma4_fps_default(self):
+        """--gemma4-fps defaults to 1.0."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--video", "/tmp/test.mp4"])
+        assert args.gemma4_fps == 1.0
+
+    def test_parse_args_gemma4_fps_custom(self):
+        """--gemma4-fps accepts a custom value."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4",
+            "--gemma4-fps", "2.0",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.gemma4_fps == 2.0
+
+    def test_args_help_includes_gemma4(self):
+        """The --help output must document the --gemma4 argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--gemma4" in result.stdout
+
+    def test_args_help_includes_gemma4_chunk_duration(self):
+        """The --help output must document --gemma4-chunk-duration."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--gemma4-chunk-duration" in result.stdout
+
+    def test_loader_has_load_gemma4_function(self):
+        """videsc/model/loader.py must define 'load_gemma4_model_and_processor'."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        tree = ast.parse(loader_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "load_gemma4_model_and_processor" in func_names, (
+            "videsc/model/loader.py must define 'load_gemma4_model_and_processor'"
+        )
+
+    def test_runner_has_extract_frames_as_pil(self):
+        """videsc/pipeline/runner.py must define 'extract_frames_as_pil'."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "extract_frames_as_pil" in func_names, (
+            "videsc/pipeline/runner.py must define 'extract_frames_as_pil'"
+        )
+
+    def test_runner_has_run_single_video_gemma4(self):
+        """videsc/pipeline/runner.py must define 'run_single_video_gemma4'."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "run_single_video_gemma4" in func_names, (
+            "videsc/pipeline/runner.py must define 'run_single_video_gemma4'"
+        )
+
+    def test_runner_gemma4_handles_chunking(self):
+        """run_single_video_gemma4 must split long videos into chunks."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "chunk_duration" in source, (
+            "runner must use chunk_duration to split long videos for Gemma 4"
+        )
+        assert "gemma4_chunk_duration" in source, (
+            "runner must read gemma4_chunk_duration from args"
+        )
+
+    def test_loader_gemma4_uses_auto_model_for_image_text_to_text(self):
+        """Gemma 4 loader must use AutoModelForImageTextToText."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "AutoModelForImageTextToText" in source, (
+            "loader must use AutoModelForImageTextToText for Gemma 4"
+        )
+
+    def test_loader_gemma4_sets_padding_side_left(self):
+        """Gemma 4 processor must be loaded with padding_side='left'."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert 'padding_side="left"' in source or "padding_side='left'" in source, (
+            "Gemma 4 processor must be loaded with padding_side='left'"
+        )
+
+    def test_run_vl_source_handles_gemma4(self):
+        """_run_vl must dispatch to the Gemma 4 pipeline when --gemma4 is set."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        assert "gemma4" in source, "_run_vl must handle the --gemma4 flag"
+        assert "load_gemma4_model_and_processor" in source, (
+            "_run_vl must call load_gemma4_model_and_processor"
+        )
+        assert "run_single_video_gemma4" in source, (
+            "_run_vl must call run_single_video_gemma4"
+        )
