@@ -52,7 +52,7 @@ vl = [
     "torch",
     "torchvision",
     "torchcodec",
-    "transformers>=4.57.3",
+    "transformers>=5.5.0",
     "accelerate",
     "bitsandbytes",
     "soundfile",

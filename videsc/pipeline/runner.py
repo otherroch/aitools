@@ -523,7 +523,7 @@ def run_single_video_gemma4(args, model, processor) -> int:
     return 0
 
 
-
+def run_batch_subprocess(args) -> int:
     inputs = expand_inputs(args.videos, args.indir, args.ext, args.filelist)
     if not inputs:
         print("[fatal] No input videos matched your criteria.", file=sys.stderr)
