@@ -369,7 +369,7 @@ def extract_frames_as_pil(
         video_fps = 25.0
 
     start_frame = int(start_sec * video_fps)
-    end_frame = min(int(end_sec * video_fps), total_video_frames) if end_sec > 0 else total_video_frames
+    end_frame = min(int(end_sec * video_fps), total_video_frames) if end_sec > start_sec else total_video_frames
 
     frame_interval = video_fps / fps if fps > 0 else video_fps
 
@@ -406,8 +406,8 @@ def run_single_video_gemma4(args, model, processor) -> int:
     and embedded directly in the chat message (one ``{"type": "image"}`` entry
     per frame).  No qwen_vl_utils / torchcodec dependency is required.
     """
-    chunk_duration = getattr(args, "gemma4_chunk_duration", 60.0)
-    gemma4_fps = getattr(args, "gemma4_fps", 1.0)
+    chunk_duration = args.gemma4_chunk_duration
+    gemma4_fps = args.gemma4_fps
 
     torch.manual_seed(args.seed)
 
@@ -512,7 +512,8 @@ def run_single_video_gemma4(args, model, processor) -> int:
     _vid = _P(args.video)
     desc_dir = "desc-" + args.model
     _default_dir = _vid.parent / desc_dir
-    _outdir = _P(getattr(args, "outdir", None)) if getattr(args, "outdir", None) else _default_dir
+    outdir_val = getattr(args, "outdir", None)
+    _outdir = _P(outdir_val) if outdir_val else _default_dir
     _outdir.mkdir(parents=True, exist_ok=True)
     out_path = str(_outdir / f"{_vid.stem}.txt")
     logger.debug("run_single_video_gemma4: writing result to %s", out_path)
