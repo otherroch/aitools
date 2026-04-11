@@ -410,3 +410,85 @@ class TestBatchCliArg:
         from chararep.main import _parse_args
         args = _parse_args()
         assert args.batch_size == 1
+
+    def test_batch_zero_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["chararep", "-i", "in.mp4", "-o", "out.mp4", "--batch", "0"],
+        )
+        from chararep.main import _parse_args
+        with pytest.raises(SystemExit):
+            _parse_args()
+
+    def test_batch_negative_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["chararep", "-i", "in.mp4", "-o", "out.mp4", "--batch", "-1"],
+        )
+        from chararep.main import _parse_args
+        with pytest.raises(SystemExit):
+            _parse_args()
+
+
+# ---------------------------------------------------------------------------
+# TrackedFace snapshot in parallel mode
+# ---------------------------------------------------------------------------
+
+
+class TestTrackedFaceSnapshot:
+    def test_parallel_snapshots_tracked_faces(self):
+        """Worker threads receive copies, not the original TrackedFace objects."""
+        from chararep.face_detector import TrackedFace
+
+        pipe = _stub_pipeline(batch_size=2)
+
+        tf = TrackedFace(
+            track_id=1,
+            bbox=np.array([10, 10, 50, 50], dtype=np.float32),
+            landmarks=np.zeros((5, 2), dtype=np.float32),
+            identity_label="hero",
+        )
+
+        # _prepare_frame returns real TrackedFace objects
+        pipe._prepare_frame = MagicMock(
+            side_effect=lambda f, idx, s: (f, idx, [tf], [])
+        )
+
+        # Capture the tracked_faces list passed to _finish_frame
+        captured = []
+
+        def capture_finish(f, idx, tracked, pairs):
+            captured.append(tracked)
+            return f, {
+                "frames_swapped": 0,
+                "faces_swapped": 0,
+                "swap": 0.0,
+                "blend": 0.0,
+                "enhance": 0.0,
+            }
+
+        pipe._finish_frame = MagicMock(side_effect=capture_finish)
+
+        writer = MagicMock()
+        reader = MagicMock()
+        reader.__iter__ = MagicMock(
+            return_value=iter([np.zeros((4, 4, 3), dtype=np.uint8)])
+        )
+        reader.total_frames = 1
+
+        stats = {
+            "frames_total": 0,
+            "frames_swapped": 0,
+            "faces_swapped": 0,
+            "frames_detected": 0,
+            "faces_identified": 0,
+        }
+
+        pipe._run_parallel(reader, writer, stats, 0.0)
+
+        assert len(captured) == 1
+        # The tracked face passed to worker should be a copy, not the original
+        assert captured[0][0] is not tf
+        # But should have the same data
+        assert captured[0][0].track_id == tf.track_id
+        assert captured[0][0].identity_label == tf.identity_label

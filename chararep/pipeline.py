@@ -18,6 +18,7 @@ import logging
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from copy import copy
 
 import numpy as np
 
@@ -171,6 +172,13 @@ class CharacterReplacementPipeline:
             for frame_idx, frame in enumerate(reader):
                 # Sequential: detect + track + identify
                 prep = self._prepare_frame(frame, frame_idx, stats)
+
+                # Snapshot tracked faces so the worker thread sees
+                # immutable per-frame state even if the tracker mutates
+                # the original objects on subsequent frames.
+                frame_data, fidx, tracked, pairs = prep
+                tracked = [copy(tf) for tf in tracked]
+                prep = (frame_data, fidx, tracked, pairs)
 
                 # Submit parallel: swap + blend + enhance
                 future = pool.submit(self._finish_frame, *prep)

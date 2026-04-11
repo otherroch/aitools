@@ -16,6 +16,19 @@ from .config import CharacterMapping, PipelineConfig
 from .pipeline import CharacterReplacementPipeline
 
 
+def _positive_int(value: str) -> int:
+    """Argparse type that accepts only positive integers (>= 1)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(
+            f"--batch must be a positive integer (>= 1), got {n}"
+        )
+    return n
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="chararep",
@@ -178,7 +191,7 @@ Config JSON format
     # ── GPU / performance ────────────────────────────────────────────────
     p.add_argument(
         "--batch",
-        type=int,
+        type=_positive_int,
         default=4,
         dest="batch_size",
         help=(
