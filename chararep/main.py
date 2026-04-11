@@ -16,6 +16,19 @@ from .config import CharacterMapping, PipelineConfig
 from .pipeline import CharacterReplacementPipeline
 
 
+def _positive_int(value: str) -> int:
+    """Argparse type that accepts only positive integers (>= 1)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(
+            f"--batch must be a positive integer (>= 1), got {n}"
+        )
+    return n
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="chararep",
@@ -177,6 +190,18 @@ Config JSON format
 
     # ── GPU / performance ────────────────────────────────────────────────
     p.add_argument(
+        "--batch",
+        type=_positive_int,
+        default=4,
+        dest="batch_size",
+        help=(
+            "Number of frames to process in parallel (default: 4). "
+            "When greater than 1, the pipeline detects faces sequentially "
+            "but runs swap/blend/enhance in a thread pool with this many "
+            "workers.  Set to 1 for fully sequential processing."
+        ),
+    )
+    p.add_argument(
         "--device",
         type=int,
         default=0,
@@ -321,6 +346,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         enhance_model_path=args.enhance_model_path,
         enhancement_weight=args.enhance_weight,
         device_id=args.device,
+        batch_size=args.batch_size,
         use_fp16=not args.no_fp16,
         output_codec=args.codec,
         output_quality=args.crf,
