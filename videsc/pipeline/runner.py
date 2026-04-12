@@ -371,7 +371,10 @@ def extract_frames_as_pil(
     start_frame = int(start_sec * video_fps)
     end_frame = min(int(end_sec * video_fps), total_video_frames) if end_sec > start_sec else total_video_frames
 
-    frame_interval = video_fps / fps if fps > 0 else video_fps
+    # Clamp to at least 1 frame so that when the requested fps exceeds the
+    # source video_fps the interval never drops below 1, avoiding duplicate
+    # frame indices and unnecessary memory / CPU work.
+    frame_interval = max(1.0, video_fps / fps) if fps > 0 else video_fps
 
     sample_indices = []
     t = float(start_frame)
