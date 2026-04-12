@@ -307,6 +307,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             p.error("--gemma4-chunk-duration must be greater than 0 when using --gemma4")
         if args.gemma4_chunk_duration > 60:
             p.error("--gemma4-chunk-duration must be less than or equal to 60 when using --gemma4")
+    # Post-parse validation for Gemma 4 mode.
+    if args.gemma4:
+        if args.gemma4_chunk_duration <= 0:
+            p.error("--gemma4-chunk-duration must be greater than 0 when using --gemma4")
+        if args.gemma4_chunk_duration > 60:
+            p.error("--gemma4-chunk-duration must be less than or equal to 60 when using --gemma4")
 
     # Post-parse validation for WD14 mode (--vl not set)
     if not args.vl:
