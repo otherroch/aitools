@@ -34,13 +34,11 @@ RUN python -m pip install -U pip
 RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
         echo "Build for AMD64 with CUDA ..." && \
         pip install --pre torch torchvision  --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-        pip install "onnxruntime-gpu>=1.17" && \
-        DLIB_USE_CUDA=1 pip install -v dlib && \
         pip install --group gpu; \
+        DLIB_USE_CUDA=1 pip install -v dlib && \
     elif [[ "$TARGETARCH" = "arm64" ]]; then \
         echo "Build for ARM64 with NO CUDA ..." && \
-        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-        pip install "onnxruntime>=1.17"; \
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \        pip install "onnxruntime>=1.24.4"; \
     else \
         echo "Unsupported architecture: $TARGETARCH" >&2 && exit 1; \
     fi

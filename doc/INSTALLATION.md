@@ -1,25 +1,32 @@
 # Installation
 
 ```bash
-# Standard (CPU inference)
-pip install -e .
 
-# With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
-pip install -e ".[gpu]"
+# 1. upgrade pip to get --group support
+python -m pip install -U pip
 
-# With Qwen3-VL support for videsc --vl (adds PyTorch, transformers, and related dependencies)
-pip install -e ".[vl]"
+# 2. With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
+pip install --group gpu
 
-# With YouTube download support (adds yt-dlp)
-pip install -e ".[youtube]"
-
-# With chararep face-replacement pipeline (adds insightface, torch, gfpgan, onnxruntime-gpu)
+# 3. With chararep face-replacement pipeline (adds insightface, torch, gfpgan, onnxruntime-gpu)
 # Note: install basicsr BEFORE this step (see below)
 python scripts/install_basicsr.py
-pip install -e ".[chararep]"
+pip install --group chararep
 
-# Including dev / test dependencies
-pip install -e ".[dev]"
+# 4. command packages for CPU and GPU 
+pip install --group base
+
+# 5. With Qwen3-VL support for videsc --vl (adds PyTorch, transformers, and related dependencies)
+pip install --group vl
+
+# 6. With YouTube download support (adds yt-dlp)
+pip install --group youtube
+
+# 7. Including dev / test dependencies
+pip install --group dev
+
+# 8. install the aitools
+pip install -e .  
 ```
 
 ## Notes
@@ -29,15 +36,6 @@ pip install -e ".[dev]"
 `pillow-heif` ships with pre-built wheels on PyPI for
 Windows, macOS, and Linux — no extra system libraries required in most cases.
 
-### face_recognition
-
-Requires `cmake` and `dlib` to be present before
-installation. On Windows the easiest path is:
-```bash
-pip install cmake
-pip install dlib
-pip install face_recognition
-```
 
 ### CNN face detection on GPU (`--detection-model cnn`)
 
@@ -63,6 +61,8 @@ pip install face_recognition
 If CUDA is correctly detected, dlib's build output will include a line such as
 `"Enabling CUDA support"`. Without this, `--detection-model cnn` will still
 work but will run on CPU and be significantly slower.
+
+
 
 ### GPU inference
 
