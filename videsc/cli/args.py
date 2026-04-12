@@ -153,9 +153,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     # Model / runtime
-    vl.add_argument("--omni", action="store_true", help="model is qwen3-omni")
-    vl.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
-    vl.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4b-it)")
+    model_group = vl.add_mutually_exclusive_group()
+    model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
+    model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
+    model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4b-it)")
     vl.add_argument(
         "--gemma4-chunk-duration",
         type=float,
