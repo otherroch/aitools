@@ -6,7 +6,7 @@ Generate AI-powered text descriptions for video files.
 
 | | WD14 mode (default) | VL mode (`--vl`) |
 |---|---|---|
-| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Gemma 4 (LLM) |
+| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 (LLM) |
 | **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
 | **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
 | **Audio support** | No | Yes (Whisper ASR integration, Qwen models only) |

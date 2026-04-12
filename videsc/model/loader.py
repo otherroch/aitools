@@ -299,9 +299,9 @@ def load_gemma4_model_and_processor(args):
 
     # Optional CPU thread limiting
     if getattr(args, "half_cpu", False):
-        cpu_count = os.cpu_count()
+        cpu_count = os.cpu_count() or 2
         print(f"Number of CPU cores in the system: {cpu_count}")
-        half_cpu_count = cpu_count // 2
+        half_cpu_count = max(1, cpu_count // 2)
         logger.debug("load_gemma4_model_and_processor: limiting to %d CPU threads", half_cpu_count)
         os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
         os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
