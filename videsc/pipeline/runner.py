@@ -425,6 +425,10 @@ def run_single_video_gemma4(args, model, processor) -> int:
                  duration, chunk_duration, gemma4_fps)
 
     # Build list of (start, end) chunks
+    if chunk_duration <= 0:
+        raise ValueError(
+            f"gemma4_chunk_duration must be > 0, got {chunk_duration}"
+        )
     chunks = []
     t = 0.0
     while t < duration:
