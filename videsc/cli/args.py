@@ -160,13 +160,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument(
         "--gemma4-chunk-duration",
         type=float,
-        default=60.0,
+        default=30.0,
         metavar="SECONDS",
         help=(
             "Maximum video duration (seconds) per chunk when using --gemma4.\n"
             "Gemma 4 can process at most 60 seconds at a time; longer videos are\n"
             "split into consecutive chunks and their descriptions are concatenated.\n"
-            "(default: 60.0)"
+            "(default: 30.0)"
         ),
     )
     vl.add_argument(
@@ -307,12 +307,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             p.error("--gemma4-chunk-duration must be greater than 0 when using --gemma4")
         if args.gemma4_chunk_duration > 60:
             p.error("--gemma4-chunk-duration must be less than or equal to 60 when using --gemma4")
-    # Post-parse validation for Gemma 4 mode.
-    if args.gemma4:
-        if args.gemma4_chunk_duration <= 0:
-            p.error("--gemma4-chunk-duration must be greater than 0 when using --gemma4")
-        if args.gemma4_chunk_duration > 60:
-            p.error("--gemma4-chunk-duration must be less than or equal to 60 when using --gemma4")
+
 
     # Post-parse validation for WD14 mode (--vl not set)
     if not args.vl:

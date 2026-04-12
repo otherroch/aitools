@@ -102,6 +102,7 @@ def get_onnx_providers(device_id: int = 0) -> list:
     except ImportError:
         return [("CPUExecutionProvider", {})]
 
+    logger.debug("Available ONNX providers: %s", available)
     providers: list = []
     if "CUDAExecutionProvider" in available:
         providers.append(
@@ -115,6 +116,7 @@ def get_onnx_providers(device_id: int = 0) -> list:
             )
         )
     providers.append(("CPUExecutionProvider", {}))
+    logger.debug("Selected ONNX providers: %s", providers)
     return providers
 
 

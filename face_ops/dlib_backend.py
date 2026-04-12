@@ -7,12 +7,14 @@ Concrete ``FaceBackend`` implementation backed by the
 """
 
 from __future__ import annotations
+import logging
 
 import numpy as np
 
 from face_ops.mixin import FaceBackendMixin
 from face_ops.types import DetectedFace, Encoding, FaceBBox
 
+logger = logging.getLogger(__name__)
 
 class DlibBackend(FaceBackendMixin):
     """Face detection and encoding via dlib / face_recognition."""
@@ -28,8 +30,12 @@ class DlibBackend(FaceBackendMixin):
                 "face_recognition is required for the dlib backend.\n"
                 "Install it with: pip install face_recognition"
             ) from exc
-
+        except Exception as exc:
+            logger.error("Error initializing DlibBackend: %s", exc)
+            raise
+        logger.info("DlibBackend initialized with model: %s", model)    
     # ------------------------------------------------------------------
+
     # Detection
     # ------------------------------------------------------------------
 

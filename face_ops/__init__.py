@@ -23,12 +23,16 @@ Clustering and reference loading are methods on every backend:
 """
 
 from __future__ import annotations
+import logging
 
 __version__ = "0.1.0"
 
 from face_ops.backend import FaceBackend
 from face_ops.mixin import SUPPORTED_IMAGE_EXTS
 from face_ops.types import DetectedFace, Encoding, FaceBBox
+
+  
+logger = logging.getLogger(__name__)
 
 __all__ = [
     # protocol
@@ -64,6 +68,8 @@ def get_backend(name: str = "dlib", **kwargs) -> FaceBackend:
         ValueError:  Unknown backend name.
         ImportError:  Backend dependency not installed.
     """
+    logger.debug("Instantiating face backend: %s", name)
+    
     name = name.lower()
     if name == "dlib":
         from face_ops.dlib_backend import DlibBackend

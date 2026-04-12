@@ -419,11 +419,11 @@ class TestVidescUnifiedCommand:
         assert args.model_hf is True
 
     def test_parse_args_gemma4_chunk_duration_default(self):
-        """--gemma4-chunk-duration defaults to 60.0 seconds."""
+        """--gemma4-chunk-duration defaults to 30.0 seconds."""
         from videsc.cli.args import parse_args
 
         args = parse_args(["--vl", "--gemma4", "--video", "/tmp/test.mp4"])
-        assert args.gemma4_chunk_duration == 60.0
+        assert args.gemma4_chunk_duration == 30.0
 
     def test_parse_args_gemma4_chunk_duration_custom(self):
         """--gemma4-chunk-duration accepts a custom value."""

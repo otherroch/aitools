@@ -58,11 +58,20 @@ class InsightFaceBackend(FaceBackendMixin):
             effective_ctx_id = ctx_id
         else:
             effective_providers, effective_ctx_id = self._providers(ctx_id)
-
+        logger.info(
+            "Initializing InsightFaceBackend with model=%s, ctx_id=%s, "
+            "providers=%s, det_size=%s, det_thresh=%.2f",
+            model_name,
+            effective_ctx_id,
+            effective_providers,
+            det_size,
+            det_thresh,
+        )
         self._app = FaceAnalysis(
             name=model_name,
             providers=effective_providers,
         )
+        logger.debug("Preparing InsightFace model on device %s...", effective_ctx_id)
         self._app.prepare(
             ctx_id=effective_ctx_id,
             det_size=det_size,
