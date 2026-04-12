@@ -12,7 +12,7 @@ Supports two description modes:
 
   VL mode (--vl):
     Rich, natural-language descriptions using a Qwen3-VL vision-language
-    model (or its Qwen3-Omni multimodal variant, or a Qwen3.5 model).
+    model (or its Qwen3-Omni multimodal variant, Qwen3.5 model, or Gemma 4).
     Requires --video, --videos, --indir, or --filelist.
 """
 
@@ -41,17 +41,24 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_vl(args) -> int:
-    """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 vision-language pipeline."""
+    """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 vision-language pipeline."""
     import tempfile
     import shutil
     from pathlib import Path
-    from videsc.model.loader import load_model_and_processor, load_omni_model_and_processor, load_qwen35_model_and_processor
-    from videsc.pipeline.runner import run_batch, run_single_video
+    from videsc.model.loader import (
+        load_model_and_processor,
+        load_omni_model_and_processor,
+        load_qwen35_model_and_processor,
+        load_gemma4_model_and_processor,
+    )
+    from videsc.pipeline.runner import run_batch, run_single_video, run_single_video_gemma4
 
     print("args: ", str(args))
     is_batch = bool(args.videos or args.indir or getattr(args, "filelist", None))
 
-    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s", is_batch, getattr(args, "omni", None), getattr(args, "qwen35", None))
+    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s  gemma4=%s",
+                 is_batch, getattr(args, "omni", None), getattr(args, "qwen35", None),
+                 getattr(args, "gemma4", None))
 
     if is_batch:
         return run_batch(args)
@@ -93,6 +100,9 @@ def _run_vl(args) -> int:
             model, processor = load_omni_model_and_processor(args)
         elif args.qwen35:
             model, processor = load_qwen35_model_and_processor(args)
+        elif getattr(args, "gemma4", False):
+            model, processor = load_gemma4_model_and_processor(args)
+            return run_single_video_gemma4(args, model, processor)
         else:
             model, processor = load_model_and_processor(args)
         return run_single_video(args, model, processor)

@@ -153,8 +153,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     # Model / runtime
-    vl.add_argument("--omni", action="store_true", help="model is qwen3-omni")
-    vl.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
+    model_group = vl.add_mutually_exclusive_group()
+    model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
+    model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
+    model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4b-it)")
+    vl.add_argument(
+        "--gemma4-chunk-duration",
+        type=float,
+        default=60.0,
+        metavar="SECONDS",
+        help=(
+            "Maximum video duration (seconds) per chunk when using --gemma4.\n"
+            "Gemma 4 can process at most 60 seconds at a time; longer videos are\n"
+            "split into consecutive chunks and their descriptions are concatenated.\n"
+            "(default: 60.0)"
+        ),
+    )
+    vl.add_argument(
+        "--gemma4-fps",
+        type=float,
+        default=1.0,
+        metavar="FPS",
+        help="Frames per second to sample from each Gemma 4 chunk (default: 1.0).",
+    )
     vl.add_argument(
         "--model",
         default="Qwen/Qwen3-VL-8B-Instruct",
@@ -273,6 +294,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.qwen35 and args.model == _VL_DEFAULT_MODEL:
         args.model = "Qwen/Qwen3.5-4B"
         args.model_hf = True
+
+    # When --gemma4 is set and the user didn't explicitly change --model,
+    # default to the Gemma 4 4B instruction-tuned model on HuggingFace.
+    if args.gemma4 and args.model == _VL_DEFAULT_MODEL:
+        args.model = "google/gemma-4-4b-it"
+        args.model_hf = True
+
+    # Post-parse validation for Gemma 4 mode.
+    if args.gemma4:
+        if args.gemma4_chunk_duration <= 0:
+            p.error("--gemma4-chunk-duration must be greater than 0 when using --gemma4")
+        if args.gemma4_chunk_duration > 60:
+            p.error("--gemma4-chunk-duration must be less than or equal to 60 when using --gemma4")
+    # Post-parse validation for Gemma 4 mode.
+    if args.gemma4:
+        if args.gemma4_chunk_duration <= 0:
+            p.error("--gemma4-chunk-duration must be greater than 0 when using --gemma4")
+        if args.gemma4_chunk_duration > 60:
+            p.error("--gemma4-chunk-duration must be less than or equal to 60 when using --gemma4")
 
     # Post-parse validation for WD14 mode (--vl not set)
     if not args.vl:

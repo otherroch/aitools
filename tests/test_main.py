@@ -166,6 +166,7 @@ class TestBuildConfigFromArgs:
             enhance_model="gfpgan",
             enhance_model_path=None,
             enhance_weight=0.7,
+            batch_size=4,
             device=0,
             no_fp16=False,
             codec="libx264",
@@ -464,6 +465,7 @@ class TestMain:
             enhance_model="gfpgan",
             enhance_model_path=None,
             enhance_weight=0.7,
+            batch_size=4,
             device=0,
             no_fp16=False,
             codec="libx264",
@@ -503,6 +505,7 @@ class TestMain:
         mock_args.enhance_model = "gfpgan"
         mock_args.enhance_model_path = None
         mock_args.enhance_weight = 0.7
+        mock_args.batch_size = 4
         mock_args.device = 0
         mock_args.no_fp16 = False
         mock_args.codec = "libx264"
@@ -560,6 +563,7 @@ class TestMain:
         mock_args.enhance_model = "gfpgan"
         mock_args.enhance_model_path = None
         mock_args.enhance_weight = 0.7
+        mock_args.batch_size = 4
         mock_args.device = 0
         mock_args.no_fp16 = False
         mock_args.codec = "libx264"

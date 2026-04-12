@@ -323,6 +323,7 @@ class TestLoader:
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,
             AutoProcessor=FakeProcessorClass,
+            AutoModelForImageTextToText=FakeModelClass,
             BitsAndBytesConfig=BitsAndBytesConfig,
             Qwen3OmniMoeForConditionalGeneration=FakeModelClass,
             Qwen3OmniMoeProcessor=FakeProcessorClass,
@@ -366,6 +367,7 @@ class TestLoader:
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,
             AutoProcessor=FakeProcessorClass,
+            AutoModelForImageTextToText=FakeModelClass,
             BitsAndBytesConfig=lambda **_k: object(),
             Qwen3OmniMoeForConditionalGeneration=FakeModelClass,
             Qwen3OmniMoeProcessor=FakeProcessorClass,
@@ -414,6 +416,7 @@ class TestLoader:
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,
             AutoProcessor=FakeProcessorClass,
+            AutoModelForImageTextToText=FakeModelClass,
             BitsAndBytesConfig=lambda **_k: object(),
             Qwen3OmniMoeForConditionalGeneration=FakeModelClass,
             Qwen3OmniMoeProcessor=FakeProcessorClass,
@@ -482,7 +485,7 @@ class TestVidescMainRuntime:
         monkeypatch.setitem(
             sys.modules,
             "videsc.pipeline.runner",
-            types.SimpleNamespace(run_batch=lambda _a: 5, run_single_video=lambda *_a: 0),
+            types.SimpleNamespace(run_batch=lambda _a: 5, run_single_video=lambda *_a: 0, run_single_video_gemma4=lambda *_a: 0),
         )
         monkeypatch.setitem(
             sys.modules,
@@ -491,12 +494,13 @@ class TestVidescMainRuntime:
                 load_model_and_processor=lambda _a: ("m", "p"),
                 load_omni_model_and_processor=lambda _a: ("om", "op"),
                 load_qwen35_model_and_processor=lambda _a: ("35m", "35p"),
+                load_gemma4_model_and_processor=lambda _a: ("g4m", "g4p"),
             ),
         )
         assert mod._run_vl(dummy_args) == 5
 
         single = types.SimpleNamespace(
-            videos=None, indir=None, filelist=None, youtube_url=None, omni=False, qwen35=False
+            videos=None, indir=None, filelist=None, youtube_url=None, omni=False, qwen35=False, gemma4=False
         )
         assert mod._run_vl(single) == 0
 
@@ -510,7 +514,7 @@ class TestVidescMainRuntime:
         monkeypatch.setitem(
             sys.modules,
             "videsc.pipeline.runner",
-            types.SimpleNamespace(run_batch=lambda _a: 0, run_single_video=lambda *_a: 0),
+            types.SimpleNamespace(run_batch=lambda _a: 0, run_single_video=lambda *_a: 0, run_single_video_gemma4=lambda *_a: 0),
         )
         monkeypatch.setitem(
             sys.modules,
@@ -519,6 +523,7 @@ class TestVidescMainRuntime:
                 load_model_and_processor=lambda _a: ("m", "p"),
                 load_omni_model_and_processor=lambda _a: ("m", "p"),
                 load_qwen35_model_and_processor=lambda _a: ("m", "p"),
+                load_gemma4_model_and_processor=lambda _a: ("g4m", "g4p"),
             ),
         )
         monkeypatch.setitem(
@@ -554,6 +559,7 @@ class TestRunner:
                 load_model_and_processor=lambda _a: ("m", "p"),
                 load_omni_model_and_processor=lambda _a: ("m", "p"),
                 load_qwen35_model_and_processor=lambda _a: ("m", "p"),
+                load_gemma4_model_and_processor=lambda _a: ("g4m", "g4p"),
                 _maybe_set_reader=lambda _r: None,
             ),
             "videsc.audio.transcription": types.SimpleNamespace(transcribe_audio_from_video=lambda *_a, **_k: (None, [])),
@@ -601,13 +607,13 @@ class TestRunner:
     def test_run_batch_threads_no_inputs_and_dry_run(self, monkeypatch, tmp_path):
         runner = self._import_runner(monkeypatch)
         monkeypatch.setattr(runner, "expand_inputs", lambda *_a, **_k: [])
-        args = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=False, workers=1, omni=False, qwen35=False)
+        args = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=False, workers=1, omni=False, qwen35=False, gemma4=False)
         assert runner.run_batch_threads(args) == 3
 
         vid = tmp_path / "v.mp4"
         vid.write_text("x")
         monkeypatch.setattr(runner, "expand_inputs", lambda *_a, **_k: [vid])
-        args2 = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=True, workers=1, omni=False, qwen35=False)
+        args2 = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=True, workers=1, omni=False, qwen35=False, gemma4=False)
         assert runner.run_batch_threads(args2) == 0
 
     def test_run_batch_threads_executes_futures(self, monkeypatch, tmp_path):
@@ -618,7 +624,7 @@ class TestRunner:
         v2.write_text("x")
         monkeypatch.setattr(runner, "expand_inputs", lambda *_a, **_k: [v1, v2])
         monkeypatch.setattr(runner, "run_single_video", lambda *_a, **_k: 0)
-        args = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=False, workers=2, omni=False, qwen35=False)
+        args = types.SimpleNamespace(videos=None, indir=None, ext=[], filelist=None, dry_run=False, workers=2, omni=False, qwen35=False, gemma4=False)
         assert runner.run_batch_threads(args) == 0
 
     def test_run_batch_subprocess_executes_processes(self, monkeypatch, tmp_path):
