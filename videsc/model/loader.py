@@ -315,11 +315,20 @@ def load_gemma4_model_and_processor(args):
 
     quant_cfg = _quant_config(args.quant)
 
+    torch_dtype = getattr(args, "torch_dtype", "auto")
+    if isinstance(torch_dtype, str):
+        torch_dtype = {
+            "auto": "auto",
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }.get(torch_dtype.lower(), torch_dtype)
+
     # Load model using AutoModelForImageTextToText (standard for Gemma 4)
     model = AutoModelForImageTextToText.from_pretrained(
         model_path_local,
         device_map="auto",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch_dtype,
         attn_implementation=args.attn,
         quantization_config=quant_cfg,
     )
