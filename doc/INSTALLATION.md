@@ -5,27 +5,35 @@
 # 1. upgrade pip to get --group support
 python -m pip install -U pip
 
-# 2. With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
+# 2. Install CUDA if you have a GPU that supports it. XXX is the CUDA version, for example 130
+pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cuXXX
+#    OR you can install the stable version  
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cuXXX
+
+# 3. With GPU support for WD14 captioning (replaces onnxruntime with onnxruntime-gpu)
 pip install --group gpu
 
-# 3. With chararep face-replacement pipeline (adds insightface, torch, gfpgan, onnxruntime-gpu)
+# 4. install DLIB with CUDA support 
+#    see instructions below
+
+# 5. With chararep face-replacement pipeline (adds insightface, torch, gfpgan, onnxruntime-gpu)
 # Note: install basicsr BEFORE this step (see below)
 python scripts/install_basicsr.py
 pip install --group chararep
 
-# 4. command packages for CPU and GPU 
+# 6. command packages for CPU and GPU 
 pip install --group base
 
-# 5. With Qwen3-VL support for videsc --vl (adds PyTorch, transformers, and related dependencies)
+# 7. With Qwen3-VL support for videsc --vl (adds PyTorch, transformers, and related dependencies)
 pip install --group vl
 
-# 6. With YouTube download support (adds yt-dlp)
+# 8. With YouTube download support (adds yt-dlp)
 pip install --group youtube
 
-# 7. Including dev / test dependencies
+# 9. Including dev / test dependencies
 pip install --group dev
 
-# 8. install the aitools
+# 10. install the aitools
 pip install -e .  
 ```
 

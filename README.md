@@ -18,13 +18,22 @@
 ```bash
 git clone https://github.com/otherroch/aitools.git
 cd aitools
+
 python -m venv .venv
 source .venv/bin/activate   # Linux/macOS
 # .venv\Scripts\activate    # Windows
+
+# upgrade pip to get --group support
+python -m pip install -U pip
+
+# install base dependencies (CPU only support)
+pip install --group base
+
+# install aitools
 pip install -e .
 ```
 
-For individual feature installs, GPU support, chararep dependencies (including basicsr), or system prerequisites, see [INSTALLATION.md](doc/INSTALLATION.md).
+For individual feature installs, GPU support, chararep dependencies (including basicsr), or system prerequisites, see [installation](doc/INSTALLATION.md) .
 
 ---
 
