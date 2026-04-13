@@ -66,8 +66,8 @@ RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
 # If the cuda 13 built opencv-python is available (cudev module) then install it here
 # This is specific to linux amd64. I had to build the whl myself.
 # Without this, opencv-python will run on CPU
-COPY --from=whl /opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl /app/
-RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
+#COPY --from=whl /opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl /app/
+#RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
 
 COPY Dockerfile .dockerignore main.py /app/
 COPY tests /app/tests
