@@ -5,6 +5,8 @@
 ARG BASE_IMAGE=nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04
 FROM $BASE_IMAGE
 
+ARG CUDAVER=130
+
 # Set the working directory in the container
 WORKDIR /app
 
@@ -33,12 +35,15 @@ RUN python -m pip install -U pip
 # Note: that if we didn't need to build dlib for CUDA then we could use the runtime base image instead of devel
 RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
         echo "Build for AMD64 with CUDA ..." && \
-        pip install --pre torch torchvision  --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-        pip install --group gpu; \
-        DLIB_USE_CUDA=1 pip install -v dlib && \
+        if [[ "$CUDAVER" = "130" ]]; then \
+          pip install --pre torch torchvision  --index-url https://download.pytorch.org/whl/nightly/cu130; \
+        else \
+          pip install --pre torch torchvision  --index-url https://download.pytorch.org/whl/nightly/cu128; \
+        fi; \
+        DLIB_USE_CUDA=1 pip install -v dlib; \
     elif [[ "$TARGETARCH" = "arm64" ]]; then \
         echo "Build for ARM64 with NO CUDA ..." && \
-        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \        pip install "onnxruntime>=1.24.4"; \
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \ 
     else \
         echo "Unsupported architecture: $TARGETARCH" >&2 && exit 1; \
     fi
@@ -49,11 +54,20 @@ RUN python scripts/install_basicsr.py
 
 RUN pip install --group base --group youtube --group vl --group chararep
 
+# we have to do this in case the CPU version was installed
+# make sure to ignore the unintall in case onnxruntime is not installed
+RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
+        echo "Build for AMD64 with CUDA ..." && \
+        pip uninstall onnxruntime onnxruntime-gpu -y && \    
+        pip install onnxruntime-gpu; \
+    fi
+
+
 # If the cuda 13 built opencv-python is available (cudev module) then install it here
 # This is specific to linux amd64. I had to build the whl myself.
 # Without this, opencv-python will run on CPU
-#COPY --from=whl /opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl /app/
-#RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
+COPY --from=whl /opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl /app/
+RUN pip install opencv_contrib_python-4.13.0.90-cp312-cp312-linux_x86_64.whl --force-reinstall
 
 COPY Dockerfile .dockerignore main.py /app/
 COPY tests /app/tests
