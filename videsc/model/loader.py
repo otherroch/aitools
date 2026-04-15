@@ -60,6 +60,11 @@ def load_model_and_processor(args):
     else:
         model_path_local = model_dir + args.model
 
+    processor_path_local = model_path_local  # For now, processor is in same location as model  
+    if args.processor is not None:
+        processor_path_local = args.processor
+
+        
     logger.debug("load_model_and_processor: model_path=%s  quant=%s  attn=%s",
                  model_path_local, getattr(args, "quant", None), getattr(args, "attn", None))
     print("model_path=", model_path_local)
@@ -109,7 +114,7 @@ def load_model_and_processor(args):
         patch, args.min_pixels * patch * patch, args.max_pixels * patch * patch,
     )
     processor = AutoProcessor.from_pretrained(
-        model_path_local,
+        processor_path_local,
         min_pixels=args.min_pixels * patch * patch,
         max_pixels=args.max_pixels * patch * patch,
     )
