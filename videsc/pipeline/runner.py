@@ -337,36 +337,146 @@ def run_single_video(args, model, processor) -> int:
     return 0
 
 
+def extract_frames_as_pil(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    fps: float = 1.0,
+) -> list:
+    """Extract frames as PIL images from a video segment.
+
+    Args:
+        video_path:  Path to the video file.
+        start_sec:   Start time in seconds.
+        end_sec:     End time in seconds.
+        fps:         Frames to sample per second of video (default 1.0).
+
+    Returns:
+        List of PIL Images in RGB mode.
+    """
+    import cv2
+    from PIL import Image
+
+    frames = []
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.warning("extract_frames_as_pil: cannot open %s", video_path)
+        return frames
+
+    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if video_fps <= 0:
+        video_fps = 25.0
+
+    start_frame = int(start_sec * video_fps)
+    end_frame = min(int(end_sec * video_fps), total_video_frames) if end_sec > start_sec else total_video_frames
+
+    # Clamp to at least 1 frame so that when the requested fps exceeds the
+    # source video_fps the interval never drops below 1, avoiding duplicate
+    # frame indices and unnecessary memory / CPU work.
+    frame_interval = max(1.0, video_fps / fps) if fps > 0 else video_fps
+
+    sample_indices = []
+    t = float(start_frame)
+    while t < end_frame:
+        sample_indices.append(int(t))
+        t += frame_interval
+
+    logger.debug(
+        "extract_frames_as_pil: %s  [%.1fs–%.1fs]  fps=%.2f  frames=%d",
+        video_path, start_sec, end_sec, fps, len(sample_indices),
+    )
+
+    for f_idx in sample_indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+        ret, frame = cap.read()
+        if ret:
+            frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+
+    cap.release()
+    return frames
+
+
 def run_single_video_gemma4(args, model, processor) -> int:
     """Run Gemma 4 pipeline for a single video.
 
-    Passes the video file directly to the Gemma 4 processor using the native
-    ``{"type": "video"}`` content type, letting the model handle frame sampling
-    internally.  Uses ``processor.parse_response`` to extract the generated text.
+    Gemma 4 can only process up to ``--gemma4-chunk-duration`` seconds of video at
+    a time (default 60 s).  When the source video is longer the function splits it
+    into consecutive chunks, generates a description for each, then concatenates
+    the results into a single output file.
+
+    Frames are extracted as PIL images via OpenCV and passed as a native
+    ``{"type": "video"}`` entry (list of PIL images) per chunk, matching the
+    gemma4_4b.py approach.  Output is decoded with ``processor.parse_response``.
     """
+    chunk_duration = args.gemma4_chunk_duration
+    gemma4_fps = args.gemma4_fps
+
     torch.manual_seed(args.seed)
 
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     logger.info("run_single_video_gemma4: start time %s  video=%s", current_time, args.video)
 
-    content: List[Dict[str, Any]] = [
-        {"type": "video", "video": args.video},
-        {"type": "text", "text": args.prompt},
-    ]
+    video_info = get_video_info(args.video)
+    duration = video_info["tot_time"]
+    logger.debug("run_single_video_gemma4: duration=%.2fs  chunk=%.1fs  fps=%.2f",
+                 duration, chunk_duration, gemma4_fps)
 
-    messages: List[Dict[str, Any]] = []
-    if args.system:
-        messages.append({
-            "role": "system",
-            "content": [{"type": "text", "text": args.system}],
-        })
-    messages.append({"role": "user", "content": content})
+    # Build list of (start, end) chunks
+    if chunk_duration <= 0:
+        raise ValueError(
+            f"gemma4_chunk_duration must be > 0, got {chunk_duration}"
+        )
+    chunks = []
+    t = 0.0
+    while t < duration:
+        end = min(t + chunk_duration, duration)
+        chunks.append((t, end))
+        t = end
 
-    if args.dry:
-        logger.info("[gemma4] dry run — skipping generation")
-        result = "[dry run]"
-    else:
+    logger.debug("run_single_video_gemma4: %d chunk(s) for %.1fs video", len(chunks), duration)
+
+    all_descriptions = []
+
+    for chunk_idx, (start, end) in enumerate(chunks):
+        logger.info(
+            "run_single_video_gemma4: chunk %d/%d  %.1fs–%.1fs",
+            chunk_idx + 1, len(chunks), start, end,
+        )
+
+        frames = extract_frames_as_pil(args.video, start, end, fps=gemma4_fps)
+        if not frames:
+            logger.warning("run_single_video_gemma4: no frames extracted for chunk %d", chunk_idx + 1)
+            continue
+
+        logger.debug("run_single_video_gemma4: chunk %d  %d frame(s)", chunk_idx + 1, len(frames))
+
+        chunk_note = ""
+        if len(chunks) > 1:
+            chunk_note = (
+                f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
+                f"{start:.1f}s–{end:.1f}s]\n"
+            )
+
+        content: List[Dict[str, Any]] = [
+            {"type": "video", "video": frames},
+            {"type": "text", "text": chunk_note + args.prompt},
+        ]
+
+        messages: List[Dict[str, Any]] = []
+        if args.system:
+            messages.append({
+                "role": "system",
+                "content": [{"type": "text", "text": args.system}],
+            })
+        messages.append({"role": "user", "content": content})
+
+        if args.dry:
+            logger.info("[gemma4] dry run — skipping generation for this chunk")
+            all_descriptions.append(f"[chunk {chunk_idx + 1}: dry run]")
+            continue
+
         inputs = processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -377,18 +487,22 @@ def run_single_video_gemma4(args, model, processor) -> int:
 
         now_gen = datetime.now()
         current_time = now_gen.strftime("%H:%M:%S")
-        logger.debug("✅ Before generate: %s", current_time)
+        logger.debug("✅ Before generate (chunk %d): %s", chunk_idx + 1, current_time)
 
         output_ids = model.generate(**inputs, max_new_tokens=args.max_new_tokens)
 
         input_len = inputs["input_ids"].shape[-1]
         response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
         text_output = processor.parse_response(response)
-        result = str(text_output["content"])
+        text = str(text_output["content"])
 
-        if not args.no_think_trim and "</think>" in result:
-            result = result.split("</think>", 1)[-1].lstrip()
+        if not args.no_think_trim and "</think>" in text:
+            text = text.split("</think>", 1)[-1].lstrip()
 
+        all_descriptions.append(text)
+        logger.debug("[gemma4] chunk %d done", chunk_idx + 1)
+
+    result = "\n\n".join(all_descriptions)
     logger.debug(result)
 
     nowEnd = datetime.now()

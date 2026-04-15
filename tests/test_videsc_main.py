@@ -499,6 +499,19 @@ class TestVidescUnifiedCommand:
             "videsc/model/loader.py must define 'load_gemma4_model_and_processor'"
         )
 
+    def test_runner_has_extract_frames_as_pil(self):
+        """videsc/pipeline/runner.py must define 'extract_frames_as_pil'."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "extract_frames_as_pil" in func_names, (
+            "videsc/pipeline/runner.py must define 'extract_frames_as_pil'"
+        )
+
     def test_runner_has_run_single_video_gemma4(self):
         """videsc/pipeline/runner.py must define 'run_single_video_gemma4'."""
         runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
@@ -510,6 +523,17 @@ class TestVidescUnifiedCommand:
         }
         assert "run_single_video_gemma4" in func_names, (
             "videsc/pipeline/runner.py must define 'run_single_video_gemma4'"
+        )
+
+    def test_runner_gemma4_handles_chunking(self):
+        """run_single_video_gemma4 must split long videos into chunks."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "chunk_duration" in source, (
+            "runner must use chunk_duration to split long videos for Gemma 4"
+        )
+        assert "gemma4_chunk_duration" in source, (
+            "runner must read gemma4_chunk_duration from args"
         )
 
     def test_loader_gemma4_uses_auto_model_for_multimodal_lm(self):
