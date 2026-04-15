@@ -10,7 +10,7 @@ from transformers import (
     Qwen3VLForConditionalGeneration,
     Qwen3VLMoeForConditionalGeneration,
     AutoProcessor,
-    AutoModelForImageTextToText,
+    AutoModelForMultimodalLM,
     BitsAndBytesConfig,
     Qwen3OmniMoeForConditionalGeneration,
     Qwen3OmniMoeProcessor,
@@ -331,8 +331,8 @@ def load_gemma4_model_and_processor(args):
             "float32": torch.float32,
         }.get(torch_dtype.lower(), torch_dtype)
 
-    # Load model using AutoModelForImageTextToText (standard for Gemma 4)
-    model = AutoModelForImageTextToText.from_pretrained(
+    # Load model using AutoModelForMultimodalLM (standard for Gemma 4)
+    model = AutoModelForMultimodalLM.from_pretrained(
         model_path_local,
         device_map="auto",
         torch_dtype=torch_dtype,
