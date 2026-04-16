@@ -107,7 +107,10 @@ RULES:
 - Be concise but complete\
 """
 
-# ── Stage 4: iterative refinement prompt (optional) ──────────────────────
+# ── Stage 4: iterative refinement prompt (optional, reserved for future use) ──
+# Included from the design document for streaming mode where segments are
+# processed incrementally rather than batched.  Not currently wired into the
+# pipeline but available for future extensions.
 ITERATIVE_REFINEMENT_PROMPT = """\
 You are maintaining a running summary of a video.
 

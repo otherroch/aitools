@@ -485,8 +485,9 @@ def aggregate_windows(
         logger.info("[gemma4] aggregating window %d (%d segments)", win_idx, len(win_segments))
 
         numbered = []
-        for idx, text in enumerate(win_segments, 1):
-            numbered.append(f"--- Segment {win_start + idx} ---\n{text}")
+        for idx, text in enumerate(win_segments):
+            seg_num = win_start + idx + 1  # 1-based segment number
+            numbered.append(f"--- Segment {seg_num} ---\n{text}")
         body = WINDOW_AGGREGATION_PROMPT + "\n\n" + "\n\n".join(numbered)
 
         result = _generate_text(body, model, processor, args, DEFAULT_WINDOW_MAX_TOKENS)
