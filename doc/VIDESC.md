@@ -109,9 +109,36 @@ videsc --vl --gemma4 --indir ./videos --ext .mp4 --outdir ./captions
 ### Segment consolidation (`--consolidate`)
 
 When processing longer videos, Gemma 4 produces one description per chunk.  By
-default these are simply joined with blank lines.  With `--consolidate`, after
-all chunks have been described the per-segment texts are sent back to the model
-(as a text-only prompt) to produce a single coherent summary.
+default these are simply joined with blank lines.  With `--consolidate`, the
+pipeline switches to a **multi-stage consolidation** approach adapted from the
+[design document](https://github.com/otherroch/aitools/issues/33):
+
+#### Stage 1 — Structured segment analysis
+
+Each chunk is analysed with a structured prompt that requests JSON output
+containing `events`, `objects`, `actions`, `scene` and `summary` fields.
+This produces low-entropy, consistently formatted output that makes downstream
+merging reliable.  You can override the built-in prompt with `--segment-prompt`.
+
+#### Stage 2 — Window aggregation
+
+When the video has many chunks (more than `--window-size`, default 10),
+consecutive segments are grouped into windows and each window is summarised
+independently.  This removes redundancy, merges duplicate events and preserves
+chronological order before the final stage.
+
+#### Stage 3 — Final summary
+
+All window summaries (or segment summaries for shorter videos) are fed to a
+final-summary prompt that produces a structured result with:
+
+1. **OVERVIEW** — what the video is about
+2. **TIMELINE OF KEY EVENTS** — ordered bullet points
+3. **MAIN ENTITIES** — people, objects, recurring elements
+4. **IMPORTANT ACTIONS** — core actions driving the video
+5. **THEMES OR PATTERNS** — only if clearly supported by the data
+
+You can override the final-summary prompt with `--consolidate-prompt`.
 
 The output file contains:
 1. The **consolidated summary** (under a `=== Consolidated Summary ===` header).
@@ -120,13 +147,21 @@ The output file contains:
 Consolidation is only performed when the video is split into more than one chunk.
 
 ```bash
-# Consolidate segment descriptions into a single summary
+# Consolidate segment descriptions into a structured summary
 videsc --vl --gemma4 --consolidate --video ./long_clip.mp4
 
-# Use a custom consolidation prompt
+# Use a custom final-summary prompt
 videsc --vl --gemma4 --consolidate \
        --consolidate-prompt "Merge the following video segment descriptions into one paragraph." \
        --video ./long_clip.mp4
+
+# Use a custom segment-level prompt
+videsc --vl --gemma4 --consolidate \
+       --segment-prompt "Describe the key events in this video segment." \
+       --video ./long_clip.mp4
+
+# Control window grouping size (e.g. group every 5 segments)
+videsc --vl --gemma4 --consolidate --window-size 5 --video ./long_clip.mp4
 ```
 
 Key differences from Qwen-VL mode:
@@ -207,8 +242,10 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--gemma4` | — | Load as Gemma 4; defaults `--model` to `google/gemma-4-4b-it` |
 | `--gemma4-chunk-duration` | `30.0` | Max seconds per video chunk when using `--gemma4` |
 | `--gemma4-fps` | `1.0` | Frames per second to sample from each Gemma 4 chunk |
-| `--consolidate` | — | After per-segment generation, consolidate all segment descriptions into a single coherent summary (Gemma 4 only) |
-| `--consolidate-prompt` | *(see `--help`)* | Custom prompt for the consolidation step |
+| `--consolidate` | — | Enable multi-stage segment consolidation with structured prompts (Gemma 4 only) |
+| `--consolidate-prompt` | *(built-in)* | Custom prompt for the final consolidation step |
+| `--segment-prompt` | *(built-in)* | Custom prompt for per-segment structured analysis |
+| `--window-size` | `10` | Number of segments per window for intermediate aggregation |
 | `--attn` | `flash_attention_2` | Attention implementation: `flash_attention_2`, `sdpa`, or `eager` |
 | `--quant` | `none` | Weight quantisation: `none`, `8bit`, or `4bit` |
 | `--max-new-tokens` | `8192` | Maximum tokens to generate |

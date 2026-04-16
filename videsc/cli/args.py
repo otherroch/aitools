@@ -180,27 +180,49 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--consolidate",
         action="store_true",
         help=(
-            "After generating per-segment descriptions (Gemma 4 chunked mode),\n"
-            "send all segment texts back to the model to produce a single\n"
-            "consolidated summary.  The final output file contains the\n"
-            "consolidated summary followed by the per-segment descriptions.\n"
+            "Enable the multi-stage segment consolidation pipeline (Gemma 4 only).\n"
+            "When set, each chunk uses a structured segment prompt that extracts\n"
+            "events, objects, actions and scene info as JSON.  After all chunks\n"
+            "are described, segments are grouped into windows (see --window-size)\n"
+            "and a final summary is produced with OVERVIEW, TIMELINE, ENTITIES,\n"
+            "ACTIONS and THEMES sections.  The output file contains the final\n"
+            "summary followed by raw per-segment descriptions.\n"
             "Only effective when --gemma4 is set and the video has more than one chunk."
         ),
     )
     vl.add_argument(
         "--consolidate-prompt",
         type=str,
-        default=(
-            "Below are descriptions of consecutive segments of the same video. "
-            "Please combine them into a single, coherent, and comprehensive "
-            "summary that preserves all important details, characters, actions, "
-            "and narrative flow. Remove redundancies and ensure smooth transitions "
-            "between segments."
-        ),
+        default=None,
         metavar="PROMPT",
         help=(
-            "Custom prompt used for the consolidation step when --consolidate is\n"
-            "set.  The per-segment descriptions are appended automatically."
+            "Custom prompt for the final consolidation step when --consolidate is\n"
+            "set.  Overrides the built-in structured final-summary prompt.\n"
+            "The per-segment / window descriptions are appended automatically."
+        ),
+    )
+    vl.add_argument(
+        "--segment-prompt",
+        type=str,
+        default=None,
+        metavar="PROMPT",
+        help=(
+            "Custom prompt for per-segment analysis when --consolidate is set.\n"
+            "Overrides the built-in structured segment prompt that requests\n"
+            "JSON output (events, objects, actions, scene, summary).\n"
+            "The segment timestamp context is prepended automatically."
+        ),
+    )
+    vl.add_argument(
+        "--window-size",
+        type=int,
+        default=10,
+        metavar="N",
+        help=(
+            "Number of consecutive segments to group into a window for\n"
+            "intermediate aggregation before the final summary.  Only used\n"
+            "when --consolidate is set and chunk count > window-size.\n"
+            "(default: 10)"
         ),
     )
     vl.add_argument(

@@ -581,7 +581,7 @@ class TestVidescUnifiedCommand:
         )
 
     # ------------------------------------------------------------------
-    # Consolidation tests (segment summarization for Gemma 4)
+    # Consolidation tests (multi-stage pipeline for Gemma 4)
     # ------------------------------------------------------------------
 
     def test_parse_args_consolidate_default_false(self):
@@ -600,12 +600,12 @@ class TestVidescUnifiedCommand:
         ])
         assert args.consolidate is True
 
-    def test_parse_args_consolidate_prompt_default(self):
-        """--consolidate-prompt has a sensible default value."""
+    def test_parse_args_consolidate_prompt_default_none(self):
+        """--consolidate-prompt defaults to None (built-in prompt used)."""
         from videsc.cli.args import parse_args
 
         args = parse_args(["--vl", "--gemma4", "--consolidate", "--video", "/tmp/test.mp4"])
-        assert "consolidate" in args.consolidate_prompt.lower() or "combine" in args.consolidate_prompt.lower()
+        assert args.consolidate_prompt is None
 
     def test_parse_args_consolidate_prompt_custom(self):
         """--consolidate-prompt accepts a custom value."""
@@ -617,6 +617,42 @@ class TestVidescUnifiedCommand:
             "--video", "/tmp/test.mp4",
         ])
         assert args.consolidate_prompt == "Summarize all."
+
+    def test_parse_args_segment_prompt_default_none(self):
+        """--segment-prompt defaults to None (built-in structured prompt used)."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--consolidate", "--video", "/tmp/test.mp4"])
+        assert args.segment_prompt is None
+
+    def test_parse_args_segment_prompt_custom(self):
+        """--segment-prompt accepts a custom value."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4", "--consolidate",
+            "--segment-prompt", "Describe what you see.",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.segment_prompt == "Describe what you see."
+
+    def test_parse_args_window_size_default(self):
+        """--window-size defaults to 10."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--consolidate", "--video", "/tmp/test.mp4"])
+        assert args.window_size == 10
+
+    def test_parse_args_window_size_custom(self):
+        """--window-size accepts a custom integer."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4", "--consolidate",
+            "--window-size", "5",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.window_size == 5
 
     def test_args_help_includes_consolidate(self):
         """The --help output must document the --consolidate argument."""
@@ -650,6 +686,87 @@ class TestVidescUnifiedCommand:
         assert result.returncode == 0
         assert "--consolidate-prompt" in result.stdout
 
+    def test_args_help_includes_segment_prompt(self):
+        """The --help output must document the --segment-prompt argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--segment-prompt" in result.stdout
+
+    def test_args_help_includes_window_size(self):
+        """The --help output must document the --window-size argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--window-size" in result.stdout
+
+    # ── prompts module ──────────────────────────────────────────────────
+
+    def test_prompts_module_exists(self):
+        """videsc/pipeline/prompts.py must exist."""
+        prompts_py = VIDESC_ROOT / "pipeline" / "prompts.py"
+        assert prompts_py.is_file(), "videsc/pipeline/prompts.py must exist"
+
+    def test_prompts_exports_segment_prompt(self):
+        """prompts module must export SEGMENT_PROMPT."""
+        from videsc.pipeline.prompts import SEGMENT_PROMPT
+        assert "events" in SEGMENT_PROMPT.lower()
+        assert "objects" in SEGMENT_PROMPT.lower()
+        assert "actions" in SEGMENT_PROMPT.lower()
+        assert "scene" in SEGMENT_PROMPT.lower()
+        assert "summary" in SEGMENT_PROMPT.lower()
+
+    def test_prompts_exports_window_aggregation_prompt(self):
+        """prompts module must export WINDOW_AGGREGATION_PROMPT."""
+        from videsc.pipeline.prompts import WINDOW_AGGREGATION_PROMPT
+        assert "merge" in WINDOW_AGGREGATION_PROMPT.lower() or "consolidate" in WINDOW_AGGREGATION_PROMPT.lower()
+
+    def test_prompts_exports_final_summary_prompt(self):
+        """prompts module must export FINAL_SUMMARY_PROMPT."""
+        from videsc.pipeline.prompts import FINAL_SUMMARY_PROMPT
+        assert "OVERVIEW" in FINAL_SUMMARY_PROMPT
+        assert "TIMELINE" in FINAL_SUMMARY_PROMPT
+        assert "ENTITIES" in FINAL_SUMMARY_PROMPT
+        assert "ACTIONS" in FINAL_SUMMARY_PROMPT
+        assert "THEMES" in FINAL_SUMMARY_PROMPT
+
+    def test_prompts_segment_has_format_placeholder(self):
+        """SEGMENT_PROMPT must accept chunk_duration formatting."""
+        from videsc.pipeline.prompts import SEGMENT_PROMPT
+        formatted = SEGMENT_PROMPT.format(chunk_duration=30)
+        assert "30" in formatted
+
+    def test_prompts_default_token_limits(self):
+        """prompts module must define per-stage max-token defaults."""
+        from videsc.pipeline.prompts import (
+            DEFAULT_SEGMENT_MAX_TOKENS,
+            DEFAULT_WINDOW_MAX_TOKENS,
+            DEFAULT_FINAL_MAX_TOKENS,
+        )
+        assert 100 < DEFAULT_SEGMENT_MAX_TOKENS <= 1000
+        assert DEFAULT_WINDOW_MAX_TOKENS >= 1024
+        assert DEFAULT_FINAL_MAX_TOKENS >= 1024
+
+    # ── runner pipeline structure ───────────────────────────────────────
+
     def test_runner_has_consolidate_segments(self):
         """videsc/pipeline/runner.py must define 'consolidate_segments'."""
         runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
@@ -659,36 +776,60 @@ class TestVidescUnifiedCommand:
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef)
         }
-        assert "consolidate_segments" in func_names, (
-            "videsc/pipeline/runner.py must define 'consolidate_segments'"
-        )
+        assert "consolidate_segments" in func_names
+
+    def test_runner_has_aggregate_windows(self):
+        """videsc/pipeline/runner.py must define 'aggregate_windows'."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "aggregate_windows" in func_names
+
+    def test_runner_has_generate_text_helper(self):
+        """videsc/pipeline/runner.py must define '_generate_text'."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "_generate_text" in func_names
 
     def test_runner_consolidate_invoked_conditionally(self):
         """run_single_video_gemma4 must call consolidate_segments when --consolidate is set."""
         runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
         source = runner_py.read_text()
-        assert "consolidate_segments" in source, (
-            "runner must call consolidate_segments"
-        )
-        assert "consolidate" in source, (
-            "runner must check args.consolidate flag"
-        )
+        assert "consolidate_segments" in source
+        assert "use_consolidation" in source
 
     def test_runner_consolidate_output_format(self):
         """When consolidation is used the output must contain both summary and per-segment sections."""
         runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
         source = runner_py.read_text()
-        assert "Consolidated Summary" in source, (
-            "consolidated output must include a 'Consolidated Summary' header"
-        )
-        assert "Per-Segment Descriptions" in source, (
-            "consolidated output must include a 'Per-Segment Descriptions' header"
-        )
+        assert "Consolidated Summary" in source
+        assert "Per-Segment Descriptions" in source
 
     def test_runner_consolidate_skipped_for_single_chunk(self):
         """Consolidation must be skipped when the video has only one chunk."""
         runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
         source = runner_py.read_text()
-        assert "len(all_descriptions) > 1" in source, (
-            "consolidation must check for more than one segment"
-        )
+        assert "len(all_descriptions) > 1" in source
+
+    def test_runner_imports_prompts(self):
+        """runner.py must import prompt constants from prompts module."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "SEGMENT_PROMPT" in source
+        assert "WINDOW_AGGREGATION_PROMPT" in source
+        assert "FINAL_SUMMARY_PROMPT" in source
+
+    def test_runner_uses_segment_prompt_for_consolidation(self):
+        """When consolidation is enabled, runner must use SEGMENT_PROMPT for chunks."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "SEGMENT_PROMPT.format" in source
