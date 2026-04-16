@@ -421,13 +421,15 @@ def consolidate_segments(
     Returns:
         The consolidated summary as a single string.
     """
-    consolidate_prompt = getattr(args, "consolidate_prompt", None) or (
-        "Below are descriptions of consecutive segments of the same video. "
-        "Please combine them into a single, coherent, and comprehensive "
-        "summary that preserves all important details, characters, actions, "
-        "and narrative flow. Remove redundancies and ensure smooth transitions "
-        "between segments."
-    )
+    consolidate_prompt = getattr(args, "consolidate_prompt", None)
+    if consolidate_prompt is None:
+        consolidate_prompt = (
+            "Below are descriptions of consecutive segments of the same video. "
+            "Please combine them into a single, coherent, and comprehensive "
+            "summary that preserves all important details, characters, actions, "
+            "and narrative flow. Remove redundancies and ensure smooth transitions "
+            "between segments."
+        )
 
     # Build text body: the consolidation prompt followed by each segment
     numbered_segments = []
