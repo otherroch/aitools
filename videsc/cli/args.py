@@ -156,7 +156,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     model_group = vl.add_mutually_exclusive_group()
     model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
     model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
-    model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4b-it)")
+    model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4eb-it)")
     vl.add_argument(
         "--gemma4-chunk-duration",
         type=float,
@@ -180,6 +180,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         default="Qwen/Qwen3-VL-8B-Instruct",
         help="Model name or directory; used under model_dir unless --model_hf/--model_full.",
+    )
+    vl.add_argument(
+        "--processor",
+        default=None,
+        help="Processor name or directory; used under model_dir unless --model_hf/--model_full. If not specified, defaults to the same value as --model.",
     )
     vl.add_argument(
         "--model_hf",
@@ -298,7 +303,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # When --gemma4 is set and the user didn't explicitly change --model,
     # default to the Gemma 4 4B instruction-tuned model on HuggingFace.
     if args.gemma4 and args.model == _VL_DEFAULT_MODEL:
-        args.model = "google/gemma-4-4b-it"
+        args.model = "google/gemma-4-4eb-it"
         args.model_hf = True
 
     # Post-parse validation for Gemma 4 mode.

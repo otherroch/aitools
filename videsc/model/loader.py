@@ -10,7 +10,7 @@ from transformers import (
     Qwen3VLForConditionalGeneration,
     Qwen3VLMoeForConditionalGeneration,
     AutoProcessor,
-    AutoModelForImageTextToText,
+    AutoModelForMultimodalLM,
     BitsAndBytesConfig,
     Qwen3OmniMoeForConditionalGeneration,
     Qwen3OmniMoeProcessor,
@@ -60,6 +60,9 @@ def load_model_and_processor(args):
     else:
         model_path_local = model_dir + args.model
 
+
+
+        
     logger.debug("load_model_and_processor: model_path=%s  quant=%s  attn=%s",
                  model_path_local, getattr(args, "quant", None), getattr(args, "attn", None))
     print("model_path=", model_path_local)
@@ -295,8 +298,12 @@ def load_gemma4_model_and_processor(args):
 
     logger.debug("load_gemma4_model_and_processor: model_path=%s  quant=%s  attn=%s",
                  model_path_local, getattr(args, "quant", None), getattr(args, "attn", None))
-    print("model_path=", model_path_local)
 
+    processor_path_local = model_path_local  # For now, processor is in same location as model  
+    if args.processor is not None:
+        processor_path_local = args.processor
+        logger.debug("load_gemma4_model_and_processor: using custom processor path %s", processor_path_local)
+        
     # Optional CPU thread limiting
     if getattr(args, "half_cpu", False):
         cpu_count = os.cpu_count() or 2
@@ -324,8 +331,8 @@ def load_gemma4_model_and_processor(args):
             "float32": torch.float32,
         }.get(torch_dtype.lower(), torch_dtype)
 
-    # Load model using AutoModelForImageTextToText (standard for Gemma 4)
-    model = AutoModelForImageTextToText.from_pretrained(
+    # Load model using AutoModelForMultimodalLM (standard for Gemma 4)
+    model = AutoModelForMultimodalLM.from_pretrained(
         model_path_local,
         device_map="auto",
         torch_dtype=torch_dtype,
@@ -344,7 +351,7 @@ def load_gemma4_model_and_processor(args):
 
     # Gemma 4 processor requires padding_side="left" for batched generation
     processor = AutoProcessor.from_pretrained(
-        model_path_local,
+        processor_path_local, 
         padding_side="left",
     )
 
