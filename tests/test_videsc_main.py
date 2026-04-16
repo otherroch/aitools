@@ -749,10 +749,16 @@ class TestVidescUnifiedCommand:
         assert "THEMES" in FINAL_SUMMARY_PROMPT
 
     def test_prompts_segment_has_format_placeholder(self):
-        """SEGMENT_PROMPT must accept chunk_duration formatting."""
+        """SEGMENT_PROMPT must accept chunk_duration and timestamp formatting."""
         from videsc.pipeline.prompts import SEGMENT_PROMPT
-        formatted = SEGMENT_PROMPT.format(chunk_duration=30)
+        formatted = SEGMENT_PROMPT.format(
+            chunk_duration=30,
+            timestamp_start="00:05:00",
+            timestamp_end="00:05:30",
+        )
         assert "30" in formatted
+        assert "00:05:00" in formatted
+        assert "00:05:30" in formatted
 
     def test_prompts_default_token_limits(self):
         """prompts module must define per-stage max-token defaults."""
@@ -833,3 +839,53 @@ class TestVidescUnifiedCommand:
         runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
         source = runner_py.read_text()
         assert "SEGMENT_PROMPT.format" in source
+
+    def test_runner_has_seconds_to_hhmmss_helper(self):
+        """runner.py must define '_seconds_to_hhmmss' helper."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "_seconds_to_hhmmss" in func_names
+
+    def test_seconds_to_hhmmss_conversion(self):
+        """_seconds_to_hhmmss logic must correctly convert seconds to HH:MM:SS."""
+        # Test the logic directly — importing from runner.py requires torch/GPU stubs
+        def _seconds_to_hhmmss(seconds: float) -> str:
+            total = int(seconds)
+            h = total // 3600
+            m = (total % 3600) // 60
+            s = total % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
+        # Verify the function source in runner.py matches this logic
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "def _seconds_to_hhmmss" in source
+        assert "total // 3600" in source
+        assert "(total % 3600) // 60" in source
+
+        # Test the logic itself
+        assert _seconds_to_hhmmss(0) == "00:00:00"
+        assert _seconds_to_hhmmss(30) == "00:00:30"
+        assert _seconds_to_hhmmss(90) == "00:01:30"
+        assert _seconds_to_hhmmss(3661) == "01:01:01"
+        assert _seconds_to_hhmmss(300.5) == "00:05:00"
+
+    def test_runner_passes_timestamps_to_segment_prompt(self):
+        """runner must pass timestamp_start and timestamp_end to SEGMENT_PROMPT.format()."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "timestamp_start=" in source
+        assert "timestamp_end=" in source
+        assert "_seconds_to_hhmmss" in source
+
+    def test_runner_ffmpeg_uses_duration_flag(self):
+        """ffmpeg trimming must use -t (duration) instead of -to (absolute end)."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert '"-t"' in source
+        assert "avoid_negative_ts" in source

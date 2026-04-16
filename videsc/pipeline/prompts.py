@@ -16,6 +16,7 @@ the actual segment / window data before sending to the model.
 # ── Stage 1: per-segment prompt ──────────────────────────────────────────
 SEGMENT_PROMPT = """\
 You are analyzing a {chunk_duration}-second segment of a video.
+This segment covers {timestamp_start} to {timestamp_end} in the original video.
 
 Your job is to extract factual, observable information only.
 
@@ -24,11 +25,12 @@ RULES:
 - Do NOT repeat the same object/event multiple times
 - Use short, atomic phrases
 - Be consistent in naming (e.g., "man", "woman", "car")
+- Use the provided timestamps ({timestamp_start} to {timestamp_end}) in your output
 
 OUTPUT FORMAT (STRICT JSON):
 {{
-  "timestamp_start": "<HH:MM:SS>",
-  "timestamp_end": "<HH:MM:SS>",
+  "timestamp_start": "{timestamp_start}",
+  "timestamp_end": "{timestamp_end}",
   "events": ["..."],
   "objects": ["..."],
   "actions": ["..."],

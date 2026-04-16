@@ -406,6 +406,15 @@ def extract_frames_as_pil(
     return frames
 
 
+def _seconds_to_hhmmss(seconds: float) -> str:
+    """Convert a time in seconds to HH:MM:SS format."""
+    total = int(seconds)
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 def _generate_text(
     prompt_body: str,
     model,
@@ -621,12 +630,14 @@ def run_single_video_gemma4(args, model, processor) -> int:
             tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
             tmp.close()
             tmp_path = tmp.name
+            seg_duration = end - start
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", str(start),
-                "-to", str(end),
                 "-i", args.video,
+                "-t", str(seg_duration),
                 "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
                 tmp_path,
             ]
             logger.debug("run_single_video_gemma4: trimming chunk %d: %s", chunk_idx + 1, " ".join(cmd))
@@ -634,11 +645,14 @@ def run_single_video_gemma4(args, model, processor) -> int:
             clip_path = tmp_path
 
         try:
+            ts_start = _seconds_to_hhmmss(start)
+            ts_end = _seconds_to_hhmmss(end)
+
             chunk_note = ""
             if len(chunks) > 1:
                 chunk_note = (
                     f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
-                    f"{start:.1f}s\u2013{end:.1f}s]\n"
+                    f"{ts_start}\u2013{ts_end}]\n"
                 )
 
             # When consolidation is enabled and video has multiple chunks,
@@ -651,6 +665,8 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 else:
                     segment_prompt_text = chunk_note + SEGMENT_PROMPT.format(
                         chunk_duration=int(end - start),
+                        timestamp_start=ts_start,
+                        timestamp_end=ts_end,
                     )
                 seg_max_tokens = DEFAULT_SEGMENT_MAX_TOKENS
             else:
