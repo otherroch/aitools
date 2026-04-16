@@ -1,6 +1,7 @@
 import sys
 import shlex
 import subprocess
+import tempfile
 import time
 import logging
 from copy import deepcopy
@@ -405,9 +406,9 @@ def run_single_video_gemma4(args, model, processor) -> int:
     into consecutive chunks, generates a description for each, then concatenates
     the results into a single output file.
 
-    Frames are extracted as PIL images via OpenCV and passed as a native
-    ``{"type": "video"}`` entry (list of PIL images) per chunk, matching the
-    gemma4_4b.py approach.  Output is decoded with ``processor.parse_response``.
+    Each chunk is trimmed to a temp file with ffmpeg and passed as a video path
+    directly to the processor, matching the gemma4_4b.py approach.  Output is
+    decoded with ``processor.parse_response``.
     """
     chunk_duration = args.gemma4_chunk_duration
     gemma4_fps = args.gemma4_fps
@@ -445,48 +446,66 @@ def run_single_video_gemma4(args, model, processor) -> int:
             chunk_idx + 1, len(chunks), start, end,
         )
 
-        frames = extract_frames_as_pil(args.video, start, end, fps=gemma4_fps)
-        if not frames:
-            logger.warning("run_single_video_gemma4: no frames extracted for chunk %d", chunk_idx + 1)
-            continue
+        # For a single chunk pass the original path; otherwise trim with ffmpeg.
+        tmp_path = None
+        if len(chunks) == 1:
+            clip_path = args.video
+        else:
+            suffix = _P(args.video).suffix or ".mp4"
+            tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            tmp.close()
+            tmp_path = tmp.name
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(start),
+                "-to", str(end),
+                "-i", args.video,
+                "-c", "copy",
+                tmp_path,
+            ]
+            logger.debug("run_single_video_gemma4: trimming chunk %d: %s", chunk_idx + 1, " ".join(cmd))
+            subprocess.run(cmd, check=True, capture_output=True)
+            clip_path = tmp_path
 
-        logger.debug("run_single_video_gemma4: chunk %d  %d frame(s)", chunk_idx + 1, len(frames))
+        try:
+            chunk_note = ""
+            if len(chunks) > 1:
+                chunk_note = (
+                    f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
+                    f"{start:.1f}s\u2013{end:.1f}s]\n"
+                )
 
-        chunk_note = ""
-        if len(chunks) > 1:
-            chunk_note = (
-                f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
-                f"{start:.1f}s–{end:.1f}s]\n"
-            )
+            content: List[Dict[str, Any]] = [
+                {"type": "video", "video": clip_path},
+                {"type": "text", "text": chunk_note + args.prompt},
+            ]
 
-        content: List[Dict[str, Any]] = [
-            {"type": "video", "video": frames},
-            {"type": "text", "text": chunk_note + args.prompt},
-        ]
+            messages: List[Dict[str, Any]] = []
+            if args.system:
+                messages.append({
+                    "role": "system",
+                    "content": [{"type": "text", "text": args.system}],
+                })
+            messages.append({"role": "user", "content": content})
 
-        messages: List[Dict[str, Any]] = []
-        if args.system:
-            messages.append({
-                "role": "system",
-                "content": [{"type": "text", "text": args.system}],
-            })
-        messages.append({"role": "user", "content": content})
+            if args.dry:
+                logger.info("[gemma4] dry run — skipping generation for this chunk")
+                all_descriptions.append(f"[chunk {chunk_idx + 1}: dry run]")
+                continue
 
-        if args.dry:
-            logger.info("[gemma4] dry run — skipping generation for this chunk")
-            all_descriptions.append(f"[chunk {chunk_idx + 1}: dry run]")
-            continue
-
-        inputs = processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            add_generation_prompt=True,
-            processor_kwargs={
-                "video_metadata": [{"fps": gemma4_fps}],
-            },
-        ).to(model.device)
+            inputs = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                add_generation_prompt=True,
+                processor_kwargs={
+                    "videos_kwargs": {"fps": gemma4_fps},
+                },
+            ).to(model.device)
+        finally:
+            if tmp_path is not None:
+                _P(tmp_path).unlink(missing_ok=True)
 
         now_gen = datetime.now()
         current_time = now_gen.strftime("%H:%M:%S")
