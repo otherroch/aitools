@@ -478,6 +478,8 @@ def aggregate_windows(
     if len(segment_texts) <= window_size:
         return segment_texts
 
+    logger.info("[gemma4] aggregating %d segments into windows of %d", len(segment_texts), window_size) 
+    
     windows: List[str] = []
     for win_start in range(0, len(segment_texts), window_size):
         win_segments = segment_texts[win_start : win_start + window_size]
@@ -490,6 +492,8 @@ def aggregate_windows(
             numbered.append(f"--- Segment {seg_num} ---\n{text}")
         body = WINDOW_AGGREGATION_PROMPT + "\n\n" + "\n\n".join(numbered)
 
+        logger.debug("[gemma4] window %d prompt:\n%s", win_idx, body)
+        logger.info("[gemma4] generating summary for window %d", win_idx)
         result = _generate_text(body, model, processor, args, DEFAULT_WINDOW_MAX_TOKENS)
         windows.append(result)
 
@@ -529,6 +533,8 @@ def consolidate_segments(
     # Stage 2: window aggregation (only when many segments)
     summaries = aggregate_windows(segment_texts, window_size, model, processor, args)
 
+    logger.info("[gemma4] %d summaries after window aggregation:\n%s", len(summaries), "\n\n".join(summaries))
+    
     # Stage 3: final summary
     consolidate_prompt = getattr(args, "consolidate_prompt", None) or FINAL_SUMMARY_PROMPT
 
@@ -537,11 +543,14 @@ def consolidate_segments(
     for idx, text in enumerate(summaries, 1):
         numbered.append(f"--- {label} {idx} ---\n{text}")
     body = consolidate_prompt + "\n\n" + "\n\n".join(numbered)
-
+    
     logger.info("[gemma4] generating final summary from %d %s(s)", len(summaries), label.lower())
+    logger.info("[gemma4] final summary prompt:\n%s", body)
+    
+   
     result = _generate_text(body, model, processor, args, DEFAULT_FINAL_MAX_TOKENS)
 
-    logger.debug("[gemma4] consolidation done (%d chars)", len(result))
+    logger.info("[gemma4] consolidation done (%d chars)", len(result))
     return result
 
 
@@ -665,7 +674,10 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 logger.info("[gemma4] dry run — skipping generation for this chunk")
                 all_descriptions.append(f"[chunk {chunk_idx + 1}: dry run]")
                 continue
-
+            
+            if chunk_idx == 0:
+                logger.info("before processor for chunk %d", chunk_idx + 1, " promt: ", segment_prompt_text)
+            
             chunk_num_frames = max(1, int(round((end - start) * gemma4_fps)))
             inputs = processor.apply_chat_template(
                 messages,
@@ -683,7 +695,7 @@ def run_single_video_gemma4(args, model, processor) -> int:
 
         now_gen = datetime.now()
         current_time = now_gen.strftime("%H:%M:%S")
-        logger.debug("✅ Before generate (chunk %d): %s", chunk_idx + 1, current_time)
+        logger.info("✅ Before generate (chunk %d): %s", chunk_idx + 1, current_time)
 
         output_ids = model.generate(**inputs, max_new_tokens=seg_max_tokens)
 
@@ -696,7 +708,9 @@ def run_single_video_gemma4(args, model, processor) -> int:
             text = text.split("</think>", 1)[-1].lstrip()
 
         all_descriptions.append(text)
-        logger.debug("[gemma4] chunk %d done", chunk_idx + 1)
+        now_gen = datetime.now()
+        gen_time = now_gen.strftime("%H:%M:%S")
+        logger.info("[gemma4] chunk %d done: %s", chunk_idx + 1, gen_time)
 
     # ── Multi-stage consolidation ────────────────────────────────────────────
     consolidated = None
