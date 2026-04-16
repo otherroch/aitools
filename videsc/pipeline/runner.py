@@ -483,7 +483,9 @@ def run_single_video_gemma4(args, model, processor) -> int:
             return_dict=True,
             return_tensors="pt",
             add_generation_prompt=True,
-            num_frames=len(frames),
+            processor_kwargs={
+                "video_metadata": [{"fps": gemma4_fps}],
+            },
         ).to(model.device)
 
         now_gen = datetime.now()
