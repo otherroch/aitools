@@ -15,17 +15,27 @@ the actual segment / window data before sending to the model.
 
 # ── Stage 1: per-segment prompt ──────────────────────────────────────────
 SEGMENT_PROMPT = """\
-You are analyzing a {chunk_duration}-second segment of a video.
-This segment covers {timestamp_start} to {timestamp_end} in the original video.
+You are analyzing a video clip.
+
+This clip is {chunk_duration} seconds long and starts at 00:00:00 in the \
+playback you see. It was extracted from a longer video where it corresponds \
+to the time range {timestamp_start} to {timestamp_end}.
+
+Analyze ALL the visual content in this clip from start to finish. \
+Do NOT try to seek to any specific timestamp — just watch the entire clip \
+and describe what you see.
 
 Your job is to extract factual, observable information only.
 
 RULES:
+- Analyze the ENTIRE clip from its beginning (00:00:00) to its end
 - Do NOT speculate about intent or emotions unless visually obvious
 - Do NOT repeat the same object/event multiple times
 - Use short, atomic phrases
 - Be consistent in naming (e.g., "man", "woman", "car")
-- Use the provided timestamps ({timestamp_start} to {timestamp_end}) in your output
+
+In your output, use {timestamp_start} and {timestamp_end} as the timestamp \
+values (these are the clip's position in the full video).
 
 OUTPUT FORMAT (STRICT JSON):
 {{
@@ -38,12 +48,7 @@ OUTPUT FORMAT (STRICT JSON):
   "summary": "<1 sentence max>"
 }}
 
-EXAMPLE STYLE:
-- events: ["man enters room", "sits on chair"]
-- objects: ["chair", "table", "laptop"]
-- actions: ["walking", "sitting"]
-
-Now analyze the segment.\
+Now analyze the clip.\
 """
 
 # ── Stage 2: window aggregation prompt ───────────────────────────────────

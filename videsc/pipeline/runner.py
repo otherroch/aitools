@@ -648,28 +648,29 @@ def run_single_video_gemma4(args, model, processor) -> int:
             ts_start = _seconds_to_hhmmss(start)
             ts_end = _seconds_to_hhmmss(end)
 
-            chunk_note = ""
-            if len(chunks) > 1:
-                chunk_note = (
-                    f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
-                    f"{ts_start}\u2013{ts_end}]\n"
-                )
-
             # When consolidation is enabled and video has multiple chunks,
             # use the structured segment prompt (JSON output) so that
             # downstream aggregation/final-summary stages work reliably.
+            # The SEGMENT_PROMPT already embeds timestamps and context, so
+            # no additional chunk_note prefix is needed.
             if use_consolidation and len(chunks) > 1:
                 custom_seg = getattr(args, "segment_prompt", None)
                 if custom_seg:
-                    segment_prompt_text = chunk_note + custom_seg
+                    segment_prompt_text = custom_seg
                 else:
-                    segment_prompt_text = chunk_note + SEGMENT_PROMPT.format(
+                    segment_prompt_text = SEGMENT_PROMPT.format(
                         chunk_duration=int(end - start),
                         timestamp_start=ts_start,
                         timestamp_end=ts_end,
                     )
                 seg_max_tokens = DEFAULT_SEGMENT_MAX_TOKENS
             else:
+                chunk_note = ""
+                if len(chunks) > 1:
+                    chunk_note = (
+                        f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
+                        f"{ts_start}\u2013{ts_end}]\n"
+                    )
                 segment_prompt_text = chunk_note + args.prompt
                 seg_max_tokens = args.max_new_tokens
 
