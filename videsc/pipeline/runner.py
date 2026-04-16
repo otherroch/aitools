@@ -676,8 +676,9 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 continue
             
             if chunk_idx == 0:
-                logger.info("before processor for chunk %d", chunk_idx + 1, " promt: ", segment_prompt_text)
-            
+                logger.info(f"before processor for chunk {chunk_idx + 1} promt: {segment_prompt_text}")
+            else:
+                logger.debug(f"before processor for chunk {chunk_idx + 1} promt: {segment_prompt_text}")
             chunk_num_frames = max(1, int(round((end - start) * gemma4_fps)))
             inputs = processor.apply_chat_template(
                 messages,
@@ -693,6 +694,7 @@ def run_single_video_gemma4(args, model, processor) -> int:
             if tmp_path is not None:
                 _P(tmp_path).unlink(missing_ok=True)
 
+        logger.debug(f"after processor for chunk {chunk_idx + 1} inputs: {inputs} with video num_frames={chunk_num_frames}")
         now_gen = datetime.now()
         current_time = now_gen.strftime("%H:%M:%S")
         logger.info("✅ Before generate (chunk %d): %s", chunk_idx + 1, current_time)
@@ -711,7 +713,7 @@ def run_single_video_gemma4(args, model, processor) -> int:
         now_gen = datetime.now()
         gen_time = now_gen.strftime("%H:%M:%S")
         logger.info("[gemma4] chunk %d done: %s", chunk_idx + 1, gen_time)
-
+        logger.debug("[gemma4] chunk %d description:\n%s", chunk_idx + 1, text)
     # ── Multi-stage consolidation ────────────────────────────────────────────
     consolidated = None
     if use_consolidation and len(all_descriptions) > 1:
