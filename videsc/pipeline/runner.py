@@ -493,6 +493,7 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 all_descriptions.append(f"[chunk {chunk_idx + 1}: dry run]")
                 continue
 
+            chunk_num_frames = max(1, int(round((end - start) * gemma4_fps)))
             inputs = processor.apply_chat_template(
                 messages,
                 tokenize=True,
@@ -500,7 +501,7 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 return_tensors="pt",
                 add_generation_prompt=True,
                 processor_kwargs={
-                    "videos_kwargs": {"fps": gemma4_fps},
+                    "videos_kwargs": {"num_frames": chunk_num_frames},
                 },
             ).to(model.device)
         finally:
