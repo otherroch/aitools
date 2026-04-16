@@ -579,3 +579,116 @@ class TestVidescUnifiedCommand:
         assert "run_single_video_gemma4" in source, (
             "_run_vl must call run_single_video_gemma4"
         )
+
+    # ------------------------------------------------------------------
+    # Consolidation tests (segment summarization for Gemma 4)
+    # ------------------------------------------------------------------
+
+    def test_parse_args_consolidate_default_false(self):
+        """--consolidate flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--video", "/tmp/test.mp4"])
+        assert args.consolidate is False
+
+    def test_parse_args_consolidate_flag_true(self):
+        """--consolidate flag is True when specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4", "--consolidate", "--video", "/tmp/test.mp4",
+        ])
+        assert args.consolidate is True
+
+    def test_parse_args_consolidate_prompt_default(self):
+        """--consolidate-prompt has a sensible default value."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--gemma4", "--consolidate", "--video", "/tmp/test.mp4"])
+        assert "consolidate" in args.consolidate_prompt.lower() or "combine" in args.consolidate_prompt.lower()
+
+    def test_parse_args_consolidate_prompt_custom(self):
+        """--consolidate-prompt accepts a custom value."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--gemma4", "--consolidate",
+            "--consolidate-prompt", "Summarize all.",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.consolidate_prompt == "Summarize all."
+
+    def test_args_help_includes_consolidate(self):
+        """The --help output must document the --consolidate argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--consolidate" in result.stdout
+
+    def test_args_help_includes_consolidate_prompt(self):
+        """The --help output must document the --consolidate-prompt argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--consolidate-prompt" in result.stdout
+
+    def test_runner_has_consolidate_segments(self):
+        """videsc/pipeline/runner.py must define 'consolidate_segments'."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        tree = ast.parse(runner_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "consolidate_segments" in func_names, (
+            "videsc/pipeline/runner.py must define 'consolidate_segments'"
+        )
+
+    def test_runner_consolidate_invoked_conditionally(self):
+        """run_single_video_gemma4 must call consolidate_segments when --consolidate is set."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "consolidate_segments" in source, (
+            "runner must call consolidate_segments"
+        )
+        assert "consolidate" in source, (
+            "runner must check args.consolidate flag"
+        )
+
+    def test_runner_consolidate_output_format(self):
+        """When consolidation is used the output must contain both summary and per-segment sections."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "Consolidated Summary" in source, (
+            "consolidated output must include a 'Consolidated Summary' header"
+        )
+        assert "Per-Segment Descriptions" in source, (
+            "consolidated output must include a 'Per-Segment Descriptions' header"
+        )
+
+    def test_runner_consolidate_skipped_for_single_chunk(self):
+        """Consolidation must be skipped when the video has only one chunk."""
+        runner_py = VIDESC_ROOT / "pipeline" / "runner.py"
+        source = runner_py.read_text()
+        assert "len(all_descriptions) > 1" in source, (
+            "consolidation must check for more than one segment"
+        )

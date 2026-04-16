@@ -106,6 +106,29 @@ videsc --vl --gemma4 --video ./clip.mp4 \
 videsc --vl --gemma4 --indir ./videos --ext .mp4 --outdir ./captions
 ```
 
+### Segment consolidation (`--consolidate`)
+
+When processing longer videos, Gemma 4 produces one description per chunk.  By
+default these are simply joined with blank lines.  With `--consolidate`, after
+all chunks have been described the per-segment texts are sent back to the model
+(as a text-only prompt) to produce a single coherent summary.
+
+The output file contains:
+1. The **consolidated summary** (under a `=== Consolidated Summary ===` header).
+2. The **raw per-segment descriptions** (under a `=== Per-Segment Descriptions ===` header).
+
+Consolidation is only performed when the video is split into more than one chunk.
+
+```bash
+# Consolidate segment descriptions into a single summary
+videsc --vl --gemma4 --consolidate --video ./long_clip.mp4
+
+# Use a custom consolidation prompt
+videsc --vl --gemma4 --consolidate \
+       --consolidate-prompt "Merge the following video segment descriptions into one paragraph." \
+       --video ./long_clip.mp4
+```
+
 Key differences from Qwen-VL mode:
 - Frames are extracted as still images via OpenCV (no `qwen-vl-utils` needed).
 - Videos longer than `--gemma4-chunk-duration` (default 30 s) are automatically
@@ -184,6 +207,8 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--gemma4` | — | Load as Gemma 4; defaults `--model` to `google/gemma-4-4b-it` |
 | `--gemma4-chunk-duration` | `30.0` | Max seconds per video chunk when using `--gemma4` |
 | `--gemma4-fps` | `1.0` | Frames per second to sample from each Gemma 4 chunk |
+| `--consolidate` | — | After per-segment generation, consolidate all segment descriptions into a single coherent summary (Gemma 4 only) |
+| `--consolidate-prompt` | *(see `--help`)* | Custom prompt for the consolidation step |
 | `--attn` | `flash_attention_2` | Attention implementation: `flash_attention_2`, `sdpa`, or `eager` |
 | `--quant` | `none` | Weight quantisation: `none`, `8bit`, or `4bit` |
 | `--max-new-tokens` | `8192` | Maximum tokens to generate |

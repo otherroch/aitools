@@ -398,6 +398,78 @@ def extract_frames_as_pil(
     return frames
 
 
+def consolidate_segments(
+    segment_texts: List[str],
+    model,
+    processor,
+    args,
+) -> str:
+    """Consolidate per-segment descriptions into a single coherent summary.
+
+    After the Gemma 4 pipeline has generated one description per video chunk,
+    this function feeds all of them back to the *same* model (as a text-only
+    prompt) and asks it to produce one unified narrative.
+
+    Args:
+        segment_texts: The per-segment descriptions (one string per chunk).
+        model:         The loaded Gemma 4 model.
+        processor:     The loaded Gemma 4 processor.
+        args:          The CLI namespace (supplies ``consolidate_prompt``,
+                       ``system``, ``max_new_tokens``, ``no_think_trim``,
+                       and ``seed``).
+
+    Returns:
+        The consolidated summary as a single string.
+    """
+    consolidate_prompt = getattr(args, "consolidate_prompt", None) or (
+        "Below are descriptions of consecutive segments of the same video. "
+        "Please combine them into a single, coherent, and comprehensive "
+        "summary that preserves all important details, characters, actions, "
+        "and narrative flow. Remove redundancies and ensure smooth transitions "
+        "between segments."
+    )
+
+    # Build text body: the consolidation prompt followed by each segment
+    numbered_segments = []
+    for idx, text in enumerate(segment_texts, 1):
+        numbered_segments.append(f"--- Segment {idx} ---\n{text}")
+    body = consolidate_prompt + "\n\n" + "\n\n".join(numbered_segments)
+
+    messages: List[Dict[str, Any]] = []
+    if args.system:
+        messages.append({
+            "role": "system",
+            "content": [{"type": "text", "text": args.system}],
+        })
+    messages.append({
+        "role": "user",
+        "content": [{"type": "text", "text": body}],
+    })
+
+    logger.info("[gemma4] consolidating %d segment descriptions", len(segment_texts))
+
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    ).to(model.device)
+
+    output_ids = model.generate(**inputs, max_new_tokens=args.max_new_tokens)
+
+    input_len = inputs["input_ids"].shape[-1]
+    response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
+    text_output = processor.parse_response(response)
+    text = str(text_output["content"])
+
+    if not args.no_think_trim and "</think>" in text:
+        text = text.split("</think>", 1)[-1].lstrip()
+
+    logger.debug("[gemma4] consolidation done (%d chars)", len(text))
+    return text
+
+
 def run_single_video_gemma4(args, model, processor) -> int:
     """Run Gemma 4 pipeline for a single video.
 
@@ -405,6 +477,11 @@ def run_single_video_gemma4(args, model, processor) -> int:
     a time (default 60 s).  When the source video is longer the function splits it
     into consecutive chunks, generates a description for each, then concatenates
     the results into a single output file.
+
+    When ``--consolidate`` is set and the video has more than one chunk, the
+    per-segment descriptions are additionally sent back to the model (text-only)
+    to produce a single coherent summary.  The output file contains the
+    consolidated summary followed by the raw per-segment descriptions.
 
     Each chunk is trimmed to a temp file with ffmpeg and passed as a video path
     directly to the processor, matching the gemma4_4b.py approach.  Output is
@@ -525,7 +602,25 @@ def run_single_video_gemma4(args, model, processor) -> int:
         all_descriptions.append(text)
         logger.debug("[gemma4] chunk %d done", chunk_idx + 1)
 
-    result = "\n\n".join(all_descriptions)
+    # ── Consolidation step ────────────────────────────────────────────────
+    consolidated = None
+    if (
+        getattr(args, "consolidate", False)
+        and len(all_descriptions) > 1
+        and not getattr(args, "dry", False)
+    ):
+        consolidated = consolidate_segments(all_descriptions, model, processor, args)
+
+    if consolidated is not None:
+        result = (
+            "=== Consolidated Summary ===\n\n"
+            + consolidated
+            + "\n\n"
+            + "=== Per-Segment Descriptions ===\n\n"
+            + "\n\n".join(all_descriptions)
+        )
+    else:
+        result = "\n\n".join(all_descriptions)
     logger.debug(result)
 
     nowEnd = datetime.now()

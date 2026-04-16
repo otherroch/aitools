@@ -177,6 +177,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Frames per second to sample from each Gemma 4 chunk (default: 1.0).",
     )
     vl.add_argument(
+        "--consolidate",
+        action="store_true",
+        help=(
+            "After generating per-segment descriptions (Gemma 4 chunked mode),\n"
+            "send all segment texts back to the model to produce a single\n"
+            "consolidated summary.  The final output file contains the\n"
+            "consolidated summary followed by the per-segment descriptions.\n"
+            "Only effective when --gemma4 is set and the video has more than one chunk."
+        ),
+    )
+    vl.add_argument(
+        "--consolidate-prompt",
+        type=str,
+        default=(
+            "Below are descriptions of consecutive segments of the same video. "
+            "Please combine them into a single, coherent, and comprehensive "
+            "summary that preserves all important details, characters, actions, "
+            "and narrative flow. Remove redundancies and ensure smooth transitions "
+            "between segments."
+        ),
+        metavar="PROMPT",
+        help=(
+            "Custom prompt used for the consolidation step when --consolidate is\n"
+            "set.  The per-segment descriptions are appended automatically."
+        ),
+    )
+    vl.add_argument(
         "--model",
         default="Qwen/Qwen3-VL-8B-Instruct",
         help="Model name or directory; used under model_dir unless --model_hf/--model_full.",
