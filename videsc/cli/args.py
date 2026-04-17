@@ -210,7 +210,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Custom prompt for per-segment analysis when --consolidate is set.\n"
             "Overrides the built-in structured segment prompt that requests\n"
             "JSON output (events, objects, actions, scene, summary).\n"
-            "The segment timestamp context is prepended automatically."
+            "When provided, this prompt is used verbatim; include any desired\n"
+            "segment timestamp or chunk-duration instructions yourself."
         ),
     )
     vl.add_argument(
