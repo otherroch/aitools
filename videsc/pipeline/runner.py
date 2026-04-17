@@ -693,9 +693,17 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 continue
             
             if chunk_idx == 0:
-                logger.info(f"before processor for chunk {chunk_idx + 1} promt: {segment_prompt_text}")
+                logger.info(
+                    "before processor for chunk %s prompt length: %s",
+                    chunk_idx + 1,
+                    len(segment_prompt_text),
+                )
             else:
-                logger.debug(f"before processor for chunk {chunk_idx + 1} promt: {segment_prompt_text}")
+                logger.debug(
+                    "before processor for chunk %s prompt: %s",
+                    chunk_idx + 1,
+                    segment_prompt_text,
+                )
             chunk_num_frames = max(1, int(round((end - start) * gemma4_fps)))
             inputs = processor.apply_chat_template(
                 messages,
