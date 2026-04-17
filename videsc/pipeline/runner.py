@@ -24,6 +24,14 @@ from videsc.video.info import get_video_info
 from videsc.video.sampling import compute_effective_nframes, compress_audio_segments_to_nframes
 from videsc.video.messages import build_messages
 from videsc.utils.helpers import expand_inputs, namespace_to_cli, _patch_size_for_model, expand_video_grid_thw
+from videsc.pipeline.prompts import (
+    SEGMENT_PROMPT,
+    WINDOW_AGGREGATION_PROMPT,
+    FINAL_SUMMARY_PROMPT,
+    DEFAULT_SEGMENT_MAX_TOKENS,
+    DEFAULT_WINDOW_MAX_TOKENS,
+    DEFAULT_FINAL_MAX_TOKENS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +406,163 @@ def extract_frames_as_pil(
     return frames
 
 
+def _seconds_to_hhmmss(seconds: float) -> str:
+    """Convert a time in seconds to HH:MM:SS format."""
+    total = int(seconds)
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _generate_text(
+    prompt_body: str,
+    model,
+    processor,
+    args,
+    max_new_tokens: int,
+) -> str:
+    """Send a text-only prompt to the model and return the decoded response.
+
+    This is the shared generation helper used by all consolidation stages
+    (window aggregation, final summary).
+    """
+    messages: List[Dict[str, Any]] = []
+    if args.system:
+        messages.append({
+            "role": "system",
+            "content": [{"type": "text", "text": args.system}],
+        })
+    messages.append({
+        "role": "user",
+        "content": [{"type": "text", "text": prompt_body}],
+    })
+
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    ).to(model.device)
+
+    output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+
+    input_len = inputs["input_ids"].shape[-1]
+    response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
+    text_output = processor.parse_response(response)
+    text = str(text_output["content"])
+
+    if not args.no_think_trim and "</think>" in text:
+        text = text.split("</think>", 1)[-1].lstrip()
+
+    return text
+
+
+def aggregate_windows(
+    segment_texts: List[str],
+    window_size: int,
+    model,
+    processor,
+    args,
+) -> List[str]:
+    """Group segment descriptions into windows and aggregate each window.
+
+    When the number of segments exceeds *window_size*, consecutive segments are
+    batched into groups of *window_size* and each group is sent to the model
+    with the window-aggregation prompt.  If the number of segments is at most
+    *window_size*, no aggregation is performed and the original list is returned.
+
+    Args:
+        segment_texts: Per-segment descriptions (one string per chunk).
+        window_size:   Maximum segments per window.
+        model:         The loaded Gemma 4 model.
+        processor:     The loaded Gemma 4 processor.
+        args:          CLI namespace.
+
+    Returns:
+        A list of window-level summaries (or the original segments if
+        aggregation was not needed).
+    """
+    if len(segment_texts) <= window_size:
+        return segment_texts
+
+    logger.info("[gemma4] aggregating %d segments into windows of %d", len(segment_texts), window_size) 
+    
+    windows: List[str] = []
+    for win_start in range(0, len(segment_texts), window_size):
+        win_segments = segment_texts[win_start : win_start + window_size]
+        win_idx = win_start // window_size + 1
+        logger.info("[gemma4] aggregating window %d (%d segments)", win_idx, len(win_segments))
+
+        numbered = []
+        for idx, text in enumerate(win_segments):
+            seg_num = win_start + idx + 1  # 1-based segment number
+            numbered.append(f"--- Segment {seg_num} ---\n{text}")
+        body = WINDOW_AGGREGATION_PROMPT + "\n\n" + "\n\n".join(numbered)
+
+        logger.debug("[gemma4] window %d prompt:\n%s", win_idx, body)
+        logger.info("[gemma4] generating summary for window %d", win_idx)
+        result = _generate_text(body, model, processor, args, DEFAULT_WINDOW_MAX_TOKENS)
+        windows.append(result)
+
+    logger.info("[gemma4] window aggregation produced %d windows", len(windows))
+    return windows
+
+
+def consolidate_segments(
+    segment_texts: List[str],
+    model,
+    processor,
+    args,
+) -> str:
+    """Multi-stage consolidation of per-segment descriptions.
+
+    Implements the three-stage pipeline from the design document:
+
+    1. **Window aggregation** – If more segments than ``--window-size``,
+       consecutive segments are grouped and each group is summarised.
+    2. **Final summary** – All window (or segment) texts are fed to the
+       final-summary prompt to produce a structured result with OVERVIEW,
+       TIMELINE, ENTITIES, ACTIONS and THEMES.
+
+    Callers may override the final-summary prompt via ``--consolidate-prompt``.
+
+    Args:
+        segment_texts: The per-segment descriptions (one string per chunk).
+        model:         The loaded Gemma 4 model.
+        processor:     The loaded Gemma 4 processor.
+        args:          The CLI namespace.
+
+    Returns:
+        The consolidated summary as a single string.
+    """
+    window_size = getattr(args, "window_size", 10)
+
+    # Stage 2: window aggregation (only when many segments)
+    summaries = aggregate_windows(segment_texts, window_size, model, processor, args)
+
+    logger.info("[gemma4] %d summaries after window aggregation:\n%s", len(summaries), "\n\n".join(summaries))
+    
+    # Stage 3: final summary
+    consolidate_prompt = getattr(args, "consolidate_prompt", None) or FINAL_SUMMARY_PROMPT
+
+    numbered = []
+    label = "Window" if len(summaries) < len(segment_texts) else "Segment"
+    for idx, text in enumerate(summaries, 1):
+        numbered.append(f"--- {label} {idx} ---\n{text}")
+    body = consolidate_prompt + "\n\n" + "\n\n".join(numbered)
+    
+    logger.info("[gemma4] generating final summary from %d %s(s)", len(summaries), label.lower())
+    logger.info("[gemma4] final summary prompt:\n%s", body)
+    
+   
+    result = _generate_text(body, model, processor, args, DEFAULT_FINAL_MAX_TOKENS)
+
+    logger.info("[gemma4] consolidation done (%d chars)", len(result))
+    return result
+
+
 def run_single_video_gemma4(args, model, processor) -> int:
     """Run Gemma 4 pipeline for a single video.
 
@@ -406,12 +571,22 @@ def run_single_video_gemma4(args, model, processor) -> int:
     into consecutive chunks, generates a description for each, then concatenates
     the results into a single output file.
 
+    When ``--consolidate`` is set and the video has more than one chunk, the
+    pipeline uses a structured segment prompt (requesting JSON output with events,
+    objects, actions, scene, summary), optionally groups segments into windows,
+    and produces a final structured summary.  The output file contains the
+    consolidated summary followed by the raw per-segment descriptions.
+
     Each chunk is trimmed to a temp file with ffmpeg and passed as a video path
     directly to the processor, matching the gemma4_4b.py approach.  Output is
     decoded with ``processor.parse_response``.
     """
     chunk_duration = args.gemma4_chunk_duration
     gemma4_fps = args.gemma4_fps
+    use_consolidation = (
+        getattr(args, "consolidate", False)
+        and not getattr(args, "dry", False)
+    )
 
     torch.manual_seed(args.seed)
 
@@ -455,12 +630,14 @@ def run_single_video_gemma4(args, model, processor) -> int:
             tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
             tmp.close()
             tmp_path = tmp.name
+            seg_duration = end - start
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", str(start),
-                "-to", str(end),
                 "-i", args.video,
+                "-t", str(seg_duration),
                 "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
                 tmp_path,
             ]
             logger.debug("run_single_video_gemma4: trimming chunk %d: %s", chunk_idx + 1, " ".join(cmd))
@@ -468,16 +645,38 @@ def run_single_video_gemma4(args, model, processor) -> int:
             clip_path = tmp_path
 
         try:
-            chunk_note = ""
-            if len(chunks) > 1:
-                chunk_note = (
-                    f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
-                    f"{start:.1f}s\u2013{end:.1f}s]\n"
-                )
+            ts_start = _seconds_to_hhmmss(start)
+            ts_end = _seconds_to_hhmmss(end)
+
+            # When consolidation is enabled and video has multiple chunks,
+            # use the structured segment prompt (JSON output) so that
+            # downstream aggregation/final-summary stages work reliably.
+            # The SEGMENT_PROMPT already embeds timestamps and context, so
+            # no additional chunk_note prefix is needed.
+            if use_consolidation and len(chunks) > 1:
+                custom_seg = getattr(args, "segment_prompt", None)
+                if custom_seg:
+                    segment_prompt_text = custom_seg
+                else:
+                    segment_prompt_text = SEGMENT_PROMPT.format(
+                        chunk_duration=int(end - start),
+                        timestamp_start=ts_start,
+                        timestamp_end=ts_end,
+                    )
+                seg_max_tokens = DEFAULT_SEGMENT_MAX_TOKENS
+            else:
+                chunk_note = ""
+                if len(chunks) > 1:
+                    chunk_note = (
+                        f"[Video segment {chunk_idx + 1}/{len(chunks)}: "
+                        f"{ts_start}\u2013{ts_end}]\n"
+                    )
+                segment_prompt_text = chunk_note + args.prompt
+                seg_max_tokens = args.max_new_tokens
 
             content: List[Dict[str, Any]] = [
                 {"type": "video", "video": clip_path},
-                {"type": "text", "text": chunk_note + args.prompt},
+                {"type": "text", "text": segment_prompt_text},
             ]
 
             messages: List[Dict[str, Any]] = []
@@ -492,7 +691,19 @@ def run_single_video_gemma4(args, model, processor) -> int:
                 logger.info("[gemma4] dry run — skipping generation for this chunk")
                 all_descriptions.append(f"[chunk {chunk_idx + 1}: dry run]")
                 continue
-
+            
+            if chunk_idx == 0:
+                logger.info(
+                    "before processor for chunk %s prompt length: %s",
+                    chunk_idx + 1,
+                    len(segment_prompt_text),
+                )
+            else:
+                logger.debug(
+                    "before processor for chunk %s prompt: %s",
+                    chunk_idx + 1,
+                    segment_prompt_text,
+                )
             chunk_num_frames = max(1, int(round((end - start) * gemma4_fps)))
             inputs = processor.apply_chat_template(
                 messages,
@@ -508,11 +719,12 @@ def run_single_video_gemma4(args, model, processor) -> int:
             if tmp_path is not None:
                 _P(tmp_path).unlink(missing_ok=True)
 
+        logger.debug(f"after processor for chunk {chunk_idx + 1} inputs: {inputs} with video num_frames={chunk_num_frames}")
         now_gen = datetime.now()
         current_time = now_gen.strftime("%H:%M:%S")
-        logger.debug("✅ Before generate (chunk %d): %s", chunk_idx + 1, current_time)
+        logger.info("✅ Before generate (chunk %d): %s", chunk_idx + 1, current_time)
 
-        output_ids = model.generate(**inputs, max_new_tokens=args.max_new_tokens)
+        output_ids = model.generate(**inputs, max_new_tokens=seg_max_tokens)
 
         input_len = inputs["input_ids"].shape[-1]
         response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
@@ -523,9 +735,25 @@ def run_single_video_gemma4(args, model, processor) -> int:
             text = text.split("</think>", 1)[-1].lstrip()
 
         all_descriptions.append(text)
-        logger.debug("[gemma4] chunk %d done", chunk_idx + 1)
+        now_gen = datetime.now()
+        gen_time = now_gen.strftime("%H:%M:%S")
+        logger.info("[gemma4] chunk %d done: %s", chunk_idx + 1, gen_time)
+        logger.debug("[gemma4] chunk %d description:\n%s", chunk_idx + 1, text)
+    # ── Multi-stage consolidation ────────────────────────────────────────────
+    consolidated = None
+    if use_consolidation and len(all_descriptions) > 1:
+        consolidated = consolidate_segments(all_descriptions, model, processor, args)
 
-    result = "\n\n".join(all_descriptions)
+    if consolidated is not None:
+        result = (
+            "=== Consolidated Summary ===\n\n"
+            + consolidated
+            + "\n\n"
+            + "=== Per-Segment Descriptions ===\n\n"
+            + "\n\n".join(all_descriptions)
+        )
+    else:
+        result = "\n\n".join(all_descriptions)
     logger.debug(result)
 
     nowEnd = datetime.now()
