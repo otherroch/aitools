@@ -8,7 +8,7 @@
 |------|---------|-------------|
 | Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (`convert → crop → caption → augment`) |
 | Video Crop | `vicrop` | Extract face-cropped PNG frames from video files |
-| Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL /Qwen3-omni (`--vl`) or Gemma4 (`--gemma4`) |
+| Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL / Qwen3-omni / Qwen3.5   (`--vl`) or Gemma4 (`--gemma4`) |
 | Character Replace | `chararep` | Replace character faces in a video using deep face-swapping models (inswapper, SimSwap, uniface, hyperswap, blendswap). Other tools like `vicrop` and `portrait-prep` can be used to create the portrait galleries required by `chararep` |
 
 ---
@@ -34,16 +34,16 @@ pip install -e .
 ```
 
 For individual feature installs, GPU support, `chararep` dependencies (including basicsr),
-or system prerequisites, see [installation](doc/INSTALLATION.md).
+**docker images**, install extras, system prerequisites, or project structure 
+see [installation](doc/INSTALLATION.md).
 
 ## Documentation
 
 For a complete reference of each tool's command line options, usage examples, and Python API:
 
-- [Installation](doc/INSTALLATION.md) — all install extras, GPU support, basicsr workaround, system prerequisites, docker images, project structure.
-- [portrait-prep](doc/PORTRAIT_PREP.md) — portrait dataset preparation pipeline (convert, crop, caption, augment, cpcap)
+- [portrait-prep](doc/PORTRAIT_PREP.md) — portrait dataset preparation pipeline: **convert, crop, caption, augment, cpcap**
 - [vicrop](doc/VICROP.md) — video face-crop extraction with identity clustering and reference photo selection
-- [videsc](doc/VIDESC.md) — video description generator (WD14 tags and Qwen3-VL natural language)
+- [videsc](doc/VIDESC.md) — video description generator (WD14 tags, Qwen3-VL, Qwen3-omni, Qwwn3.5, Gemma4) natural language)
 - [chararep](doc/CHARAREP.md) — video character face-replacement pipeline (architecture, CLI, config, input requirements, VRAM guidelines)
 - [Python API and Testing](doc/API_AND_TESTING.md) — Python API examples for each tool, test commands, and coverage
 
