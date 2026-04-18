@@ -98,3 +98,92 @@ extra installs InsightFace, PyTorch, GFPGAN, and ONNX Runtime GPU. The `basicsr`
 dependency (needed by GFPGAN) may require a manual patch on Python 3.13+; run
 `python scripts/install_basicsr.py` **before** `pip install -e ".[chararep]"` to
 download, patch, and install it automatically.
+
+
+# Project structure
+
+```
+aitools/
+├── portrait_prep/
+│   ├── __init__.py
+│   ├── convert.py        # Step 1 – format conversion
+│   ├── crop.py           # Step 2 – face crop + classification
+│   ├── caption.py        # Step 3 – WD14 captioning
+│   ├── augment.py        # Step 4 – data augmentation
+│   ├── cpcap.py          # Step 5 – caption propagation
+│   └── cli.py            # portrait-prep entry point
+├── vicrop/
+│   ├── __init__.py
+│   ├── crop.py           # Video face-crop logic
+│   └── cli.py            # vicrop entry point
+├── videsc/
+│   ├── __init__.py
+│   ├── describe.py       # WD14-based video description logic
+│   ├── wd_cli.py         # Legacy WD14 CLI module (superseded by main.py)
+│   ├── main.py           # Unified videsc entry point (WD14 + VL modes)
+│   ├── config.py         # Model directory configuration
+│   ├── cli/
+│   │   └── args.py       # Unified CLI argument parsing
+│   ├── audio/
+│   │   └── transcription.py  # Whisper-based audio transcription
+│   ├── model/
+│   │   └── loader.py     # Qwen3-VL / Qwen3-Omni / Gemma4 model loading
+│   ├── pipeline/
+│   │   └── runner.py     # Batch & single-video runner for VL mode
+│   │   └── prompt.py     # Summary prompt generation for Gemma4 mode
+│   ├── video/
+│   │   ├── info.py       # Video metadata extraction
+│   │   ├── messages.py   # LLM message construction
+│   │   └── sampling.py   # Frame sampling logic
+│   └── utils/
+│       └── helpers.py    # Shared utility functions
+├── chararep/
+│   ├── __init__.py
+│   ├── main.py           # chararep CLI entry point
+│   ├── pipeline.py       # End-to-end face-replacement pipeline
+│   ├── config.py         # PipelineConfig and CharacterMapping dataclasses
+│   ├── face_detector.py  # InsightFace detection + IoU-based tracking
+│   ├── face_recognizer.py# ArcFace-based identity matching
+│   ├── face_swapper.py   # ONNX model swap (inswapper / SimSwap / uniface / hyperswap / blendswap)
+│   ├── face_enhancer.py  # GFPGAN and CodeFormer ONNX enhancement
+│   ├── face_blender.py   # Poisson seamless-clone and alpha blending
+│   ├── video_io.py       # OpenCV video read / FFmpeg video write
+│   └── gpu_utils.py      # CUDA / ONNX Runtime provider helpers
+├── face_ops/
+│   ├── __init__.py       # get_backend(), FaceBackend protocol
+│   ├── backend.py        # DlibBackend and InsightFaceBackend
+│   └── clustering.py     # Backend-agnostic cluster_faces() and load_reference_encodings()
+├── scripts/
+│   └── install_basicsr.py # Download, patch, and install basicsr for Python 3.13+
+├── doc/
+│   ├── INSTALLATION.md
+│   ├── PORTRAIT_PREP.md
+│   ├── VICROP.md
+│   ├── VIDESC.md
+│   ├── CHARAREP.md
+│   └── API_AND_TESTING.md
+├── tests/
+│   ├── conftest.py       # Stubs for insightface, onnxruntime, torch, gfpgan
+│   ├── test_augment.py
+│   ├── test_caption.py
+│   ├── test_chararep_config.py
+│   ├── test_chararep_face_detector.py
+│   ├── test_chararep_face_recognizer.py
+│   ├── test_chararep_face_swapper.py
+│   ├── test_chararep_face_enhancer.py
+│   ├── test_chararep_face_blender.py
+│   ├── test_chararep_gpu_utils.py
+│   ├── test_convert.py
+│   ├── test_coverage_targeted.py
+│   ├── test_cpcap.py
+│   ├── test_crop.py
+│   ├── test_face_ops.py
+│   ├── test_vicrop.py
+│   ├── test_videsc.py
+│   ├── test_videsc_main.py
+├── main.py               # Thin shim for portrait-prep
+├── pyproject.toml
+├── Dockerfile
+├── LICENSE
+└── README.md
+```
