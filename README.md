@@ -2,7 +2,7 @@
 
 **AI dataset preparation toolkit for diffusion model LoRA training.**
 
-`aitools` provides four command-line tools and Python APIs for preparing image and video datasets. Also included is a tool called `chararep` which uses the output of the other tools to swap faces in videos. 
+`aitools` provides 3 command-line tools and Python APIs for preparing image and video datasets. Also included is a tool called `chararep` which uses the output of the other tools to swap faces in videos. 
 
 | Tool | Command | Description |
 |------|---------|-------------|
