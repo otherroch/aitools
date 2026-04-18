@@ -39,6 +39,12 @@ pip install -e .
 
 ## Notes
 
+### Docker images 
+
+- Built with [Dockerfile](../Dockerfile)
+- `docker pull otherroch/aitools`
+- `docker run -it --rm --gpus all otherroch/aitools bash`  
+
 ### HEIC support
 
 `pillow-heif` ships with pre-built wheels on PyPI for

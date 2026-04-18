@@ -40,7 +40,7 @@ or system prerequisites, see [installation](doc/INSTALLATION.md).
 
 For a complete reference of each tool's command line options, usage examples, and Python API:
 
-- [Installation](doc/INSTALLATION.md) — all install extras, GPU support, basicsr workaround, and system prerequisites
+- [Installation](doc/INSTALLATION.md) — all install extras, GPU support, basicsr workaround, system prerequisites, docker images, project structure.
 - [portrait-prep](doc/PORTRAIT_PREP.md) — portrait dataset preparation pipeline (convert, crop, caption, augment, cpcap)
 - [vicrop](doc/VICROP.md) — video face-crop extraction with identity clustering and reference photo selection
 - [videsc](doc/VIDESC.md) — video description generator (WD14 tags and Qwen3-VL natural language)
