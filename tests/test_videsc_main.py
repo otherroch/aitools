@@ -236,6 +236,90 @@ class TestVidescUnifiedCommand:
             "videsc/model/loader.py must define 'load_qwen35_model_and_processor'"
         )
 
+    # ------------------------------------------------------------------
+    # Qwen3.6 tests
+    # ------------------------------------------------------------------
+
+    def test_parse_args_qwen36_flag_default_false(self):
+        """--qwen36 flag defaults to False when not specified."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--video", "/tmp/test.mp4"])
+        assert args.qwen36 is False
+
+    def test_parse_args_qwen36_flag_true(self):
+        """--qwen36 flag is True when specified and defaults model to Qwen3.6-27B."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--qwen36", "--video", "/tmp/test.mp4"])
+        assert args.qwen36 is True
+        assert args.model == "Qwen/Qwen3.6-27B"
+        assert args.model_hf is True
+
+    def test_parse_args_qwen36_with_model(self):
+        """--qwen36 flag works with a custom model name."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--qwen36",
+            "--model", "Qwen/Qwen3.6-35B-A3B",
+            "--model_hf",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.qwen36 is True
+        assert args.model == "Qwen/Qwen3.6-35B-A3B"
+        assert args.model_hf is True
+
+    def test_parse_args_qwen36_explicit_model_not_overridden(self):
+        """--qwen36 with explicit --model keeps user's model choice."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vl", "--qwen36",
+            "--model", "Qwen/Qwen3.6-27B",
+            "--model_full",
+            "--video", "/tmp/test.mp4",
+        ])
+        assert args.qwen36 is True
+        assert args.model == "Qwen/Qwen3.6-27B"
+        assert args.model_full is True
+        assert args.model_hf is False
+
+    def test_args_help_includes_qwen36(self):
+        """The --help output must document the --qwen36 argument."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.argv=['videsc','--help']; "
+                "from videsc.cli.args import parse_args; parse_args()",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0
+        assert "--qwen36" in result.stdout
+
+    def test_loader_has_load_qwen36_function(self):
+        """videsc/model/loader.py must define 'load_qwen36_model_and_processor'."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        tree = ast.parse(loader_py.read_text())
+        func_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "load_qwen36_model_and_processor" in func_names, (
+            "videsc/model/loader.py must define 'load_qwen36_model_and_processor'"
+        )
+
+    def test_run_vl_source_handles_qwen36(self):
+        """_run_vl must dispatch to the Qwen3.6 pipeline when --qwen36 is set."""
+        main_py = VIDESC_ROOT / "main.py"
+        source = main_py.read_text()
+        assert "qwen36" in source, "_run_vl must handle the --qwen36 flag"
+
     def test_vl_youtube_output_dir_fallback(self):
         """In VL + YouTube mode, --output-dir should be used as fallback for --outdir."""
         from videsc.cli.args import parse_args

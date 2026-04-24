@@ -16,6 +16,7 @@ from videsc.model.loader import (
     load_model_and_processor,
     load_omni_model_and_processor,
     load_qwen35_model_and_processor,
+    load_qwen36_model_and_processor,
     load_gemma4_model_and_processor,
     _maybe_set_reader,
 )
@@ -845,6 +846,8 @@ def run_batch_threads(args) -> int:
         model, processor = load_omni_model_and_processor(args)
     elif args.qwen35:
         model, processor = load_qwen35_model_and_processor(args)
+    elif getattr(args, "qwen36", False):
+        model, processor = load_qwen36_model_and_processor(args)
     elif getattr(args, "gemma4", False):
         model, processor = load_gemma4_model_and_processor(args)
     else:

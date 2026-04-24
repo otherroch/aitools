@@ -20,7 +20,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--vl",
         action="store_true",
-        help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, or Qwen3.5) instead of the WD14 tagger.",
+        help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, Qwen3.5, or Qwen3.6) instead of the WD14 tagger.",
     )
 
     # =========================================================================
@@ -156,6 +156,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     model_group = vl.add_mutually_exclusive_group()
     model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
     model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
+    model_group.add_argument("--qwen36", action="store_true", help="model is Qwen3.6 (e.g. Qwen/Qwen3.6-27B)")
     model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4eb-it)")
     vl.add_argument(
         "--gemma4-chunk-duration",
@@ -348,6 +349,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # default to the Qwen3.5 HuggingFace model so the loader resolves correctly.
     if args.qwen35 and args.model == _VL_DEFAULT_MODEL:
         args.model = "Qwen/Qwen3.5-4B"
+        args.model_hf = True
+
+    # When --qwen36 is set and the user didn't explicitly change --model,
+    # default to the Qwen3.6 HuggingFace model so the loader resolves correctly.
+    if args.qwen36 and args.model == _VL_DEFAULT_MODEL:
+        args.model = "Qwen/Qwen3.6-27B"
         args.model_hf = True
 
     # When --gemma4 is set and the user didn't explicitly change --model,

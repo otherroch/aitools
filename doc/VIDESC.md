@@ -6,7 +6,7 @@ Generate AI-powered text descriptions for video files.
 
 | | WD14 mode (default) | VL mode (`--vl`) |
 |---|---|---|
-| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 (LLM) |
+| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Qwen3.5 / Qwen3.6 / Gemma 4 (LLM) |
 | **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
 | **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
 | **Audio support** | No | Yes (Whisper ASR integration, Qwen models only) |
@@ -239,6 +239,7 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--model_full` | — | Treat `--model` as a full filesystem path |
 | `--omni` | — | Load as Qwen3-Omni (multimodal audio + video model) |
 | `--qwen35` | — | Load as Qwen3.5; defaults `--model` to `Qwen/Qwen3.5-4B` |
+| `--qwen36` | — | Load as Qwen3.6; defaults `--model` to `Qwen/Qwen3.6-27B` |
 | `--gemma4` | — | Load as Gemma 4; defaults `--model` to `google/gemma-4-4b-it` |
 | `--gemma4-chunk-duration` | `30.0` | Max seconds per video chunk when using `--gemma4` |
 | `--gemma4-fps` | `1.0` | Frames per second to sample from each Gemma 4 chunk |
