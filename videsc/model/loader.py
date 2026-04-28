@@ -9,12 +9,14 @@ from torchsummary import summary  # unused but kept if you rely on it elsewhere
 from transformers import (
     Qwen3VLForConditionalGeneration,
     Qwen3VLMoeForConditionalGeneration,
+    AutoConfig,
     AutoProcessor,
     AutoModelForMultimodalLM,
     BitsAndBytesConfig,
     Qwen3OmniMoeForConditionalGeneration,
     Qwen3OmniMoeProcessor,
     Qwen3_5ForConditionalGeneration,
+    Qwen3_5MoeForConditionalGeneration,
 )
 
 from videsc.config import model_dir
@@ -32,6 +34,8 @@ def _quant_config(quant: str) -> Optional[BitsAndBytesConfig]:
         return BitsAndBytesConfig(load_in_8bit=True)
     if quant == "4bit":
         return BitsAndBytesConfig(load_in_4bit=True)
+    # "none", "awq", "nvfp4" — pre-quantized models carry their own quantization
+    # config inside config.json; no BitsAndBytes config is needed or appropriate.
     return None
 
 
@@ -320,8 +324,35 @@ def load_qwen36_model_and_processor(args):
     quant_cfg = _quant_config(args.quant)
     _maybe_set_reader(args.reader)
 
+    # Auto-detect architecture: the quantized Qwen3.6 MoE variants
+    # (NVFP4, AWQ) use Qwen3_5MoeForConditionalGeneration, while the
+    # dense Qwen3.6 models use Qwen3_5ForConditionalGeneration.
+    # Reading only the lightweight config.json avoids loading model weights.
+    try:
+        _cfg = AutoConfig.from_pretrained(model_path_local)
+        _archs = getattr(_cfg, "architectures", None) or []
+    except Exception as exc:
+        logger.debug("load_qwen36_model_and_processor: could not read config (%s); defaulting to dense", exc)
+        _archs = []
+
+    if "Qwen3_5MoeForConditionalGeneration" in _archs:
+        model_cls = Qwen3_5MoeForConditionalGeneration
+        logger.debug("load_qwen36_model_and_processor: detected MoE architecture")
+        print("architecture: Qwen3_5MoeForConditionalGeneration (MoE)")
+    else:
+        model_cls = Qwen3_5ForConditionalGeneration
+        logger.debug("load_qwen36_model_and_processor: using dense architecture")
+        print("architecture: Qwen3_5ForConditionalGeneration (dense)")
+
+    if args.quant == "nvfp4":
+        logger.debug("load_qwen36_model_and_processor: NVFP4 model — requires nvidia-modelopt[torch] and compressed-tensors")
+        print("ℹ️  NVFP4 model: ensure 'pip install nvidia-modelopt[torch] compressed-tensors' is installed")
+    elif args.quant == "awq":
+        logger.debug("load_qwen36_model_and_processor: AWQ model — requires compressed-tensors")
+        print("ℹ️  AWQ model: ensure 'pip install compressed-tensors' is installed")
+
     # Load model — Qwen3.6 uses the same architecture as Qwen3.5
-    model = Qwen3_5ForConditionalGeneration.from_pretrained(
+    model = model_cls.from_pretrained(
         model_path_local,
         device_map="auto",
         torch_dtype="auto",

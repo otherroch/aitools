@@ -251,9 +251,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     vl.add_argument(
         "--quant",
-        choices=["none", "8bit", "4bit"],
+        choices=["none", "8bit", "4bit", "awq", "nvfp4"],
         default="none",
-        help="Load quantized weights for lower VRAM and better speed.",
+        help=(
+            "Quantization mode for the model.\n"
+            "'8bit' / '4bit': on-the-fly BitsAndBytes quantization (reduces VRAM).\n"
+            "'awq': pre-quantized AWQ model (quantization config is embedded in the model;\n"
+            "       requires 'pip install compressed-tensors').\n"
+            "'nvfp4': pre-quantized NVFP4 model (requires NVIDIA Hopper/Blackwell GPU;\n"
+            "         requires 'pip install nvidia-modelopt[torch] compressed-tensors').\n"
+            "'none' (default): no additional quantization; also use this when loading\n"
+            "       any other pre-quantized model whose config is already embedded."
+        ),
     )
     vl.add_argument("--max-new-tokens", type=int, default=8192)
     vl.add_argument("--optimize", action="store_true", help="Compile model with torch.compile for faster inference.")

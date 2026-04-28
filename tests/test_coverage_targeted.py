@@ -322,12 +322,14 @@ class TestLoader:
         transformers_stub = types.SimpleNamespace(
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,
+            AutoConfig=types.SimpleNamespace(from_pretrained=lambda *_a, **_k: types.SimpleNamespace(architectures=[])),
             AutoProcessor=FakeProcessorClass,
             AutoModelForMultimodalLM=FakeModelClass,
             BitsAndBytesConfig=BitsAndBytesConfig,
             Qwen3OmniMoeForConditionalGeneration=FakeModelClass,
             Qwen3OmniMoeProcessor=FakeProcessorClass,
             Qwen3_5ForConditionalGeneration=FakeModelClass,
+            Qwen3_5MoeForConditionalGeneration=FakeModelClass,
         )
         loader = _import_fresh(
             monkeypatch,
@@ -340,6 +342,8 @@ class TestLoader:
         )
 
         assert loader._quant_config("none") is None
+        assert loader._quant_config("awq") is None
+        assert loader._quant_config("nvfp4") is None
         assert loader._quant_config("8bit").kwargs == {"load_in_8bit": True}
         assert loader._quant_config("4bit").kwargs == {"load_in_4bit": True}
 
@@ -366,12 +370,14 @@ class TestLoader:
         transformers_stub = types.SimpleNamespace(
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,
+            AutoConfig=types.SimpleNamespace(from_pretrained=lambda *_a, **_k: types.SimpleNamespace(architectures=[])),
             AutoProcessor=FakeProcessorClass,
             AutoModelForMultimodalLM=FakeModelClass,
             BitsAndBytesConfig=lambda **_k: object(),
             Qwen3OmniMoeForConditionalGeneration=FakeModelClass,
             Qwen3OmniMoeProcessor=FakeProcessorClass,
             Qwen3_5ForConditionalGeneration=FakeModelClass,
+            Qwen3_5MoeForConditionalGeneration=FakeModelClass,
         )
         loader = _import_fresh(
             monkeypatch,
@@ -415,12 +421,14 @@ class TestLoader:
         transformers_stub = types.SimpleNamespace(
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,
+            AutoConfig=types.SimpleNamespace(from_pretrained=lambda *_a, **_k: types.SimpleNamespace(architectures=[])),
             AutoProcessor=FakeProcessorClass,
             AutoModelForMultimodalLM=FakeModelClass,
             BitsAndBytesConfig=lambda **_k: object(),
             Qwen3OmniMoeForConditionalGeneration=FakeModelClass,
             Qwen3OmniMoeProcessor=FakeProcessorClass,
             Qwen3_5ForConditionalGeneration=FakeModelClass,
+            Qwen3_5MoeForConditionalGeneration=FakeModelClass,
         )
         loader = _import_fresh(
             monkeypatch,
@@ -451,6 +459,47 @@ class TestLoader:
         loader._SHARED_PROCESSOR = None
         m2, p2 = loader.load_qwen35_model_and_processor(args)
         assert m2 is not None and p2 is not None
+        # Test qwen36 loader with dense architecture (no MoE in config)
+        loader._SHARED_MODEL = None
+        loader._SHARED_PROCESSOR = None
+        args36 = types.SimpleNamespace(
+            model_hf=True,
+            model_full=False,
+            model="Qwen/Qwen3.6-27B",
+            half_cpu=False,
+            quant="none",
+            reader="auto",
+            attn="sdpa",
+            optimize=False,
+            min_pixels=128,
+            max_pixels=256,
+        )
+        m3, p3 = loader.load_qwen36_model_and_processor(args36)
+        assert m3 is not None and p3 is not None
+        # Test qwen36 loader with MoE architecture detected via AutoConfig
+        loader._SHARED_MODEL = None
+        loader._SHARED_PROCESSOR = None
+        # Patch AutoConfig to return MoE architecture
+        transformers_stub.AutoConfig = types.SimpleNamespace(
+            from_pretrained=lambda *_a, **_k: types.SimpleNamespace(
+                architectures=["Qwen3_5MoeForConditionalGeneration"]
+            )
+        )
+        loader.AutoConfig = transformers_stub.AutoConfig
+        args36_moe = types.SimpleNamespace(
+            model_hf=True,
+            model_full=False,
+            model="cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
+            half_cpu=False,
+            quant="awq",
+            reader="auto",
+            attn="sdpa",
+            optimize=False,
+            min_pixels=128,
+            max_pixels=256,
+        )
+        m4, p4 = loader.load_qwen36_model_and_processor(args36_moe)
+        assert m4 is not None and p4 is not None
 
 
 class TestVidescMainRuntime:

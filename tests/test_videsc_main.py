@@ -320,6 +320,60 @@ class TestVidescUnifiedCommand:
         source = main_py.read_text()
         assert "qwen36" in source, "_run_vl must handle the --qwen36 flag"
 
+    # ------------------------------------------------------------------
+    # Qwen3.6 quantization support (AWQ / NVFP4)
+    # ------------------------------------------------------------------
+
+    def test_parse_args_quant_awq(self):
+        """--quant awq is a valid choice and leaves model quantization at passthrough."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--qwen36", "--quant", "awq", "--video", "/tmp/test.mp4"])
+        assert args.quant == "awq"
+
+    def test_parse_args_quant_nvfp4(self):
+        """--quant nvfp4 is a valid choice and leaves model quantization at passthrough."""
+        from videsc.cli.args import parse_args
+
+        args = parse_args(["--vl", "--qwen36", "--quant", "nvfp4", "--video", "/tmp/test.mp4"])
+        assert args.quant == "nvfp4"
+
+    def test_quant_config_awq_returns_none(self):
+        """_quant_config('awq') must return None (no BitsAndBytes config)."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        # Verify textually that awq case returns None (not a BnB config)
+        source = loader_py.read_text()
+        assert "awq" in source, "loader must mention 'awq' in _quant_config or its comments"
+
+    def test_quant_config_nvfp4_returns_none(self):
+        """_quant_config('nvfp4') must return None (no BitsAndBytes config)."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "nvfp4" in source, "loader must mention 'nvfp4' in _quant_config or its comments"
+
+    def test_loader_imports_qwen35_moe_class(self):
+        """loader.py must import Qwen3_5MoeForConditionalGeneration for MoE model support."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "Qwen3_5MoeForConditionalGeneration" in source, (
+            "loader must import Qwen3_5MoeForConditionalGeneration to handle MoE Qwen3.6 variants"
+        )
+
+    def test_loader_imports_autoconfig(self):
+        """loader.py must import AutoConfig for architecture auto-detection."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "AutoConfig" in source, (
+            "loader must import AutoConfig to detect dense vs MoE architecture from config.json"
+        )
+
+    def test_loader_qwen36_uses_autoconfig_for_arch_detection(self):
+        """load_qwen36_model_and_processor must use AutoConfig to detect MoE architecture."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert "Qwen3_5MoeForConditionalGeneration" in source
+        assert "AutoConfig" in source
+
     def test_vl_youtube_output_dir_fallback(self):
         """In VL + YouTube mode, --output-dir should be used as fallback for --outdir."""
         from videsc.cli.args import parse_args

@@ -25,7 +25,7 @@ pip install -e .
 pip install -e ".[vl]"
 ```
 
-A CUDA-capable GPU is strongly recommended for VL mode. For lower VRAM use `--quant 4bit` or `--quant 8bit`.
+A CUDA-capable GPU is strongly recommended for VL mode. For lower VRAM use `--quant 4bit` or `--quant 8bit`. Pre-quantized models (AWQ, NVFP4) are supported with `--quant awq` or `--quant nvfp4`; see [Qwen3.6 quantized models](#qwen36-quantized-models-awq-and-nvfp4) for details.
 
 ## WD14 mode usage
 
@@ -82,6 +82,45 @@ videsc --vl --video ./clip.mp4 --model /path/to/Qwen3-VL-8B-Instruct --model_ful
 # Use Qwen3-Omni for multimodal (audio + video) understanding
 videsc --vl --video ./clip.mp4 --omni --model Qwen/Qwen3-Omni-8B --model_hf
 ```
+
+## Qwen3.6 quantized models (AWQ and NVFP4) {#qwen36-quantized-models-awq-and-nvfp4}
+
+The large Qwen3.6 MoE variants (e.g. `Qwen/Qwen3.6-35B-A3B`) are available in
+pre-quantized form from the community, making them practical on consumer GPUs:
+
+| Variant | Model ID | VRAM | Extra package |
+|---------|----------|------|---------------|
+| NVFP4 | `RedHatAI/Qwen3.6-35B-A3B-NVFP4` | ~24 GB | `nvidia-modelopt[torch] compressed-tensors` |
+| AWQ 4-bit | `cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit` | ~20 GB | `compressed-tensors` |
+
+Both models use the **MoE architecture** (`Qwen3_5MoeForConditionalGeneration`).
+`videsc` auto-detects whether the model is dense or MoE from its `config.json`,
+so no extra flag is needed beyond `--qwen36`.
+
+```bash
+# Install the required support library (NVFP4 also needs nvidia-modelopt)
+pip install compressed-tensors
+# For NVFP4 only:
+pip install nvidia-modelopt[torch]
+
+# AWQ 4-bit (INT4 group quantisation, ~20 GB VRAM)
+videsc --vl --qwen36 \
+       --model cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit --model_hf \
+       --quant awq \
+       --video ./clip.mp4
+
+# NVFP4 (requires NVIDIA Hopper H100/H200 or Blackwell B200 GPU, ~24 GB VRAM)
+videsc --vl --qwen36 \
+       --model RedHatAI/Qwen3.6-35B-A3B-NVFP4 --model_hf \
+       --quant nvfp4 \
+       --video ./clip.mp4
+```
+
+> **Note:** The `--quant awq` and `--quant nvfp4` flags do **not** apply any
+> additional BitsAndBytes quantization — the weights are already quantized.
+> These flags serve as documentation hints and trigger an informational message
+> about required packages.  You can also use `--quant none` and it will work
+> identically; the model's embedded `quantization_config` is always honoured.
 
 ## Gemma 4 mode (`--vl --gemma4`)
 
@@ -248,7 +287,7 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | `--segment-prompt` | *(built-in)* | Custom prompt for per-segment structured analysis |
 | `--window-size` | `10` | Number of segments per window for intermediate aggregation |
 | `--attn` | `flash_attention_2` | Attention implementation: `flash_attention_2`, `sdpa`, or `eager` |
-| `--quant` | `none` | Weight quantisation: `none`, `8bit`, or `4bit` |
+| `--quant` | `none` | Weight quantisation: `none`, `8bit`, `4bit`, `awq`, or `nvfp4` |
 | `--max-new-tokens` | `8192` | Maximum tokens to generate |
 | `--optimize` | — | Compile the model with `torch.compile` for faster inference |
 
