@@ -1,0 +1,247 @@
+15:42:55 [INFO] torch._native.dsl_registry: Successfully registered DSL: cutedsl
+15:42:55 [INFO] torch._native.dsl_registry: Successfully registered DSL: triton
+W0429 15:42:58.041000 28812 torch/utils/_pytree.py:630] <enum 'KernelPreference'> is an Enum subclass and is now natively supported by torch.compile as an opaque value type. Calling register_constant() on Enum subclasses is deprecated and will be an error in a future release.
+W0429 15:42:58.055000 28812 torch/utils/_pytree.py:630] <enum 'ScaleCalculationMode'> is an Enum subclass and is now natively supported by torch.compile as an opaque value type. Calling register_constant() on Enum subclasses is deprecated and will be an error in a future release.
+15:42:59 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+15:42:59 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/config.json "HTTP/1.1 200 OK"
+15:42:59 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+15:42:59 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/config.json "HTTP/1.1 200 OK"
+15:42:59 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/model.safetensors "HTTP/1.1 302 Found"
+args:  Namespace(vl=True, input_dir=None, youtube_url=None, youtube_api_key=None, save_video=None, output_dir=None, every_n=30, max_frames=10, prefix='', threshold=0.35, model_repo='SmilingWolf/wd-v1-4-convnextv2-tagger-v2', include_ratings=False, no_skip_existing=False, video='ctv.mp4', videos=None, indir=None, filelist=None, ext=[], outdir='out', workers=2, sleep=0.25, dry_run=False, batch_mode='threads', prompt='First, list all distinct characters, actions, and any important visuals in several long, comprehensive paragraphs.', system='You are a helpful assistant that writes clear, concise video descriptions.', omni=False, qwen35=False, qwen36=True, gemma4=False, gemma4_chunk_duration=30.0, gemma4_fps=1.0, consolidate=False, consolidate_prompt=None, segment_prompt=None, window_size=10, model='RedHatAI/Qwen3.6-35B-A3B-NVFP4', processor=None, model_hf=True, model_full=False, attn='sdpa', quant='nvfp4', max_new_tokens=8192, optimize=False, reader='torchcodec', spf=4.0, fps=1.0, num_frames=256, stride=1, clip_start=0.0, clip_end=-1.0, min_pixels=128, max_pixels=1280, total_pixels=24000, audio=False, asr_model='openai/whisper-large-v3-turbo', max_audio_seconds=0.0, no_save_transcript=False, no_think_trim=False, half_cpu=False, dry=False, cont_prompt=False, no_meta=False, seed=4051888, rep_pen=1.05, log_level='INFO')
+model_path= RedHatAI/Qwen3.6-35B-A3B-NVFP4
+✅ start time (model load): 15:42:58
+architecture: Qwen3_5MoeForConditionalGeneration (MoE)
+NOTE: NVFP4 model — ensure 'pip install nvidia-modelopt[torch] compressed-tensors' is installed
+Compressing model:   0%|          | 0/1149 [00:00<?, ?it/s]Compressing model:  26%|██▋       | 302/1149 [00:00<00:01, 811.44it/s]Compressing model:  33%|███▎      | 384/1149 [00:00<00:01, 657.80it/s]Compressing model:  75%|███████▌  | 863/1149 [00:00<00:00, 1657.06it/s]Compressing model: 100%|██████████| 1149/1149 [00:00<00:00, 1586.75it/s]
+Loading weights:   0%|          | 0/1093 [00:00<?, ?it/s]Loading weights:  31%|███       | 337/1093 [00:00<00:00, 3314.87it/s]Loading weights:  81%|████████  | 887/1093 [00:00<00:00, 4580.52it/s]Loading weights: 100%|██████████| 1093/1093 [00:00<00:00, 5217.54it/s]
+[transformers] [1mQwen3_5MoeForConditionalGeneration LOAD REPORT[0m from: RedHatAI/Qwen3.6-35B-A3B-NVFP4
+Key                                                                                     | Status     | 
+----------------------------------------------------------------------------------------+------------+-
+model.language_model.layers.{0...39}.mlp.experts.{0...255}.gate_proj.input_global_scale | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.{0...255}.down_proj.input_global_scale | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.{0...255}.up_proj.input_global_scale   | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.down_proj_scale                        | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.gate_up_proj_scale                     | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.down_proj_global_scale                 | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.down_proj_packed                       | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.gate_up_proj_global_scale              | UNEXPECTED | 
+model.language_model.layers.{0...39}.mlp.experts.gate_up_proj_packed                    | UNEXPECTED | 
+model.visual.blocks.{0...26}.norm2.bias                                                 | MISSING    | 
+model.visual.blocks.{0...26}.attn.qkv.weight                                            | MISSING    | 
+model.visual.blocks.{0...26}.attn.qkv.bias                                              | MISSING    | 
+model.language_model.layers.{0...39}.mlp.experts.gate_up_proj                           | MISSING    | 
+model.visual.blocks.{0...26}.mlp.linear_fc1.weight                                      | MISSING    | 
+model.visual.blocks.{0...26}.mlp.linear_fc2.weight                                      | MISSING    | 
+model.language_model.layers.{0...39}.mlp.experts.down_proj                              | MISSING    | 
+model.visual.blocks.{0...26}.norm2.weight                                               | MISSING    | 
+model.visual.blocks.{0...26}.mlp.linear_fc1.bias                                        | MISSING    | 
+model.visual.blocks.{0...26}.attn.proj.bias                                             | MISSING    | 
+model.visual.blocks.{0...26}.mlp.linear_fc2.bias                                        | MISSING    | 
+model.visual.blocks.{0...26}.norm1.weight                                               | MISSING    | 
+model.visual.merger.linear_fc2.bias                                                     | MISSING    | 
+model.visual.blocks.{0...26}.attn.proj.weight                                           | MISSING    | 
+model.visual.blocks.{0...26}.norm1.bias                                                 | MISSING    | 
+model.visual.merger.norm.weight                                                         | MISSING    | 
+model.visual.merger.linear_fc2.weight                                                   | MISSING    | 
+model.visual.patch_embed.proj.weight                                                    | MISSING    | 
+model.visual.merger.linear_fc1.weight                                                   | MISSING    | 
+model.visual.merger.linear_fc1.bias                                                     | MISSING    | 
+model.visual.merger.norm.bias                                                           | MISSING    | 
+model.visual.patch_embed.proj.bias                                                      | MISSING    | 
+model.visual.pos_embed.weight                                                           | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+15:45:40 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/generation_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:40 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/generation_config.json "HTTP/1.1 200 OK"
+15:45:40 [WARNING] accelerate.big_modeling: Some parameters are on the meta device because they were offloaded to the cpu.
+15:45:40 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:40 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:40 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+15:45:40 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:40 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/chat_template.json "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/chat_template.jinja "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/chat_template.jinja "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/audio_tokenizer_config.json "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/chat_template.json "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/chat_template.jinja "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/chat_template.jinja "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/audio_tokenizer_config.json "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/preprocessor_config.json "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/preprocessor_config.json "HTTP/1.1 404 Not Found"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/config.json "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/tokenizer_config.json "HTTP/1.1 200 OK"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:41 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/tokenizer_config.json "HTTP/1.1 200 OK"
+15:45:42 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+15:45:42 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+15:45:43 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4 "HTTP/1.1 200 OK"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/video_preprocessor_config.json "HTTP/1.1 404 Not Found"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/preprocessor_config.json "HTTP/1.1 404 Not Found"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/processor_config.json "HTTP/1.1 307 Temporary Redirect"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/RedHatAI/Qwen3.6-35B-A3B-NVFP4/e850c696e6d75f965367e816c16bc7dacd955ffa/processor_config.json "HTTP/1.1 200 OK"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/video_preprocessor_config.json "HTTP/1.1 404 Not Found"
+15:45:43 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4/resolve/main/preprocessor_config.json "HTTP/1.1 404 Not Found"
+qwen-vl-utils using torchcodec to read video.
+15:45:43 [INFO] qwen_vl_utils.vision_process: set TORCHCODEC_NUM_THREADS: 8
+15:45:44 [INFO] qwen_vl_utils.vision_process: torchcodec:  video_path='ctv.mp4', total_frames=2698, video_fps=29.97002997002997, time=0.811s
+model loaded
+✅ start time: 15:45:43
+patch: 32
+width:  1920 height:  1080
+max_pixels:  2073600  frame_rate:  29.97002997002997
+num_frames:  2698  total time:  90.02326666666667
+called with nframes:  22  called with total_pixels:  24576000
+spf: 4.0  new_nframes:  22  alt nframes:  22
+nframes:  22  total_pixels:  24576000
+after build messages: [{'role': 'system', 'content': 'You are a helpful assistant that writes clear, concise video descriptions.'}, {'role': 'user', 'content': [{'type': 'video', 'video': 'ctv.mp4', 'total_pixels': 24576000, 'nframes': 22}, {'type': 'text', 'text': 'First, list all distinct characters, actions, and any important visuals in several long, comprehensive paragraphs.'}]}]
+after apply chat template, modeltext:  <|im_start|>system
+You are a helpful assistant that writes clear, concise video descriptions.<|im_end|>
+<|im_start|>user
+<|vision_start|><|video_pad|><|vision_end|>First, list all distinct characters, actions, and any important visuals in several long, comprehensive paragraphs.<|im_end|>
+<|im_start|>assistant
+<think>
+
+✅ Before video decode: 15:45:43
+after process vision info
+video_kwargs: {'do_sample_frames': False}
+video_metadatas: [{'fps': 29.97002997002997, 'frames_indices': [0, 128, 257, 385, 514, 642, 771, 899, 1027, 1156, 1284, 1413, 1541, 1670, 1798, 1926, 2055, 2183, 2312, 2440, 2569, 2697], 'total_num_frames': 2698, 'video_backend': 'torchcodec'}]
+before processor
+before generate
+✅ Before generate: 15:45:46
+Decompressing model:   0%|          | 0/1149 [00:00<?, ?it/s]Decompressing model:  54%|█████▍    | 626/1149 [00:00<00:00, 6233.73it/s]Decompressing model: 100%|██████████| 1149/1149 [00:00<00:00, 7290.62it/s]
+Traceback (most recent call last):
+  File "/home/roch/aitools/venv12/bin/videsc", line 6, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/roch/aitools/videsc/main.py", line 40, in main
+    return _run_vl(args)
+           ^^^^^^^^^^^^^
+  File "/home/roch/aitools/videsc/main.py", line 112, in _run_vl
+    return run_single_video(args, model, processor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/videsc/pipeline/runner.py", line 288, in run_single_video
+    gen_ids = model.generate(
+              ^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/generation/utils.py", line 2539, in generate
+    result = decoding_method(
+             ^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/generation/utils.py", line 2732, in _sample
+    outputs = self._prefill(
+              ^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/generation/utils.py", line 3764, in _prefill
+    return self(**model_inputs, return_dict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+    return inner()
+           ^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/utils/generic.py", line 900, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 2132, in forward
+    outputs = self.model(
+              ^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/utils/generic.py", line 900, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 1810, in forward
+    outputs = self.language_model(
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/utils/generic.py", line 976, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/utils/output_capturing.py", line 248, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 1411, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/modeling_layers.py", line 93, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 861, in forward
+    hidden_states, _ = self.self_attn(
+                       ^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 673, in forward
+    self.q_proj(hidden_states).view(*input_shape, -1, self.head_dim * 2), 2, dim=-1
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/hooks.py", line 187, in new_forward
+    args, kwargs = module._hf_hook.pre_forward(module, *args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/hooks.py", line 50, in wrapper
+    return wrapper._compiled_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1277, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/hooks.py", line 359, in pre_forward
+    value = self.weights_map[name]
+            ~~~~~~~~~~~~~~~~^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/utils/offload.py", line 118, in __getitem__
+    return self.dataset[f"{self.prefix}{key}"]
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/roch/aitools/venv12/lib/python3.12/site-packages/accelerate/utils/offload.py", line 165, in __getitem__
+    weight_info = self.index[key]
+                  ~~~~~~~~~~^^^^^
+KeyError: 'model.language_model.layers.15.self_attn.q_proj.weight'
