@@ -346,10 +346,10 @@ def load_qwen36_model_and_processor(args):
 
     if args.quant == "nvfp4":
         logger.debug("load_qwen36_model_and_processor: NVFP4 model — requires nvidia-modelopt[torch] and compressed-tensors")
-        print("ℹ️  NVFP4 model: ensure 'pip install nvidia-modelopt[torch] compressed-tensors' is installed")
+        print("NOTE: NVFP4 model — ensure 'pip install nvidia-modelopt[torch] compressed-tensors' is installed")
     elif args.quant == "awq":
         logger.debug("load_qwen36_model_and_processor: AWQ model — requires compressed-tensors")
-        print("ℹ️  AWQ model: ensure 'pip install compressed-tensors' is installed")
+        print("NOTE: AWQ model — ensure 'pip install compressed-tensors' is installed")
 
     # Load model — Qwen3.6 uses the same architecture as Qwen3.5
     model = model_cls.from_pretrained(
