@@ -265,6 +265,15 @@ def run_single_video(args, model, processor) -> int:
 
         inputs = inputs.to("cuda")
 
+        # Release PyTorch's VRAM cache before generate so that any
+        # cached-but-freed allocations (e.g. from model loading or the
+        # processor) don't compete with the activation memory needed during
+        # the forward pass.  This is especially important for NVFP4/AWQ
+        # models that have little headroom between the compressed weights
+        # and the full 32 GB VRAM limit.
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         print("before generate")
 
         now = datetime.now()

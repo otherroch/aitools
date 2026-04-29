@@ -388,6 +388,29 @@ def load_qwen36_model_and_processor(args):
         quantization_config=quant_cfg,
     )
 
+    # Warn when accelerate still offloads layers to disk despite the CUDA-only
+    # max_memory budget.  Disk-offloaded parameters show up as "meta" device.
+    # In that state, inference will try to bring them back into VRAM during the
+    # forward pass; if VRAM is already tight this causes an OOM error.  The
+    # warning gives the user an actionable hint to reduce their visual-token
+    # budget before hitting the harder error.
+    if args.quant in ("nvfp4", "awq") and hasattr(model, "named_parameters"):
+        _disk_params = [n for n, p in model.named_parameters() if p.device.type == "meta"]
+        if _disk_params:
+            _cnt = len(_disk_params)
+            logger.warning(
+                "load_qwen36_model_and_processor: %d parameter(s) were offloaded to disk "
+                "(model does not fit entirely in GPU VRAM). Inference may fail with OOM. "
+                "Reduce --total-pixels (e.g. --total-pixels 8000) or --num-frames to "
+                "lower activation memory.",
+                _cnt,
+            )
+            print(
+                f"WARNING: {_cnt} model parameter(s) were offloaded to disk — GPU VRAM "
+                "is insufficient for this model. Inference may fail with OOM. "
+                "Try reducing --total-pixels (e.g. --total-pixels 8000) or --num-frames."
+            )
+
     if args.optimize:
         logger.debug("load_qwen36_model_and_processor: compiling model with torch.compile")
         model = torch.compile(
