@@ -417,7 +417,12 @@ class TestLoader:
             def from_pretrained(*_a, **_kw):
                 return object()
 
-        torch_stub = types.SimpleNamespace(set_num_threads=lambda _n: None, compile=lambda m, **_k: m, float16="float16")
+        torch_stub = types.SimpleNamespace(
+            set_num_threads=lambda _n: None,
+            compile=lambda m, **_k: m,
+            float16="float16",
+            cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+        )
         transformers_stub = types.SimpleNamespace(
             Qwen3VLForConditionalGeneration=FakeModelClass,
             Qwen3VLMoeForConditionalGeneration=FakeModelClass,

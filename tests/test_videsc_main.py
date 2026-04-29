@@ -374,6 +374,19 @@ class TestVidescUnifiedCommand:
         assert "Qwen3_5MoeForConditionalGeneration" in source
         assert "AutoConfig" in source
 
+    def test_loader_qwen36_prevents_cpu_offload_for_quantized_models(self):
+        """load_qwen36_model_and_processor must set max_memory['cpu']=0 for nvfp4/awq
+        to prevent accelerate from CPU-offloading quantized layers (packed weight names
+        mismatch causes KeyError during inference)."""
+        loader_py = VIDESC_ROOT / "model" / "loader.py"
+        source = loader_py.read_text()
+        assert 'max_memory["cpu"] = 0' in source or "max_memory['cpu'] = 0" in source, (
+            "loader must set max_memory['cpu'] = 0 for nvfp4/awq to prevent CPU offloading"
+        )
+        assert "max_memory" in source, (
+            "loader must pass max_memory to from_pretrained for nvfp4/awq models"
+        )
+
     def test_vl_youtube_output_dir_fallback(self):
         """In VL + YouTube mode, --output-dir should be used as fallback for --outdir."""
         from videsc.cli.args import parse_args

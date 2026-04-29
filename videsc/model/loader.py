@@ -356,10 +356,30 @@ def load_qwen36_model_and_processor(args):
     # and transformers does not need to cast internally.
     model_torch_dtype = torch.float16 if args.quant == "awq" else "auto"
 
+    # NVFP4 and AWQ quantized models store weights in a packed format.
+    # When device_map="auto" offloads layers to CPU, accelerate's offload
+    # index is keyed by the packed weight names, but the model's forward
+    # pass looks up the original float names — causing a KeyError at
+    # inference time.  Prevent CPU offloading by capping cpu memory to 0
+    # and distributing only across CUDA devices.
+    if args.quant in ("nvfp4", "awq") and torch.cuda.is_available():
+        max_memory = {
+            i: torch.cuda.get_device_properties(i).total_memory
+            for i in range(torch.cuda.device_count())
+        }
+        max_memory["cpu"] = 0
+        logger.debug(
+            "load_qwen36_model_and_processor: quant=%s — CPU offload disabled, max_memory=%s",
+            args.quant, max_memory,
+        )
+    else:
+        max_memory = None
+
     # Load model — Qwen3.6 uses the same architecture as Qwen3.5
     model = model_cls.from_pretrained(
         model_path_local,
         device_map="auto",
+        max_memory=max_memory,
         torch_dtype=model_torch_dtype,
         attn_implementation=args.attn,
         quantization_config=quant_cfg,
