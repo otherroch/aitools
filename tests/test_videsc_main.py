@@ -375,16 +375,21 @@ class TestVidescUnifiedCommand:
         assert "AutoConfig" in source
 
     def test_loader_qwen36_prevents_cpu_offload_for_quantized_models(self):
-        """load_qwen36_model_and_processor must set max_memory['cpu']=0 for nvfp4/awq
-        to prevent accelerate from CPU-offloading quantized layers (packed weight names
-        mismatch causes KeyError during inference)."""
+        """load_qwen36_model_and_processor must build a CUDA-only max_memory dict for
+        nvfp4/awq to prevent accelerate from CPU/disk-offloading quantized layers.
+        Packed weight names in the offload index don't match the float names the
+        forward pass looks up, causing a KeyError at inference time.
+        The fix omits the 'cpu' key entirely so accelerate only considers CUDA devices."""
         loader_py = VIDESC_ROOT / "model" / "loader.py"
         source = loader_py.read_text()
-        assert 'max_memory["cpu"] = 0' in source or "max_memory['cpu'] = 0" in source, (
-            "loader must set max_memory['cpu'] = 0 for nvfp4/awq to prevent CPU offloading"
-        )
+        # Must build a max_memory dict (CUDA-only) for nvfp4/awq
         assert "max_memory" in source, (
             "loader must pass max_memory to from_pretrained for nvfp4/awq models"
+        )
+        # Must NOT set cpu=0 (that still causes disk offloading); cpu key must be absent
+        assert 'max_memory["cpu"] = 0' not in source and "max_memory['cpu'] = 0" not in source, (
+            "loader must NOT set max_memory['cpu']=0; omit the 'cpu' key entirely so "
+            "accelerate never falls back to disk offloading for quantized models"
         )
 
     def test_vl_youtube_output_dir_fallback(self):

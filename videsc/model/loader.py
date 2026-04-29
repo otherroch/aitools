@@ -356,20 +356,23 @@ def load_qwen36_model_and_processor(args):
     # and transformers does not need to cast internally.
     model_torch_dtype = torch.float16 if args.quant == "awq" else "auto"
 
-    # NVFP4 and AWQ quantized models store weights in a packed format.
-    # When device_map="auto" offloads layers to CPU, accelerate's offload
+    # NVFP4 and AWQ quantized models store weights in a packed format that
+    # is incompatible with accelerate's CPU/disk offloading.  The offload
     # index is keyed by the packed weight names, but the model's forward
     # pass looks up the original float names — causing a KeyError at
-    # inference time.  Prevent CPU offloading by capping cpu memory to 0
-    # and distributing only across CUDA devices.
+    # inference time.  Prevent ALL offloading (CPU and disk) by building a
+    # max_memory dict that lists ONLY the CUDA devices.  When "cpu" is
+    # absent from max_memory, accelerate will not consider CPU RAM or disk
+    # as placement candidates; if the model doesn't fit in GPU VRAM the
+    # caller receives an OOM error rather than a silent offload + KeyError.
     if args.quant in ("nvfp4", "awq") and torch.cuda.is_available():
         max_memory = {
             i: torch.cuda.get_device_properties(i).total_memory
             for i in range(torch.cuda.device_count())
         }
-        max_memory["cpu"] = 0
+        # Deliberately omit "cpu" key so accelerate only considers CUDA.
         logger.debug(
-            "load_qwen36_model_and_processor: quant=%s — CPU offload disabled, max_memory=%s",
+            "load_qwen36_model_and_processor: quant=%s — CPU/disk offload disabled, max_memory=%s",
             args.quant, max_memory,
         )
     else:
