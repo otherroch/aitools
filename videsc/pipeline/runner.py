@@ -253,6 +253,7 @@ def run_single_video(args, model, processor) -> int:
             videos=videos,
             video_metadata=video_metadatas,
             return_tensors="pt",
+            truncation=False,
             **video_kwargs,
         )
 
