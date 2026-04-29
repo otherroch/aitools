@@ -348,14 +348,19 @@ def load_qwen36_model_and_processor(args):
         logger.debug("load_qwen36_model_and_processor: NVFP4 model — requires nvidia-modelopt[torch] and compressed-tensors")
         print("NOTE: NVFP4 model — ensure 'pip install nvidia-modelopt[torch] compressed-tensors' is installed")
     elif args.quant == "awq":
-        logger.debug("load_qwen36_model_and_processor: AWQ model — requires compressed-tensors")
-        print("NOTE: AWQ model — ensure 'pip install compressed-tensors' is installed")
+        logger.debug("load_qwen36_model_and_processor: AWQ model — requires autoawq")
+        print("NOTE: AWQ model — ensure 'pip install autoawq' is installed")
+
+    # AWQ CUDA/XPU kernels require float16; bfloat16 is not supported.
+    # Pass torch_dtype explicitly so the dtype is correct from the start
+    # and transformers does not need to cast internally.
+    model_torch_dtype = torch.float16 if args.quant == "awq" else "auto"
 
     # Load model — Qwen3.6 uses the same architecture as Qwen3.5
     model = model_cls.from_pretrained(
         model_path_local,
         device_map="auto",
-        torch_dtype="auto",
+        torch_dtype=model_torch_dtype,
         attn_implementation=args.attn,
         quantization_config=quant_cfg,
     )

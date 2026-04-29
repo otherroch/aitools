@@ -91,14 +91,16 @@ pre-quantized form from the community, making them practical on consumer GPUs:
 | Variant | Model ID | VRAM | Extra package |
 |---------|----------|------|---------------|
 | NVFP4 | `RedHatAI/Qwen3.6-35B-A3B-NVFP4` | ~24 GB | `nvidia-modelopt[torch] compressed-tensors` |
-| AWQ 4-bit | `cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit` | ~20 GB | `compressed-tensors` |
+| AWQ 4-bit | `cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit` | ~20 GB | `autoawq` |
 
 Both models use the **MoE architecture** (`Qwen3_5MoeForConditionalGeneration`).
 `videsc` auto-detects whether the model is dense or MoE from its `config.json`,
 so no extra flag is needed beyond `--qwen36`.
 
 ```bash
-# Install the required support library (NVFP4 also needs nvidia-modelopt)
+# Install the required support library for AWQ (GEMM-format INT4 quantization)
+pip install autoawq
+# NVFP4 requires compressed-tensors (and nvidia-modelopt for NVIDIA Hopper/Blackwell GPUs)
 pip install compressed-tensors
 # For NVFP4 only:
 pip install nvidia-modelopt[torch]
