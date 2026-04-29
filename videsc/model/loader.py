@@ -398,18 +398,13 @@ def load_qwen36_model_and_processor(args):
         _disk_params = [n for n, p in model.named_parameters() if p.device.type == "meta"]
         if _disk_params:
             _cnt = len(_disk_params)
-            logger.warning(
-                "load_qwen36_model_and_processor: %d parameter(s) were offloaded to disk "
-                "(model does not fit entirely in GPU VRAM). Inference may fail with OOM. "
-                "Reduce --total-pixels (e.g. --total-pixels 8000) or --num-frames to "
-                "lower activation memory.",
-                _cnt,
-            )
-            print(
+            _msg = (
                 f"WARNING: {_cnt} model parameter(s) were offloaded to disk — GPU VRAM "
                 "is insufficient for this model. Inference may fail with OOM. "
                 "Try reducing --total-pixels (e.g. --total-pixels 8000) or --num-frames."
             )
+            logger.warning("load_qwen36_model_and_processor: %s", _msg)
+            print(_msg)
 
     if args.optimize:
         logger.debug("load_qwen36_model_and_processor: compiling model with torch.compile")
