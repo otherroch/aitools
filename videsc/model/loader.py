@@ -417,10 +417,23 @@ def load_nemotron_model_and_processor(args):
     quant_cfg = _quant_config(args.quant)
     _maybe_set_reader(args.reader)
 
-    from transformers import AutoModelForCausalLM
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    # Pre-load config so we can work around a transformers bug: NVFP4 models
+    # ship with "quantization_config": null in config.json, which causes
+    # AutoHfQuantizer.supports_quant_method() to crash with AttributeError
+    # trying to call .get() on None.  Removing the attribute lets transformers
+    # fall through to the model's own custom quantization handling.
+    _cfg = AutoConfig.from_pretrained(model_path_local, trust_remote_code=True)
+    if getattr(_cfg, "quantization_config", None) is None:
+        try:
+            del _cfg.quantization_config
+        except AttributeError:
+            pass
 
     model = AutoModelForCausalLM.from_pretrained(
         model_path_local,
+        config=_cfg,
         device_map="auto",
         torch_dtype="auto",
         trust_remote_code=True,
