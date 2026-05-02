@@ -391,6 +391,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # default to the NVFP4 Nemotron-3 Omni model HuggingFace id for direct loading.
     if args.nemotron and args.model == _VL_DEFAULT_MODEL:
         args.model = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+        args.model_hf = True
 
     # Post-parse validation for Gemma 4 mode.
     if args.gemma4:
