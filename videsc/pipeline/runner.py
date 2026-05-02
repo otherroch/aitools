@@ -881,7 +881,9 @@ def run_single_video_nemotron(args, client, _processor=None) -> int:
 
     # Write result
     _vid = _P(args.video)
-    desc_dir = "desc-" + args.model.replace("/", "_")
+    import re as _re
+    safe_model = _re.sub(r"[^\w.-]", "_", args.model)
+    desc_dir = "desc-" + safe_model
     _default_dir = _vid.parent / desc_dir
     outdir_val = getattr(args, "outdir", None)
     _outdir = _P(outdir_val) if outdir_val else _default_dir
