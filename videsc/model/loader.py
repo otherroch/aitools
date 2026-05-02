@@ -437,13 +437,14 @@ def load_nemotron_model_and_processor(args):
         except AttributeError:
             pass
 
-    # Nemotron's custom architecture does not support sdpa; fall back to eager
-    # unless the user explicitly requested flash_attention_2.
+    # Nemotron's custom architecture supports only 'eager'; neither sdpa nor
+    # flash_attention_2 are implemented for NemotronH/NemotronHForCausalLM.
     attn_impl = args.attn
-    if attn_impl == "sdpa":
+    if attn_impl in ("sdpa", "flash_attention_2"):
         logger.debug(
-            "load_nemotron_model_and_processor: sdpa unsupported by Nemotron, "
-            "overriding attn_implementation to 'eager'"
+            "load_nemotron_model_and_processor: %s unsupported by Nemotron, "
+            "overriding attn_implementation to 'eager'",
+            attn_impl,
         )
         attn_impl = "eager"
 
