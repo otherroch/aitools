@@ -437,13 +437,23 @@ def load_nemotron_model_and_processor(args):
         except AttributeError:
             pass
 
+    # Nemotron's custom architecture does not support sdpa; fall back to eager
+    # unless the user explicitly requested flash_attention_2.
+    attn_impl = args.attn
+    if attn_impl == "sdpa":
+        logger.debug(
+            "load_nemotron_model_and_processor: sdpa unsupported by Nemotron, "
+            "overriding attn_implementation to 'eager'"
+        )
+        attn_impl = "eager"
+
     model = AutoModelForCausalLM.from_pretrained(
         model_path_local,
         config=_cfg,
         device_map="auto",
         torch_dtype="auto",
         trust_remote_code=True,
-        attn_implementation=args.attn,
+        attn_implementation=attn_impl,
         quantization_config=quant_cfg,
     )
 
