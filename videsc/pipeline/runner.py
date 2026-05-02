@@ -17,7 +17,7 @@ from videsc.model.loader import (
     load_omni_model_and_processor,
     load_qwen35_model_and_processor,
     load_gemma4_model_and_processor,
-    load_nemotron_client,
+    load_nemotron_model_and_processor,
     _maybe_set_reader,
 )
 from videsc.audio.transcription import transcribe_audio_from_video
@@ -776,99 +776,141 @@ def run_single_video_gemma4(args, model, processor) -> int:
     return 0
 
 
-def run_single_video_nemotron(args, client, _processor=None) -> int:
-    """Run Nemotron-3 pipeline for a single video via an OpenAI-compatible vLLM server.
+def run_single_video_nemotron(args, model, processor) -> int:
+    """Run Nemotron-3 pipeline for a single video with direct transformers inference.
 
-    The video file is converted to a ``file://`` URI and sent to the server as a
-    ``video_url`` content block, matching the pattern shown in the NVFP4 model
-    card on HuggingFace.  The request includes the Nemotron-specific
-    ``thinking_token_budget`` and ``chat_template_kwargs`` extra-body fields so
-    that the model's reasoning engine is activated.
+    Nemotron-3 is a Mamba2-Transformer Hybrid MoE model built on top of
+    Qwen3-VL-30B-A3B.  Loading requires ``trust_remote_code=True``.  The
+    inference pipeline mirrors the standard Qwen3-VL runner but activates
+    the model's chain-of-thought reasoning engine via ``enable_thinking`` and
+    ``reasoning_budget`` chat-template kwargs.
 
     Args:
         args:       CLI namespace.  Key attributes consumed:
-                    - ``video``                   – path to the video file
-                    - ``model``                   – model name as registered in vLLM
-                    - ``prompt``                  – user text prompt
-                    - ``system``                  – optional system prompt
-                    - ``max_new_tokens``          – ``max_tokens`` for the API call
-                    - ``nemotron_reasoning_budget`` – reasoning budget (tokens)
-                    - ``nemotron_grace_period``   – extra tokens added to budget
-                    - ``nemotron_temperature``    – sampling temperature
-                    - ``nemotron_top_p``          – nucleus sampling p
-                    - ``no_think_trim``           – if False, strip ``<think>`` block
-                    - ``outdir``                  – optional output directory
-        client:     An ``openai.OpenAI`` instance pointing at the vLLM server.
-        _processor: Unused; present only for API consistency with other runners.
+                    - ``video``                     – path to the video file
+                    - ``model``                     – model name / local path
+                    - ``prompt``                    – user text prompt
+                    - ``system``                    – optional system prompt
+                    - ``max_new_tokens``            – generation token budget
+                    - ``nemotron_reasoning_budget`` – tokens for chain-of-thought
+                    - ``nemotron_temperature``      – sampling temperature
+                    - ``nemotron_top_p``            – nucleus sampling p
+                    - ``no_think_trim``             – if False, strip ``<think>`` block
+                    - ``rep_pen``                   – repetition penalty
+                    - ``outdir``                    – optional output directory
+        model:      Loaded ``AutoModelForCausalLM`` instance.
+        processor:  Loaded ``AutoProcessor`` instance.
 
     Returns:
         0 on success, 1 on failure.
     """
-    from pathlib import Path as _LocalPath
+    torch.manual_seed(args.seed)
 
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     logger.info("run_single_video_nemotron: start %s  video=%s", current_time, args.video)
     print(f"✅ start time: {current_time}")
 
-    video_path = _LocalPath(args.video).resolve()
-    video_uri = video_path.as_uri()
-    logger.debug("run_single_video_nemotron: video_uri=%s", video_uri)
-
     reasoning_budget: int = getattr(args, "nemotron_reasoning_budget", 16384)
-    grace_period: int = getattr(args, "nemotron_grace_period", 1024)
     temperature: float = getattr(args, "nemotron_temperature", 0.6)
     top_p: float = getattr(args, "nemotron_top_p", 0.95)
-    max_tokens: int = getattr(args, "max_new_tokens", 20480)
 
-    messages: List[Dict[str, Any]] = []
-    if args.system:
-        messages.append({"role": "system", "content": args.system})
-    messages.append({
-        "role": "user",
-        "content": [
-            {"type": "video_url", "video_url": {"url": video_uri}},
-            {"type": "text", "text": args.prompt},
-        ],
-    })
+    # Build video info for message construction
+    video_info = get_video_info(args.video)
+    logger.debug("run_single_video_nemotron: video_info=%s", video_info)
 
-    extra_body: Dict[str, Any] = {
-        "thinking_token_budget": reasoning_budget + grace_period,
-        "chat_template_kwargs": {
-            "enable_thinking": True,
-            "reasoning_budget": reasoning_budget,
-        },
-        "mm_processor_kwargs": {"use_audio_in_video": False},
-    }
+    effective_nframes = compute_effective_nframes(video_info, args.num_frames, args.spf)
+    logger.debug("run_single_video_nemotron: effective_nframes=%d", effective_nframes)
 
-    logger.debug(
-        "run_single_video_nemotron: model=%s  max_tokens=%d  reasoning_budget=%d  grace=%d",
-        args.model, max_tokens, reasoning_budget, grace_period,
+    patch = _patch_size_for_model(args.model if getattr(args, "model", None) else "")
+    tot_pixels_raw = args.total_pixels * patch * patch
+
+    messages = build_messages(
+        video_path=args.video,
+        vinfo=video_info,
+        tot_pixels=tot_pixels_raw,
+        spf=args.spf,
+        nframes=effective_nframes,
+        prompt=args.prompt,
+        system=args.system,
+        continue_prompt=args.cont_prompt,
     )
 
+    logger.debug("run_single_video_nemotron: messages built (%d)", len(messages))
+    print("after build messages:", messages)
+
+    # Apply chat template with Nemotron thinking kwargs
+    modeltext = processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=True,
+        reasoning_budget=reasoning_budget,
+    )
+
+    print("after apply_chat_template:", modeltext)
+
+    now_dec = datetime.now()
+    print(f"✅ Before video decode: {now_dec.strftime('%H:%M:%S')}")
+
+    _maybe_set_reader(args.reader)
+
+    use_metadata = not args.no_meta
+    images, videos, video_kwargs = process_vision_info(
+        messages,
+        image_patch_size=patch // 2,
+        return_video_kwargs=True,
+        return_video_metadata=use_metadata,
+    )
+
+    video_metadatas = None
+    if use_metadata and videos is not None:
+        videos, video_metadatas = zip(*videos)
+        videos, video_metadatas = list(videos), list(video_metadatas)
+
+    print("video_kwargs:", video_kwargs)
+    print("video_metadatas:", video_metadatas)
+
+    inputs = processor(
+        text=modeltext,
+        images=images,
+        videos=videos,
+        video_metadata=video_metadatas,
+        return_tensors="pt",
+        **video_kwargs,
+    )
+
+    expand_video_grid_thw(inputs)
+    inputs = inputs.to("cuda")
+
+    text = "dry run"
     if getattr(args, "dry", False):
         print("dry run, exit early")
-        text = "dry run"
     else:
         now_gen = datetime.now()
         print(f"✅ Before generate: {now_gen.strftime('%H:%M:%S')}")
-        try:
-            response = client.chat.completions.create(
-                model=args.model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                extra_body=extra_body,
-            )
-        except Exception as exc:
-            logger.error("run_single_video_nemotron: API call failed: %s", exc)
-            print(f"[nemotron] ERROR: {exc}")
-            return 1
+        logger.debug("run_single_video_nemotron: reasoning_budget=%d  temperature=%.2f  top_p=%.2f",
+                     reasoning_budget, temperature, top_p)
 
-        text = response.choices[0].message.content or ""
+        gen_ids = model.generate(
+            **inputs,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=args.rep_pen,
+        )
 
-        if not getattr(args, "no_think_trim", False) and "</think>" in text:
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, gen_ids)
+        ]
+        text = processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+
+        if not args.no_think_trim and "</think>" in text:
             text = text.split("</think>", 1)[-1].lstrip()
 
     now_end = datetime.now()
@@ -876,12 +918,11 @@ def run_single_video_nemotron(args, client, _processor=None) -> int:
     diff = now_end - now
     print(f"✅ At end: {current_time}  elapsed: {diff.total_seconds():.1f}s")
     logger.info("run_single_video_nemotron: done  elapsed=%.1fs", diff.total_seconds())
-
     print(text)
 
     # Write result
-    _vid = _P(args.video)
     import re as _re
+    _vid = _P(args.video)
     safe_model = _re.sub(r"[^\w.-]", "_", args.model)
     desc_dir = "desc-" + safe_model
     _default_dir = _vid.parent / desc_dir
@@ -969,7 +1010,7 @@ def run_batch_threads(args) -> int:
     elif getattr(args, "gemma4", False):
         model, processor = load_gemma4_model_and_processor(args)
     elif getattr(args, "nemotron", False):
-        model, processor = load_nemotron_client(args)
+        model, processor = load_nemotron_model_and_processor(args)
     else:
         model, processor = load_model_and_processor(args)
 

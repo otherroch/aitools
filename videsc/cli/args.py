@@ -161,47 +161,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--nemotron",
         action="store_true",
         help=(
-            "Use NVIDIA Nemotron-3 via an OpenAI-compatible vLLM server.\n"
-            "The model must be served externally (e.g. vLLM with\n"
-            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4).\n"
-            "Set --nemotron-base-url and --nemotron-api-key (or the env vars\n"
-            "NEMOTRON_BASE_URL / NEMOTRON_API_KEY) to point at that server."
+            "Use NVIDIA Nemotron-3 loaded directly with HuggingFace Transformers.\n"
+            "Requires trust_remote_code=True; the NVFP4 variant also requires\n"
+            "NVIDIA modelopt.  Model is loaded from --model (local path or HF id)\n"
+            "which defaults to nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4."
         ),
-    )
-    vl.add_argument(
-        "--nemotron-base-url",
-        type=str,
-        default=None,
-        metavar="URL",
-        help=(
-            "Base URL of the OpenAI-compatible vLLM server for Nemotron\n"
-            "(e.g. http://localhost:8000/v1).  Overrides env var NEMOTRON_BASE_URL."
-        ),
-    )
-    vl.add_argument(
-        "--nemotron-api-key",
-        type=str,
-        default=None,
-        metavar="KEY",
-        help="API key for the Nemotron vLLM server.  Overrides env var NEMOTRON_API_KEY.",
     )
     vl.add_argument(
         "--nemotron-reasoning-budget",
         type=int,
         default=16384,
         metavar="N",
-        help="Reasoning token budget passed to the Nemotron thinking engine (default: 16384).",
-    )
-    vl.add_argument(
-        "--nemotron-grace-period",
-        type=int,
-        default=1024,
-        metavar="N",
-        help=(
-            "Extra tokens added to thinking_token_budget beyond the reasoning budget\n"
-            "(default: 1024).  The actual thinking_token_budget sent to the server is\n"
-            "--nemotron-reasoning-budget + --nemotron-grace-period."
-        ),
+        help="Reasoning token budget passed as a chat-template variable to the Nemotron thinking engine (default: 16384).",
     )
     vl.add_argument(
         "--nemotron-temperature",

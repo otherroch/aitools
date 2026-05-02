@@ -51,7 +51,7 @@ def _run_vl(args) -> int:
         load_omni_model_and_processor,
         load_qwen35_model_and_processor,
         load_gemma4_model_and_processor,
-        load_nemotron_client,
+        load_nemotron_model_and_processor,
     )
     from videsc.pipeline.runner import run_batch, run_single_video, run_single_video_gemma4, run_single_video_nemotron
 
@@ -106,7 +106,7 @@ def _run_vl(args) -> int:
             model, processor = load_gemma4_model_and_processor(args)
             return run_single_video_gemma4(args, model, processor)
         elif getattr(args, "nemotron", False):
-            model, processor = load_nemotron_client(args)
+            model, processor = load_nemotron_model_and_processor(args)
             return run_single_video_nemotron(args, model, processor)
         else:
             model, processor = load_model_and_processor(args)

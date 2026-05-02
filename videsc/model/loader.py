@@ -363,46 +363,87 @@ def load_gemma4_model_and_processor(args):
     return model, processor
 
 
-def load_nemotron_client(args):
+def load_nemotron_model_and_processor(args):
     """
-    Create and return an OpenAI-compatible client pointing at a vLLM server
-    that is serving the Nemotron-3 model.
+    Load Nemotron-3 model and processor directly with HuggingFace Transformers.
 
-    The server URL is resolved in priority order:
-      1. ``--nemotron-base-url`` CLI argument
-      2. ``NEMOTRON_BASE_URL`` environment variable
-      3. ``http://localhost:8000/v1`` (vLLM default)
+    The model uses custom code (``trust_remote_code=True``) because Nemotron-3
+    has a proprietary Mamba2-Transformer Hybrid MoE architecture with a CRADIO
+    vision encoder that is not yet part of the upstream transformers library.
 
-    The API key is resolved similarly:
-      1. ``--nemotron-api-key`` CLI argument
-      2. ``NEMOTRON_API_KEY`` environment variable
-      3. ``"EMPTY"`` (vLLM default for unauthenticated servers)
+    Model path is resolved with the same priority as other loaders:
+      1. ``--model_hf`` / ``--model_full`` flags on ``args``
+      2. ``model_dir + args.model`` (local cache directory)
+
+    The NVFP4 variant requires NVIDIA's ``modelopt`` quantization library at
+    inference time; the BF16 variant loads with standard PyTorch.
 
     Returns:
-        A tuple of ``(openai.OpenAI client, None)``.  The second element is
-        ``None`` because the OpenAI path does not use a separate processor.
+        A ``(model, processor)`` tuple ready for use in
+        ``run_single_video_nemotron``.
     """
-    try:
-        import openai
-    except ImportError as exc:
-        raise ImportError(
-            "The 'openai' package is required for Nemotron support. "
-            "Install it with: pip install openai"
-        ) from exc
+    global _SHARED_MODEL, _SHARED_PROCESSOR
 
-    base_url = (
-        getattr(args, "nemotron_base_url", None)
-        or os.environ.get("NEMOTRON_BASE_URL")
-        or "http://localhost:8000/v1"
+    if _SHARED_MODEL is not None and _SHARED_PROCESSOR is not None:
+        logger.debug("load_nemotron_model_and_processor: reusing cached model/processor")
+        return _SHARED_MODEL, _SHARED_PROCESSOR
+
+    # Resolve model path
+    if getattr(args, "model_hf", False):
+        model_path_local = args.model
+    elif getattr(args, "model_full", False):
+        model_path_local = args.model
+    else:
+        model_path_local = model_dir + args.model
+
+    logger.debug("load_nemotron_model_and_processor: model_path=%s  quant=%s",
+                 model_path_local, getattr(args, "quant", None))
+    print("model_path=", model_path_local)
+
+    # Optional CPU thread limiting
+    if getattr(args, "half_cpu", False):
+        cpu_count = os.cpu_count() or 2
+        half_cpu_count = max(1, cpu_count // 2)
+        logger.debug("load_nemotron_model_and_processor: limiting to %d CPU threads", half_cpu_count)
+        os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
+        os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
+        torch.set_num_threads(half_cpu_count)
+
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    logger.debug("load_nemotron_model_and_processor: start time %s", current_time)
+    print(f"✅ start time (model load): {current_time}")
+
+    quant_cfg = _quant_config(args.quant)
+    _maybe_set_reader(args.reader)
+
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path_local,
+        device_map="auto",
+        torch_dtype="auto",
+        trust_remote_code=True,
+        quantization_config=quant_cfg,
     )
-    api_key = (
-        getattr(args, "nemotron_api_key", None)
-        or os.environ.get("NEMOTRON_API_KEY")
-        or "EMPTY"
+
+    if args.optimize:
+        logger.debug("load_nemotron_model_and_processor: compiling model with torch.compile")
+        model = torch.compile(
+            model,
+            mode="reduce-overhead",
+            fullgraph=True,
+            backend="inductor",
+        )
+
+    processor = AutoProcessor.from_pretrained(
+        model_path_local,
+        trust_remote_code=True,
     )
 
-    logger.debug("load_nemotron_client: base_url=%s", base_url)
-    print(f"nemotron base_url={base_url}")
+    logger.debug("load_nemotron_model_and_processor: model loaded")
+    print("model loaded")
 
-    client = openai.OpenAI(base_url=base_url, api_key=api_key)
-    return client, None
+    _SHARED_MODEL = model
+    _SHARED_PROCESSOR = processor
+    return model, processor
