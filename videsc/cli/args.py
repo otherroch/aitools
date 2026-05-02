@@ -157,6 +157,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
     model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
     model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4eb-it)")
+    model_group.add_argument(
+        "--nemotron",
+        action="store_true",
+        help=(
+            "Use NVIDIA Nemotron-3 via an OpenAI-compatible vLLM server.\n"
+            "The model must be served externally (e.g. vLLM with\n"
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4).\n"
+            "Set --nemotron-base-url and --nemotron-api-key (or the env vars\n"
+            "NEMOTRON_BASE_URL / NEMOTRON_API_KEY) to point at that server."
+        ),
+    )
+    vl.add_argument(
+        "--nemotron-base-url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help=(
+            "Base URL of the OpenAI-compatible vLLM server for Nemotron\n"
+            "(e.g. http://localhost:8000/v1).  Overrides env var NEMOTRON_BASE_URL."
+        ),
+    )
+    vl.add_argument(
+        "--nemotron-api-key",
+        type=str,
+        default=None,
+        metavar="KEY",
+        help="API key for the Nemotron vLLM server.  Overrides env var NEMOTRON_API_KEY.",
+    )
+    vl.add_argument(
+        "--nemotron-reasoning-budget",
+        type=int,
+        default=16384,
+        metavar="N",
+        help="Reasoning token budget passed to the Nemotron thinking engine (default: 16384).",
+    )
+    vl.add_argument(
+        "--nemotron-grace-period",
+        type=int,
+        default=1024,
+        metavar="N",
+        help=(
+            "Extra tokens added to thinking_token_budget beyond the reasoning budget\n"
+            "(default: 1024).  The actual thinking_token_budget sent to the server is\n"
+            "--nemotron-reasoning-budget + --nemotron-grace-period."
+        ),
+    )
+    vl.add_argument(
+        "--nemotron-temperature",
+        type=float,
+        default=0.6,
+        metavar="T",
+        help="Sampling temperature for Nemotron generation (default: 0.6).",
+    )
+    vl.add_argument(
+        "--nemotron-top-p",
+        type=float,
+        default=0.95,
+        metavar="P",
+        help="Top-p (nucleus sampling) for Nemotron generation (default: 0.95).",
+    )
     vl.add_argument(
         "--gemma4-chunk-duration",
         type=float,
@@ -355,6 +415,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.gemma4 and args.model == _VL_DEFAULT_MODEL:
         args.model = "google/gemma-4-4eb-it"
         args.model_hf = True
+
+    # When --nemotron is set and the user didn't explicitly change --model,
+    # default to the NVFP4 Nemotron-3 Omni model identifier (used as the
+    # model name in requests to the vLLM server).
+    if args.nemotron and args.model == _VL_DEFAULT_MODEL:
+        args.model = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
 
     # Post-parse validation for Gemma 4 mode.
     if args.gemma4:

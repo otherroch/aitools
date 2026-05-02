@@ -361,3 +361,48 @@ def load_gemma4_model_and_processor(args):
     _SHARED_MODEL = model
     _SHARED_PROCESSOR = processor
     return model, processor
+
+
+def load_nemotron_client(args):
+    """
+    Create and return an OpenAI-compatible client pointing at a vLLM server
+    that is serving the Nemotron-3 model.
+
+    The server URL is resolved in priority order:
+      1. ``--nemotron-base-url`` CLI argument
+      2. ``NEMOTRON_BASE_URL`` environment variable
+      3. ``http://localhost:8000/v1`` (vLLM default)
+
+    The API key is resolved similarly:
+      1. ``--nemotron-api-key`` CLI argument
+      2. ``NEMOTRON_API_KEY`` environment variable
+      3. ``"EMPTY"`` (vLLM default for unauthenticated servers)
+
+    Returns:
+        A tuple of ``(openai.OpenAI client, None)``.  The second element is
+        ``None`` because the OpenAI path does not use a separate processor.
+    """
+    try:
+        import openai
+    except ImportError as exc:
+        raise ImportError(
+            "The 'openai' package is required for Nemotron support. "
+            "Install it with: pip install openai"
+        ) from exc
+
+    base_url = (
+        getattr(args, "nemotron_base_url", None)
+        or os.environ.get("NEMOTRON_BASE_URL")
+        or "http://localhost:8000/v1"
+    )
+    api_key = (
+        getattr(args, "nemotron_api_key", None)
+        or os.environ.get("NEMOTRON_API_KEY")
+        or "EMPTY"
+    )
+
+    logger.debug("load_nemotron_client: base_url=%s", base_url)
+    print(f"nemotron base_url={base_url}")
+
+    client = openai.OpenAI(base_url=base_url, api_key=api_key)
+    return client, None

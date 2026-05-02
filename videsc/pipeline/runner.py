@@ -17,6 +17,7 @@ from videsc.model.loader import (
     load_omni_model_and_processor,
     load_qwen35_model_and_processor,
     load_gemma4_model_and_processor,
+    load_nemotron_client,
     _maybe_set_reader,
 )
 from videsc.audio.transcription import transcribe_audio_from_video
@@ -775,6 +776,124 @@ def run_single_video_gemma4(args, model, processor) -> int:
     return 0
 
 
+def run_single_video_nemotron(args, client, _processor=None) -> int:
+    """Run Nemotron-3 pipeline for a single video via an OpenAI-compatible vLLM server.
+
+    The video file is converted to a ``file://`` URI and sent to the server as a
+    ``video_url`` content block, matching the pattern shown in the NVFP4 model
+    card on HuggingFace.  The request includes the Nemotron-specific
+    ``thinking_token_budget`` and ``chat_template_kwargs`` extra-body fields so
+    that the model's reasoning engine is activated.
+
+    Args:
+        args:       CLI namespace.  Key attributes consumed:
+                    - ``video``                   – path to the video file
+                    - ``model``                   – model name as registered in vLLM
+                    - ``prompt``                  – user text prompt
+                    - ``system``                  – optional system prompt
+                    - ``max_new_tokens``          – ``max_tokens`` for the API call
+                    - ``nemotron_reasoning_budget`` – reasoning budget (tokens)
+                    - ``nemotron_grace_period``   – extra tokens added to budget
+                    - ``nemotron_temperature``    – sampling temperature
+                    - ``nemotron_top_p``          – nucleus sampling p
+                    - ``no_think_trim``           – if False, strip ``<think>`` block
+                    - ``outdir``                  – optional output directory
+        client:     An ``openai.OpenAI`` instance pointing at the vLLM server.
+        _processor: Unused; present only for API consistency with other runners.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    from pathlib import Path as _LocalPath
+
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    logger.info("run_single_video_nemotron: start %s  video=%s", current_time, args.video)
+    print(f"✅ start time: {current_time}")
+
+    video_path = _LocalPath(args.video).resolve()
+    video_uri = video_path.as_uri()
+    logger.debug("run_single_video_nemotron: video_uri=%s", video_uri)
+
+    reasoning_budget: int = getattr(args, "nemotron_reasoning_budget", 16384)
+    grace_period: int = getattr(args, "nemotron_grace_period", 1024)
+    temperature: float = getattr(args, "nemotron_temperature", 0.6)
+    top_p: float = getattr(args, "nemotron_top_p", 0.95)
+    max_tokens: int = getattr(args, "max_new_tokens", 20480)
+
+    messages: List[Dict[str, Any]] = []
+    if args.system:
+        messages.append({"role": "system", "content": args.system})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "video_url", "video_url": {"url": video_uri}},
+            {"type": "text", "text": args.prompt},
+        ],
+    })
+
+    extra_body: Dict[str, Any] = {
+        "thinking_token_budget": reasoning_budget + grace_period,
+        "chat_template_kwargs": {
+            "enable_thinking": True,
+            "reasoning_budget": reasoning_budget,
+        },
+        "mm_processor_kwargs": {"use_audio_in_video": False},
+    }
+
+    logger.debug(
+        "run_single_video_nemotron: model=%s  max_tokens=%d  reasoning_budget=%d  grace=%d",
+        args.model, max_tokens, reasoning_budget, grace_period,
+    )
+
+    if getattr(args, "dry", False):
+        print("dry run, exit early")
+        text = "dry run"
+    else:
+        now_gen = datetime.now()
+        print(f"✅ Before generate: {now_gen.strftime('%H:%M:%S')}")
+        try:
+            response = client.chat.completions.create(
+                model=args.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                extra_body=extra_body,
+            )
+        except Exception as exc:
+            logger.error("run_single_video_nemotron: API call failed: %s", exc)
+            print(f"[nemotron] ERROR: {exc}")
+            return 1
+
+        text = response.choices[0].message.content or ""
+
+        if not getattr(args, "no_think_trim", False) and "</think>" in text:
+            text = text.split("</think>", 1)[-1].lstrip()
+
+    now_end = datetime.now()
+    current_time = now_end.strftime("%H:%M:%S")
+    diff = now_end - now
+    print(f"✅ At end: {current_time}  elapsed: {diff.total_seconds():.1f}s")
+    logger.info("run_single_video_nemotron: done  elapsed=%.1fs", diff.total_seconds())
+
+    print(text)
+
+    # Write result
+    _vid = _P(args.video)
+    desc_dir = "desc-" + args.model.replace("/", "_")
+    _default_dir = _vid.parent / desc_dir
+    outdir_val = getattr(args, "outdir", None)
+    _outdir = _P(outdir_val) if outdir_val else _default_dir
+    _outdir.mkdir(parents=True, exist_ok=True)
+    out_path = str(_outdir / f"{_vid.stem}.txt")
+    logger.info("run_single_video_nemotron: writing result to %s", out_path)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    return 0
+
+
 def run_batch_subprocess(args) -> int:
     inputs = expand_inputs(args.videos, args.indir, args.ext, args.filelist)
     if not inputs:
@@ -847,6 +966,8 @@ def run_batch_threads(args) -> int:
         model, processor = load_qwen35_model_and_processor(args)
     elif getattr(args, "gemma4", False):
         model, processor = load_gemma4_model_and_processor(args)
+    elif getattr(args, "nemotron", False):
+        model, processor = load_nemotron_client(args)
     else:
         model, processor = load_model_and_processor(args)
 
@@ -863,6 +984,8 @@ def run_batch_threads(args) -> int:
             local_args.filelist = None
             if getattr(args, "gemma4", False):
                 fut = executor.submit(run_single_video_gemma4, local_args, model, processor)
+            elif getattr(args, "nemotron", False):
+                fut = executor.submit(run_single_video_nemotron, local_args, model, processor)
             else:
                 fut = executor.submit(run_single_video, local_args, model, processor)
             futures[fut] = vid
