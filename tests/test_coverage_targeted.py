@@ -485,7 +485,7 @@ class TestVidescMainRuntime:
         monkeypatch.setitem(
             sys.modules,
             "videsc.pipeline.runner",
-            types.SimpleNamespace(run_batch=lambda _a: 5, run_single_video=lambda *_a: 0, run_single_video_gemma4=lambda *_a: 0),
+            types.SimpleNamespace(run_batch=lambda _a: 5, run_single_video=lambda *_a: 0, run_single_video_gemma4=lambda *_a: 0, run_single_video_nemotron=lambda *_a: 0),
         )
         monkeypatch.setitem(
             sys.modules,
@@ -495,6 +495,7 @@ class TestVidescMainRuntime:
                 load_omni_model_and_processor=lambda _a: ("om", "op"),
                 load_qwen35_model_and_processor=lambda _a: ("35m", "35p"),
                 load_gemma4_model_and_processor=lambda _a: ("g4m", "g4p"),
+                load_nemotron_model_and_processor=lambda _a: ("nm", "np"),
             ),
         )
         assert mod._run_vl(dummy_args) == 5
@@ -514,7 +515,7 @@ class TestVidescMainRuntime:
         monkeypatch.setitem(
             sys.modules,
             "videsc.pipeline.runner",
-            types.SimpleNamespace(run_batch=lambda _a: 0, run_single_video=lambda *_a: 0, run_single_video_gemma4=lambda *_a: 0),
+            types.SimpleNamespace(run_batch=lambda _a: 0, run_single_video=lambda *_a: 0, run_single_video_gemma4=lambda *_a: 0, run_single_video_nemotron=lambda *_a: 0),
         )
         monkeypatch.setitem(
             sys.modules,
@@ -524,6 +525,7 @@ class TestVidescMainRuntime:
                 load_omni_model_and_processor=lambda _a: ("m", "p"),
                 load_qwen35_model_and_processor=lambda _a: ("m", "p"),
                 load_gemma4_model_and_processor=lambda _a: ("g4m", "g4p"),
+                load_nemotron_model_and_processor=lambda _a: ("nm", "np"),
             ),
         )
         monkeypatch.setitem(
@@ -560,6 +562,7 @@ class TestRunner:
                 load_omni_model_and_processor=lambda _a: ("m", "p"),
                 load_qwen35_model_and_processor=lambda _a: ("m", "p"),
                 load_gemma4_model_and_processor=lambda _a: ("g4m", "g4p"),
+                load_nemotron_model_and_processor=lambda _a: ("nm", "np"),
                 _maybe_set_reader=lambda _r: None,
             ),
             "videsc.audio.transcription": types.SimpleNamespace(transcribe_audio_from_video=lambda *_a, **_k: (None, [])),
