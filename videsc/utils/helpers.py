@@ -4,8 +4,9 @@ from typing import List, Any
 
 
 def _patch_size_for_model(model_id: str) -> int:
-    """Return the patch size (32 for Qwen3, 28 for Qwen2.5)."""
-    return 32 if "qwen3" in model_id.lower() else 28
+    """Return the patch size (32 for Qwen3 / Nemotron-3, 28 for Qwen2.5)."""
+    mid = model_id.lower()
+    return 32 if ("qwen3" in mid or "nemotron" in mid) else 28
 
 
 def _edge_to_pixels(edge: int, patch: int) -> int:
