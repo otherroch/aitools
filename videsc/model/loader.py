@@ -437,6 +437,7 @@ def load_nemotron_model_and_processor(args):
         device_map="auto",
         torch_dtype="auto",
         trust_remote_code=True,
+        attn_implementation=args.attn,
         quantization_config=quant_cfg,
     )
 
