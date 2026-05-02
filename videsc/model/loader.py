@@ -425,7 +425,13 @@ def load_nemotron_model_and_processor(args):
     # trying to call .get() on None.  Removing the attribute lets transformers
     # fall through to the model's own custom quantization handling.
     _cfg = AutoConfig.from_pretrained(model_path_local, trust_remote_code=True)
-    if getattr(_cfg, "quantization_config", None) is None:
+    # Strip quantization_config that transformers doesn't recognise (e.g. the
+    # "modelopt" type used by NVFP4 variants) or that is null.  The model's own
+    # custom code (trust_remote_code=True) handles NVFP4 dequantisation itself,
+    # so passing the config entry to transformers only produces a spurious
+    # "Unknown quantization type" warning and causes transformers to skip quant.
+    _qcfg = getattr(_cfg, "quantization_config", None)
+    if _qcfg is None or getattr(_qcfg, "quant_type", None) == "modelopt":
         try:
             del _cfg.quantization_config
         except AttributeError:
