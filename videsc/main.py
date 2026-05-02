@@ -13,7 +13,7 @@ Supports two description modes:
   VL mode (--vl):
     Rich, natural-language descriptions using a Qwen3-VL vision-language
     model (or its Qwen3-Omni multimodal variant, Qwen3.5 model, Gemma 4,
-    or Nemotron-3 via an OpenAI-compatible vLLM server).
+    or Nemotron-3 loaded directly with HuggingFace Transformers).
     Requires --video, --videos, --indir, or --filelist.
 """
 

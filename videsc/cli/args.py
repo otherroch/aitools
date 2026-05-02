@@ -388,8 +388,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.model_hf = True
 
     # When --nemotron is set and the user didn't explicitly change --model,
-    # default to the NVFP4 Nemotron-3 Omni model identifier (used as the
-    # model name in requests to the vLLM server).
+    # default to the NVFP4 Nemotron-3 Omni model HuggingFace id for direct loading.
     if args.nemotron and args.model == _VL_DEFAULT_MODEL:
         args.model = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
 
