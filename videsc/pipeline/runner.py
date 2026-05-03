@@ -858,16 +858,18 @@ def run_single_video_mlx(args, model, processor) -> int:
         logger.info("run_single_video_mlx: ✅ before generate: %s", current_time)
         print(f"✅ Before generate: {current_time}")
 
-        # mlx_vlm.generate does not accept repetition_penalty in all versions;
-        # pass only the universally-supported parameters.
-        text = mlx_generate(
+        # mlx_vlm.generate returns a GenerationResult dataclass; extract the text field.
+        # Pass frames as keyword arg `image=` for clarity (PIL images are accepted).
+        result = mlx_generate(
             model,
             processor,
             formatted_prompt,
-            frames if frames else None,
+            image=frames if frames else None,
             max_tokens=args.max_new_tokens,
             verbose=False,
+            repetition_penalty=args.rep_pen,
         )
+        text = result.text
 
         if not args.no_think_trim and "</think>" in text:
             text = text.split("</think>", 1)[-1].lstrip()

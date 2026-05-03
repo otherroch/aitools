@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Optional
 
 import torch
-from torchsummary import summary  # unused but kept if you rely on it elsewhere
 
 from transformers import (
     Qwen3VLForConditionalGeneration,
