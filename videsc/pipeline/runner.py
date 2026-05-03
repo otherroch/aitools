@@ -835,7 +835,6 @@ def run_single_video_mlx(args, model, processor) -> int:
 
     if not frames:
         logger.warning("run_single_video_mlx: no frames extracted from %s", args.video)
-        frames = []
 
     n_images = len(frames)
 
@@ -850,16 +849,15 @@ def run_single_video_mlx(args, model, processor) -> int:
     )
 
     logger.debug("run_single_video_mlx: formatted_prompt length=%d", len(formatted_prompt))
-    print("formatted_prompt:", formatted_prompt)
 
     text = "dry run"
     if args.dry:
-        print("dry run, exit early")
+        logger.info("run_single_video_mlx: dry run, skipping generation")
     else:
         now_gen = datetime.now()
         current_time = now_gen.strftime("%H:%M:%S")
-        print(f"✅ Before generate: {current_time}")
         logger.info("run_single_video_mlx: ✅ before generate: %s", current_time)
+        print(f"✅ Before generate: {current_time}")
 
         text = mlx_generate(
             model,
@@ -874,8 +872,6 @@ def run_single_video_mlx(args, model, processor) -> int:
         if not args.no_think_trim and "</think>" in text:
             text = text.split("</think>", 1)[-1].lstrip()
 
-    print("after generate")
-    print(text)
     logger.debug("run_single_video_mlx: generation complete  output_length=%d chars", len(text))
 
     now_end = datetime.now()
