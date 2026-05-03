@@ -860,6 +860,7 @@ def run_single_video_mlx(args, model, processor) -> int:
 
         # mlx_vlm.generate returns a GenerationResult dataclass; extract the text field.
         # Pass frames as keyword arg `image=` for clarity (PIL images are accepted).
+        # prefill_step_size enables chunked prefill to reduce peak memory pressure.
         result = mlx_generate(
             model,
             processor,
@@ -868,6 +869,7 @@ def run_single_video_mlx(args, model, processor) -> int:
             max_tokens=args.max_new_tokens,
             verbose=False,
             repetition_penalty=args.rep_pen,
+            prefill_step_size=512,
         )
         text = result.text
 

@@ -161,8 +161,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--mlx",
         action="store_true",
         help=(
-            "Use an MLX-VLM model (Apple Silicon only).  "
+            "Use an MLX-VLM model (Apple Silicon / CUDA).  "
             "Defaults to mlx-community/Qwen3.6-27B-4bit when --model is not specified.  "
+            "Caps --num-frames at 32 by default to stay within the model's 128K context "
+            "window; override with --num-frames N if needed.  "
             "Requires: pip install mlx-vlm"
         ),
     )
@@ -370,6 +372,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if getattr(args, "mlx", False) and args.model == _VL_DEFAULT_MODEL:
         args.model = "mlx-community/Qwen3.6-27B-4bit"
         args.model_hf = True
+
+    # MLX models (Qwen3.6 etc.) have a 128K-token context window.  At the
+    # default fps=1 and a 90-second video, 91 frames × ~2K visual tokens/frame
+    # = ~185K tokens, which blows past the limit and causes a CUDA graph error.
+    # If the user has not explicitly changed --num-frames from its generic
+    # default of 256, apply a conservative MLX-safe ceiling of 32 frames
+    # (~64K image tokens, well within the 128K window).  Users who want more
+    # frames can still pass --num-frames N explicitly.
+    _NUM_FRAMES_DEFAULT = 256
+    if getattr(args, "mlx", False) and args.num_frames == _NUM_FRAMES_DEFAULT:
+        args.num_frames = 32
 
     # Post-parse validation for Gemma 4 mode.
     if args.gemma4:
