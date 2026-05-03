@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Shared model / processor for threaded batch mode
 _SHARED_MODEL = None
 _SHARED_PROCESSOR = None
+_SHARED_MLX_CONFIG = None
 
 
 def _quant_config(quant: str) -> Optional[BitsAndBytesConfig]:
@@ -269,6 +270,60 @@ def load_qwen35_model_and_processor(args):
     )
 
     logger.debug("load_qwen35_model_and_processor: model loaded")
+    print("model loaded")
+
+    _SHARED_MODEL = model
+    _SHARED_PROCESSOR = processor
+    return model, processor
+
+
+def load_mlx_model_and_processor(args):
+    """
+    Load an MLX-VLM model (e.g. mlx-community/Qwen3.6-27B-4bit) and processor
+    using the mlx-vlm library.  Designed for Apple Silicon; quantization is
+    already baked into the model weights so no BitsAndBytesConfig is needed.
+
+    Returns ``(model, processor)`` just like the other loaders.  The
+    corresponding model config (needed by ``mlx_vlm.prompt_utils.apply_chat_template``)
+    is stored as a module-level global so the runner can retrieve it without
+    re-reading from disk.
+    """
+    global _SHARED_MODEL, _SHARED_PROCESSOR, _SHARED_MLX_CONFIG
+
+    if _SHARED_MODEL is not None and _SHARED_PROCESSOR is not None:
+        logger.debug("load_mlx_model_and_processor: reusing cached model/processor")
+        return _SHARED_MODEL, _SHARED_PROCESSOR
+
+    # Resolve model path (same logic as other loaders)
+    if getattr(args, "model_hf", False):
+        model_path_local = args.model
+    elif getattr(args, "model_full", False):
+        model_path_local = args.model
+    else:
+        model_path_local = model_dir + args.model
+
+    logger.debug("load_mlx_model_and_processor: model_path=%s", model_path_local)
+    print("model_path=", model_path_local)
+
+    # Log start time
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    logger.debug("load_mlx_model_and_processor: start time %s", current_time)
+    print(f"✅ start time (model load): {current_time}")
+
+    try:
+        from mlx_vlm import load as mlx_load
+        from mlx_vlm.utils import load_config as mlx_load_config
+    except ImportError as exc:
+        raise ImportError(
+            "mlx-vlm is required for --mlx mode.  "
+            "Install it with: pip install mlx-vlm"
+        ) from exc
+
+    model, processor = mlx_load(model_path_local)
+    _SHARED_MLX_CONFIG = mlx_load_config(model_path_local)
+
+    logger.debug("load_mlx_model_and_processor: model loaded")
     print("model loaded")
 
     _SHARED_MODEL = model

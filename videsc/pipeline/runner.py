@@ -17,6 +17,7 @@ from videsc.model.loader import (
     load_omni_model_and_processor,
     load_qwen35_model_and_processor,
     load_gemma4_model_and_processor,
+    load_mlx_model_and_processor,
     _maybe_set_reader,
 )
 from videsc.audio.transcription import transcribe_audio_from_video
@@ -775,6 +776,127 @@ def run_single_video_gemma4(args, model, processor) -> int:
     return 0
 
 
+def run_single_video_mlx(args, model, processor) -> int:
+    """Run MLX-VLM pipeline for a single video.
+
+    Frames are extracted from the video as PIL images (using ``extract_frames_as_pil``)
+    and passed directly to ``mlx_vlm.generate`` together with the formatted prompt.
+    This is the appropriate path for Apple Silicon quantized models such as
+    ``mlx-community/Qwen3.6-27B-4bit``.
+    """
+    import videsc.model.loader as _loader_mod
+
+    try:
+        from mlx_vlm import generate as mlx_generate
+        from mlx_vlm.prompt_utils import apply_chat_template as mlx_apply_chat_template
+        from mlx_vlm.utils import load_config as mlx_load_config
+    except ImportError as exc:
+        raise ImportError(
+            "mlx-vlm is required for --mlx mode.  "
+            "Install it with: pip install mlx-vlm"
+        ) from exc
+
+    # Retrieve (or lazily load) the model config needed for apply_chat_template.
+    if _loader_mod._SHARED_MLX_CONFIG is not None:
+        config = _loader_mod._SHARED_MLX_CONFIG
+    else:
+        model_path_local = args.model if getattr(args, "model_hf", False) or getattr(args, "model_full", False) else (
+            __import__("videsc.config", fromlist=["model_dir"]).model_dir + args.model
+        )
+        config = mlx_load_config(model_path_local)
+
+    torch.manual_seed(args.seed)
+
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    logger.info("run_single_video_mlx: start time %s  video=%s", current_time, args.video)
+    print(f"✅ start time: {current_time}")
+
+    video_info = get_video_info(args.video)
+    duration = video_info["tot_time"]
+    logger.debug("run_single_video_mlx: duration=%.2fs  fps=%.2f  num_frames=%d",
+                 duration, args.fps, args.num_frames)
+
+    # Determine clip window
+    start_sec = float(getattr(args, "clip_start", 0.0))
+    end_sec = float(getattr(args, "clip_end", -1.0))
+    if end_sec <= 0:
+        end_sec = duration
+
+    # Extract frames as PIL images
+    frames = extract_frames_as_pil(args.video, start_sec, end_sec, args.fps)
+    logger.debug("run_single_video_mlx: extracted %d frame(s)", len(frames))
+
+    # Cap to num_frames
+    if len(frames) > args.num_frames:
+        step = max(1, len(frames) // args.num_frames)
+        frames = frames[::step][: args.num_frames]
+        logger.debug("run_single_video_mlx: capped to %d frame(s) (step=%d)", len(frames), step)
+
+    if not frames:
+        logger.warning("run_single_video_mlx: no frames extracted from %s", args.video)
+        frames = []
+
+    n_images = len(frames)
+
+    # Build messages (system + user).  apply_chat_template adds image placeholders.
+    messages: List[Dict[str, Any]] = []
+    if args.system:
+        messages.append({"role": "system", "content": args.system})
+    messages.append({"role": "user", "content": args.prompt})
+
+    formatted_prompt = mlx_apply_chat_template(
+        processor, config, messages, num_images=n_images
+    )
+
+    logger.debug("run_single_video_mlx: formatted_prompt length=%d", len(formatted_prompt))
+    print("formatted_prompt:", formatted_prompt)
+
+    text = "dry run"
+    if args.dry:
+        print("dry run, exit early")
+    else:
+        now_gen = datetime.now()
+        current_time = now_gen.strftime("%H:%M:%S")
+        print(f"✅ Before generate: {current_time}")
+        logger.info("run_single_video_mlx: ✅ before generate: %s", current_time)
+
+        text = mlx_generate(
+            model,
+            processor,
+            formatted_prompt,
+            frames if frames else None,
+            max_tokens=args.max_new_tokens,
+            verbose=False,
+            repetition_penalty=args.rep_pen,
+        )
+
+        if not args.no_think_trim and "</think>" in text:
+            text = text.split("</think>", 1)[-1].lstrip()
+
+    print("after generate")
+    print(text)
+    logger.debug("run_single_video_mlx: generation complete  output_length=%d chars", len(text))
+
+    now_end = datetime.now()
+    current_time = now_end.strftime("%H:%M:%S")
+    print(f"✅ At end: {current_time}")
+
+    # Output paths
+    _vid = _P(args.video)
+    desc_dir = "desc-" + args.model
+    _default_dir = _vid.parent / desc_dir
+    outdir_val = getattr(args, "outdir", None)
+    _outdir = _P(outdir_val) if outdir_val else _default_dir
+    _outdir.mkdir(parents=True, exist_ok=True)
+    out_path = str(_outdir / f"{_vid.stem}.txt")
+    logger.info("run_single_video_mlx: writing result to %s", out_path)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    return 0
+
+
 def run_batch_subprocess(args) -> int:
     inputs = expand_inputs(args.videos, args.indir, args.ext, args.filelist)
     if not inputs:
@@ -847,6 +969,8 @@ def run_batch_threads(args) -> int:
         model, processor = load_qwen35_model_and_processor(args)
     elif getattr(args, "gemma4", False):
         model, processor = load_gemma4_model_and_processor(args)
+    elif getattr(args, "mlx", False):
+        model, processor = load_mlx_model_and_processor(args)
     else:
         model, processor = load_model_and_processor(args)
 
@@ -863,6 +987,8 @@ def run_batch_threads(args) -> int:
             local_args.filelist = None
             if getattr(args, "gemma4", False):
                 fut = executor.submit(run_single_video_gemma4, local_args, model, processor)
+            elif getattr(args, "mlx", False):
+                fut = executor.submit(run_single_video_mlx, local_args, model, processor)
             else:
                 fut = executor.submit(run_single_video, local_args, model, processor)
             futures[fut] = vid

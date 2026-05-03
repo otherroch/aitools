@@ -12,7 +12,8 @@ Supports two description modes:
 
   VL mode (--vl):
     Rich, natural-language descriptions using a Qwen3-VL vision-language
-    model (or its Qwen3-Omni multimodal variant, Qwen3.5 model, or Gemma 4).
+    model (or its Qwen3-Omni multimodal variant, Qwen3.5 model, Gemma 4,
+    or MLX-VLM quantized models for Apple Silicon).
     Requires --video, --videos, --indir, or --filelist.
 """
 
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_vl(args) -> int:
-    """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 vision-language pipeline."""
+    """Run Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 / MLX vision-language pipeline."""
     import tempfile
     import shutil
     from pathlib import Path
@@ -50,15 +51,16 @@ def _run_vl(args) -> int:
         load_omni_model_and_processor,
         load_qwen35_model_and_processor,
         load_gemma4_model_and_processor,
+        load_mlx_model_and_processor,
     )
-    from videsc.pipeline.runner import run_batch, run_single_video, run_single_video_gemma4
+    from videsc.pipeline.runner import run_batch, run_single_video, run_single_video_gemma4, run_single_video_mlx
 
     print("args: ", str(args))
     is_batch = bool(args.videos or args.indir or getattr(args, "filelist", None))
 
-    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s  gemma4=%s",
+    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s  gemma4=%s  mlx=%s",
                  is_batch, getattr(args, "omni", None), getattr(args, "qwen35", None),
-                 getattr(args, "gemma4", None))
+                 getattr(args, "gemma4", None), getattr(args, "mlx", None))
 
     if is_batch:
         return run_batch(args)
@@ -103,6 +105,9 @@ def _run_vl(args) -> int:
         elif getattr(args, "gemma4", False):
             model, processor = load_gemma4_model_and_processor(args)
             return run_single_video_gemma4(args, model, processor)
+        elif getattr(args, "mlx", False):
+            model, processor = load_mlx_model_and_processor(args)
+            return run_single_video_mlx(args, model, processor)
         else:
             model, processor = load_model_and_processor(args)
         return run_single_video(args, model, processor)

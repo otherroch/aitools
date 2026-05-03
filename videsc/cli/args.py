@@ -157,6 +157,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
     model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
     model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4eb-it)")
+    model_group.add_argument(
+        "--mlx",
+        action="store_true",
+        help=(
+            "Use an MLX-VLM model (Apple Silicon only).  "
+            "Defaults to mlx-community/Qwen3.6-27B-4bit when --model is not specified.  "
+            "Requires: pip install mlx-vlm"
+        ),
+    )
     vl.add_argument(
         "--gemma4-chunk-duration",
         type=float,
@@ -354,6 +363,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # default to the Gemma 4 4B instruction-tuned model on HuggingFace.
     if args.gemma4 and args.model == _VL_DEFAULT_MODEL:
         args.model = "google/gemma-4-4eb-it"
+        args.model_hf = True
+
+    # When --mlx is set and the user didn't explicitly change --model,
+    # default to the Qwen3.6-27B 4-bit quantized MLX model on HuggingFace.
+    if getattr(args, "mlx", False) and args.model == _VL_DEFAULT_MODEL:
+        args.model = "mlx-community/Qwen3.6-27B-4bit"
         args.model_hf = True
 
     # Post-parse validation for Gemma 4 mode.
