@@ -805,8 +805,6 @@ def run_single_video_mlx(args, model, processor) -> int:
         )
         config = mlx_load_config(model_path_local)
 
-    torch.manual_seed(args.seed)
-
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     logger.info("run_single_video_mlx: start time %s  video=%s", current_time, args.video)
@@ -838,14 +836,15 @@ def run_single_video_mlx(args, model, processor) -> int:
 
     n_images = len(frames)
 
-    # Build messages (system + user).  apply_chat_template adds image placeholders.
-    messages: List[Dict[str, Any]] = []
+    # Build a plain-string prompt for mlx_vlm.prompt_utils.apply_chat_template.
+    # That function expects a simple string, not a list of message dicts.
+    # Prepend any system instruction so it is preserved in the formatted output.
+    user_prompt = args.prompt
     if args.system:
-        messages.append({"role": "system", "content": args.system})
-    messages.append({"role": "user", "content": args.prompt})
+        user_prompt = args.system + "\n\n" + user_prompt
 
     formatted_prompt = mlx_apply_chat_template(
-        processor, config, messages, num_images=n_images
+        processor, config, user_prompt, num_images=n_images
     )
 
     logger.debug("run_single_video_mlx: formatted_prompt length=%d", len(formatted_prompt))
@@ -859,6 +858,8 @@ def run_single_video_mlx(args, model, processor) -> int:
         logger.info("run_single_video_mlx: ✅ before generate: %s", current_time)
         print(f"✅ Before generate: {current_time}")
 
+        # mlx_vlm.generate does not accept repetition_penalty in all versions;
+        # pass only the universally-supported parameters.
         text = mlx_generate(
             model,
             processor,
@@ -866,7 +867,6 @@ def run_single_video_mlx(args, model, processor) -> int:
             frames if frames else None,
             max_tokens=args.max_new_tokens,
             verbose=False,
-            repetition_penalty=args.rep_pen,
         )
 
         if not args.no_think_trim and "</think>" in text:
