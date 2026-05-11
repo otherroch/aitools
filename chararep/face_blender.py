@@ -258,39 +258,40 @@ class FaceBlender:
             ksize3 = max(9, int((x2 - x1) * 0.22)) | 1
             mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize3, ksize3)))
 
-            # ── Radial distance fade to reduce edge flicker ──
-            # Instead of a hard binary mask, compute distance from face
-            # centroid and smoothly ramp alpha to zero at the boundary.
-            # This eliminates the sharp edge transition that causes
-            # frame-to-frame vibration when detection shifts slightly.
-            # The fade is applied very gently: inner 95% of the mask stays at
-            # full strength, with a smooth transition to zero over the
-            # outer 5%. This maximizes swap area while smoothing edges.
+            # ── Distance-transform fade to reduce edge flicker ──
+            # Instead of a radial fade from the face centroid (which
+            # incorrectly reduces alpha at the forehead/eyebrow region
+            # because it is far from the centroid), compute the
+            # signed distance of every pixel from the nearest mask
+            # boundary using a distance transform.  Pixels deep inside
+            # the face stay at full alpha, while only the true mask
+            # perimeter gets a smooth ramp to zero.  This ensures the
+            # full face region (eyebrows, cheeks, chin) is swapped
+            # while still suppressing frame-to-frame vibration at edges.
             mask_f32 = mask.astype(np.float32)
             binary_bool = mask_f32 > 128.0
             if binary_bool.any():
-                coords = np.argwhere(binary_bool)
-                cy, cx = coords[:, 0].mean(), coords[:, 1].mean()
-                # Maximum radius from centroid to any mask pixel
-                dists = np.sqrt(
-                    (np.arange(h)[:, None] - cy) ** 2
-                    + (np.arange(w)[None, :] - cx) ** 2
+                # distanceTransform on the binary mask gives, for each
+                # foreground pixel, its shortest distance to the boundary.
+                # We use CV_DIST_L2 (Euclidean) for a smooth gradient.
+                bin_u8 = binary_bool.astype(np.uint8)
+                dist_map = cv2.distanceTransform(bin_u8, cv2.DIST_L2, 5)
+                # Determine a fade width proportional to the face size
+                # so small and large faces get the same relative smoothness.
+                face_dim = max(face_w, face_h)
+                fade_width = max(4, int(face_dim * 0.04))  # ~4% of face size
+                # Map distance -> alpha:
+                #   distance >= fade_width  -> alpha = 1.0 (full swap)
+                #   distance < fade_width   -> alpha = distance / fade_width
+                #   outside mask            -> alpha = 0.0
+                edge_alpha = np.clip(dist_map / fade_width, 0.0, 1.0)
+                # Combine: inside the mask, modulate original mask values
+                # with the edge alpha; outside, force to zero.
+                mask_f32 = np.where(
+                    binary_bool,
+                    mask_f32 * edge_alpha,
+                    0.0,
                 )
-                max_r = float(dists[binary_bool].max())
-                # Start fading at 95% of max radius so inner 95% stays
-                # fully swapped. Only the outer 5% gets a gentle ramp
-                # to near-zero, minimizing area loss while suppressing flicker.
-                fade_start = max_r * 0.95
-                fade_end = max_r * 1.05
-                fade_range = fade_end - fade_start
-                if fade_range > 0:
-                    radial_alpha = np.clip(
-                        1.0 - (dists - fade_start) / fade_range,
-                        0.0, 1.0,
-                    )
-                    # Only apply radial alpha where the original mask is set
-                    radial_alpha = np.where(binary_bool, radial_alpha, 0.0)
-                    mask_f32 = mask_f32 * radial_alpha
 
             mask = np.clip(mask_f32, 0, 255).astype(np.uint8)
 
