@@ -91,24 +91,23 @@ class FaceBlender:
             pts = landmarks.astype(np.int32)
             hull = cv2.convexHull(pts)
             cv2.fillConvexPoly(mask, hull, 255)
-            # Dilate to include forehead and sides
-            ksize = max(1, int((x2 - x1) * 0.15)) | 1
+            # Dilate to include forehead, cheeks, and sides.
+            # Expanded from 0.15 to 0.25 to cover more of the face edges.
+            ksize = max(1, int((x2 - x1) * 0.25)) | 1
+            mask = cv2.dilate(mask, np.ones((ksize, ksize), np.uint8))
+            # Second dilation pass for even broader coverage
             mask = cv2.dilate(mask, np.ones((ksize, ksize), np.uint8))
             # Fade the mask downward so it does not bleed into beard/chin.
             # Use bbox proportion (stable per-frame) rather than mouth
             # landmark y-position, which shifts as the person talks and
             # causes Poisson-clone flickering when clip_y changes each frame.
             face_h = y2 - y1
-            # Clip the mask at ~82% of the face bbox height, which
-            # empirically lands around the upper chin / jaw line for
-            # typical frontal and three-quarter views. This keeps the
-            # blended region out of beards/chins while preserving cheeks.
-            clip_y = min(h, y1 + int(face_h * 0.82))
-            # Use ~20% of face height as the half-width of the vertical
-            # fade band. This gives a soft transition instead of a hard
-            # edge and scales with face size, while the max() ensures the
-            # fade is at least as wide as the dilation kernel.
-            fade_px = max(ksize // 2 + 1, int(face_h * 0.20))
+            # Expanded vertical coverage: clip at 95% (was 82%) to include
+            # more of the chin and jaw while still fading before hard edges.
+            clip_y = min(h, y1 + int(face_h * 0.95))
+            # Wider fade band (~30% of face height, was 20%) for smoother
+            # transitions at the expanded mask boundaries.
+            fade_px = max(ksize // 2 + 1, int(face_h * 0.30))
             start_fade = max(0, clip_y - fade_px)
             end_fade = min(h, clip_y + fade_px)
             if start_fade < end_fade:

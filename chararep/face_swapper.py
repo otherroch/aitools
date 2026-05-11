@@ -559,8 +559,10 @@ class FaceSwapper:
     ) -> np.ndarray:
         """Composite *crop* back into *frame* using the inverse of *affine_M*.
 
-        A soft alpha mask derived from the valid region of the warped crop is
-        used so that the face_blender stage can later refine the seams.
+        A soft alpha mask is built from the full crop extent, then dilated
+        to expand the swapped region beyond the original crop boundaries so
+        that cheeks, chin, forehead and eyebrows are included rather than
+        leaving visible seams at the crop edge.
 
         Returns the original *frame* unchanged if the affine matrix is
         degenerate (determinant near zero).
@@ -575,13 +577,22 @@ class FaceSwapper:
         warped_back = cv2.warpAffine(
             crop, M_inv, (w, h), flags=cv2.INTER_LINEAR
         )
-        # Build a soft mask covering the face region
+        # Build a soft mask covering the face region, then dilate to
+        # expand the composite area so edges (cheeks, chin, forehead)
+        # are fully replaced instead of leaving seams at crop boundary.
         crop_mask = np.ones(
             (crop.shape[0], crop.shape[1]), dtype=np.float32
         )
         mask = cv2.warpAffine(
             crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR
         )
+        # Dilate the mask in frame space to expand the swap region beyond
+        # the exact crop boundary. Use a kernel proportional to crop size.
+        crop_size = crop.shape[0]
+        dilate_k = max(3, int(crop_size * 0.08) | 1)  # ~8% of crop size
+        mask_uint8 = (mask * 255).astype(np.uint8)
+        mask_uint8 = cv2.dilate(mask_uint8, np.ones((dilate_k, dilate_k), np.uint8))
+        mask = mask_uint8.astype(np.float32) / 255.0
         mask = cv2.GaussianBlur(mask, (5, 5), 0)
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
         result = (
