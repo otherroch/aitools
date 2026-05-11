@@ -110,10 +110,9 @@ class FaceBlender:
             # above and slightly outside the eyes to capture the full
             # brow arch, then two more points higher to reach the
             # forehead/hairline region.
-            # Increased offsets to ensure eyebrows are fully within the mask
-            # so they get swapped (not left as original skin).
-            brow_offset_y = face_h * 0.18  # was 0.12, increased for full brow coverage
-            brow_spread_x = face_w * 0.15  # was 0.10, wider for full brow arch
+            # Aggressive offsets to ensure full eyebrow + cheek coverage.
+            brow_offset_y = face_h * 0.28  # significantly increased for full brow + forehead
+            brow_spread_x = face_w * 0.25  # significantly wider for full brow arch
             left_eye = pts[0]
             right_eye = pts[1]
 
@@ -141,8 +140,8 @@ class FaceBlender:
             nose = pts[2]
 
             # Jaw points: extend mouth corners outward and downward
-            jaw_extend_x = face_w * 0.15  # was 0.12, wider for cheeks
-            jaw_extend_y = face_h * 0.18  # was 0.15, deeper for jawline
+            jaw_extend_x = face_w * 0.28  # aggressively wider for full cheeks
+            jaw_extend_y = face_h * 0.25  # aggressively deeper for full jawline
             jaw_left = np.array([mouth_left[0] - jaw_extend_x,
                                  mouth_left[1] + jaw_extend_y])
             jaw_right = np.array([mouth_right[0] + jaw_extend_x,
@@ -167,19 +166,25 @@ class FaceBlender:
             hull = cv2.convexHull(expanded_pts)
             cv2.fillConvexPoly(mask, hull, 255)
 
-            # Mild dilation to ensure no hairline gaps
-            ksize = max(3, int((x2 - x1) * 0.06)) | 1
+            # Aggressive multi-directional dilation to eliminate gaps
+            # and expand the mask well beyond the landmark hull
+            ksize = max(5, int((x2 - x1) * 0.12)) | 1
             mask = cv2.dilate(mask, np.ones((ksize, ksize), np.uint8))
+            # Second pass for even wider coverage
+            ksize2 = max(7, int((x2 - x1) * 0.18)) | 1
+            mask = cv2.dilate(mask, np.ones((ksize2, ksize2), np.uint8))
+            # Third pass with elliptical kernel for smooth expansion
+            ksize3 = max(9, int((x2 - x1) * 0.22)) | 1
+            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize3, ksize3)))
 
             # ── Radial distance fade to reduce edge flicker ──
             # Instead of a hard binary mask, compute distance from face
             # centroid and smoothly ramp alpha to zero at the boundary.
             # This eliminates the sharp edge transition that causes
             # frame-to-frame vibration when detection shifts slightly.
-            # The fade is applied gently: inner 90% of the mask stays at
+            # The fade is applied very gently: inner 95% of the mask stays at
             # full strength, with a smooth transition to zero over the
-            # outer 10%.  This keeps the swap area wide while smoothing
-            # only the very edges where flicker occurs.
+            # outer 5%. This maximizes swap area while smoothing edges.
             mask_f32 = mask.astype(np.float32)
             binary_bool = mask_f32 > 128.0
             if binary_bool.any():
@@ -191,12 +196,11 @@ class FaceBlender:
                     + (np.arange(w)[None, :] - cx) ** 2
                 )
                 max_r = float(dists[binary_bool].max())
-                # Start fading at 90% of max radius so inner 90% stays
-                # fully swapped.  Only the outer 10% gets a gentle
-                # ramp to near-zero, which suppresses edge flicker
-                # without shrinking the visible swap area.
-                fade_start = max_r * 0.90
-                fade_end = max_r * 1.02
+                # Start fading at 95% of max radius so inner 95% stays
+                # fully swapped. Only the outer 5% gets a gentle ramp
+                # to near-zero, minimizing area loss while suppressing flicker.
+                fade_start = max_r * 0.95
+                fade_end = max_r * 1.05
                 fade_range = fade_end - fade_start
                 if fade_range > 0:
                     radial_alpha = np.clip(
@@ -215,13 +219,15 @@ class FaceBlender:
             cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
 
         # Erode to pull the mask inward slightly (prevents border artefacts)
+        # Use 0 erosion to maximize swap area - rely on blur for edge smoothness
         if self._erode_px > 0:
             kernel = np.ones(
                 (self._erode_px * 2 + 1, self._erode_px * 2 + 1), np.uint8
             )
             mask = cv2.erode(mask, kernel)
 
-        # Heavy Gaussian feather for smooth alpha blending
+        # Very heavy Gaussian feather for ultra-smooth alpha blending
+        # Larger kernel = wider transition zone = less edge flicker
         if self._blur_k > 0:
             k = self._blur_k | 1
             mask = cv2.GaussianBlur(mask, (k, k), 0)

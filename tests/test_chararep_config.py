@@ -62,8 +62,8 @@ class TestPipelineConfigDefaults:
         assert cfg.output_quality == 18
         assert cfg.copy_audio is True
         assert cfg.blend_mode == "seamless"
-        assert cfg.mask_blur_kernel == 31
-        assert cfg.mask_erode_pixels == 2
+        assert cfg.mask_blur_kernel == 41
+        assert cfg.mask_erode_pixels == 1
         assert cfg.log_level == "INFO"
         assert cfg.log_file is None
 

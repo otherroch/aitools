@@ -62,8 +62,8 @@ class PipelineConfig:
 
     # ── Blending ─────────────────────────────────────────────────────────
     blend_mode: str = "seamless"  # "seamless" (hybrid Poisson+alpha) or "alpha"
-    mask_blur_kernel: int = 31  # Gaussian blur for mask edges (wider for smoother transitions)
-    mask_erode_pixels: int = 2  # erode mask to avoid boundary artifacts (reduced for wider swap area)
+    mask_blur_kernel: int = 41  # Gaussian blur for mask edges (very wide for ultra-smooth transitions)
+    mask_erode_pixels: int = 1  # minimal erosion to maximize swap area while preventing hard edges
 
     # ── Logging ──────────────────────────────────────────────────────────
     log_level: str = "INFO"
