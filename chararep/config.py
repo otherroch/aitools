@@ -61,9 +61,9 @@ class PipelineConfig:
     copy_audio: bool = True  # mux original audio into output
 
     # ── Blending ─────────────────────────────────────────────────────────
-    blend_mode: str = "alpha"  # "seamless" (Poisson) or "alpha"
-    mask_blur_kernel: int = 15  # Gaussian blur for mask edges
-    mask_erode_pixels: int = 2  # erode mask to avoid boundary artifacts
+    blend_mode: str = "seamless"  # "seamless" (hybrid Poisson+alpha) or "alpha"
+    mask_blur_kernel: int = 31  # Gaussian blur for mask edges (wider for smoother transitions)
+    mask_erode_pixels: int = 2  # erode mask to avoid boundary artifacts (reduced for wider swap area)
 
     # ── Logging ──────────────────────────────────────────────────────────
     log_level: str = "INFO"
