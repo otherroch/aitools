@@ -1,0 +1,27 @@
+The chararep application does not properly replace faces in videos. The is one or more functional problems which cause this.
+Please analyse the chararep application and focus on the face swapper code (chararep/face_swapper.py). 
+
+What I see is a partial replacement of the existing face. The eyes, nose and mouth are mostly replaced. 
+But the edges of the face, such as, cheeks, chin, eyebrows and forehead are not replaced. 
+Perhaps the swap area should be expanded ?
+
+Please propose a path forward to fix the problem or improve face swapping. 
+I expect some solid code changes that will make a difference. 
+
+The branch contains a sample data in aitools/test1 which can be executed with:
+
+cd test1
+chararep -i in\roch.mp4 -o out\out.mp4 --char Roch Lin  --timers  --dump-config                                                  
+
+
+I can help verify if your changes have positive effects. 
+
+Where,
+
+ -  test1\in\roch.mp4 is the input video with 478 frames. 
+ -  test1\out\out*.mo4 are example output videos.
+ -  test1\Roch and test1\Lin are reference portrait libraries
+ -  --help will give you all the options
+ -  -v will give you debug traccing logs.
+
+Please investigate. 
