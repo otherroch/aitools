@@ -564,6 +564,11 @@ class FaceSwapper:
         that cheeks, chin, forehead and eyebrows are included rather than
         leaving visible seams at the crop edge.
 
+        To avoid black-border artefacts when the dilated mask extends past
+        the warped crop, ``cv2.BORDER_REPLICATE`` is used so that pixels
+        outside the crop are filled with edge pixels from the swapped face
+        instead of black.
+
         Returns the original *frame* unchanged if the affine matrix is
         degenerate (determinant near zero).
         """
@@ -575,7 +580,8 @@ class FaceSwapper:
             return frame
         M_inv = cv2.invertAffineTransform(affine_M)
         warped_back = cv2.warpAffine(
-            crop, M_inv, (w, h), flags=cv2.INTER_LINEAR
+            crop, M_inv, (w, h), flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
         )
         # Build a soft mask covering the face region, then dilate to
         # expand the composite area so edges (cheeks, chin, forehead)
