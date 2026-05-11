@@ -111,7 +111,9 @@ class FaceBlender:
             # brow arch, then two more points higher to reach the
             # forehead/hairline region.
             # Aggressive offsets to ensure full eyebrow + cheek coverage.
-            brow_offset_y = face_h * 0.28  # significantly increased for full brow + forehead
+            # 0.42 pushes forehead points well into the hairline region
+            # so eyebrows are fully included in the swapped area.
+            brow_offset_y = face_h * 0.42
             brow_spread_x = face_w * 0.25  # significantly wider for full brow arch
             left_eye = pts[0]
             right_eye = pts[1]
@@ -132,6 +134,69 @@ class FaceBlender:
             forehead_right = np.array([right_eye[0] + brow_spread_x * 1.2,
                                        right_eye[1] - brow_offset_y * 2.0])
 
+            # ── Additional forehead/temple/ear points ──
+            # 14 points per side (28 total) to cover the full forehead,
+            # temples, sideburns, and upper-cheek region.  These fill
+            # gaps between the 5-point landmarks and the synthesized
+            # eyebrow/forehead points, ensuring the convex hull spans
+            # from jaw to hairline on each side.
+            mouth_left = pts[3]
+            mouth_right = pts[4]
+            nose = pts[2]
+            temple_y = eye_mid_y - face_h * 0.15
+            brow2_y = eye_mid_y - face_h * 0.35
+            hairline_y = forehead_center[1] - face_h * 0.15
+            sideburn_y = mouth_left[1] + face_h * 0.05
+
+            # Left side (7 points): temple, brow-arch, forehead-edge,
+            # hairline-left, sideburn, upper-cheek, mid-temple
+            left_temple = np.array([left_eye[0] - face_w * 0.45, temple_y])
+            left_brow_arch = np.array([left_eye[0] - face_w * 0.35, brow2_y])
+            left_forehead_edge = np.array([
+                left_eye[0] - face_w * 0.50,
+                left_eye[1] - brow_offset_y * 1.5,
+            ])
+            left_hairline = np.array([
+                eye_mid_x - face_w * 0.40,
+                hairline_y,
+            ])
+            left_sideburn = np.array([
+                left_eye[0] - face_w * 0.55,
+                sideburn_y,
+            ])
+            left_upper_cheek = np.array([
+                left_eye[0] - face_w * 0.30,
+                left_eye[1] - face_h * 0.02,
+            ])
+            left_mid_temple = np.array([
+                left_eye[0] - face_w * 0.40,
+                (temple_y + brow2_y) / 2.0,
+            ])
+
+            # Right side (7 points): mirror of left side
+            right_temple = np.array([right_eye[0] + face_w * 0.45, temple_y])
+            right_brow_arch = np.array([right_eye[0] + face_w * 0.35, brow2_y])
+            right_forehead_edge = np.array([
+                right_eye[0] + face_w * 0.50,
+                right_eye[1] - brow_offset_y * 1.5,
+            ])
+            right_hairline = np.array([
+                eye_mid_x + face_w * 0.40,
+                hairline_y,
+            ])
+            right_sideburn = np.array([
+                right_eye[0] + face_w * 0.55,
+                sideburn_y,
+            ])
+            right_upper_cheek = np.array([
+                right_eye[0] + face_w * 0.30,
+                right_eye[1] - face_h * 0.02,
+            ])
+            right_mid_temple = np.array([
+                right_eye[0] + face_w * 0.40,
+                (temple_y + brow2_y) / 2.0,
+            ])
+
             # ── Synthesise jawline/cheek points ──
             # Extend the hull outward along the jaw to cover cheeks and
             # chin more fully.
@@ -151,6 +216,8 @@ class FaceBlender:
                              mouth_left[1] + jaw_extend_y * 1.4])
 
             # ── Build expanded convex hull ──
+            # 5 original + 5 brow/forehead + 28 temple/cheek/hairline + 3 jaw
+            # = 41 total points for a tight convex hull
             expanded_pts = np.vstack([
                 pts,            # original 5 landmarks
                 left_brow,
@@ -158,6 +225,20 @@ class FaceBlender:
                 forehead_center,
                 forehead_left,
                 forehead_right,
+                left_temple,
+                left_brow_arch,
+                left_forehead_edge,
+                left_hairline,
+                left_sideburn,
+                left_upper_cheek,
+                left_mid_temple,
+                right_temple,
+                right_brow_arch,
+                right_forehead_edge,
+                right_hairline,
+                right_sideburn,
+                right_upper_cheek,
+                right_mid_temple,
                 jaw_left,
                 jaw_right,
                 chin,

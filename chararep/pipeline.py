@@ -52,7 +52,7 @@ class CharacterReplacementPipeline:
         log_gpu_info()
         warmup_cuda(cfg.device_id)
 
-        logger.info("Initialising pipeline components...")
+        logger.info("Initialising pipeline components. ..")
 
         # Detector owns the shared FaceBackend instance
         self._detector = FaceDetector(cfg)
@@ -62,6 +62,9 @@ class CharacterReplacementPipeline:
         self._enhancer = FaceEnhancer(cfg)
         self._blender = FaceBlender(cfg)
 
+        # Temporal smoothing state: previous blended frame for EMA
+        self._prev_frame: np.ndarray | None = None
+
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
             "All pipeline components ready.  GPU memory: %.2f / %.2f GB",
@@ -69,7 +72,7 @@ class CharacterReplacementPipeline:
             total,
         )
 
-    # ── public entry point ───────────────────────────────────────────────
+    # ── public entry point ────────────────────────────────────────────
 
     def run(self) -> dict:
         """Process the entire video and return run statistics."""
@@ -136,7 +139,7 @@ class CharacterReplacementPipeline:
 
         return stats
 
-    # ── sequential processing ────────────────────────────────────────────
+    # ── sequential processing ───────────────────────────────────────────
 
     def _run_sequential(self, reader, writer, stats: dict, t0: float) -> None:
         """Process frames one at a time (batch_size=1)."""
@@ -150,7 +153,7 @@ class CharacterReplacementPipeline:
                     frame_idx + 1, reader.total_frames, t0, stats
                 )
 
-    # ── parallel processing ──────────────────────────────────────────────
+    # ── parallel processing ───────────────────────────────────────────
 
     def _run_parallel(self, reader, writer, stats: dict, t0: float) -> None:
         """Process frames with a thread pool.
@@ -218,7 +221,7 @@ class CharacterReplacementPipeline:
             self._log_progress(frame_count, total_frames, t0, stats)
         return frame_count
 
-    # ── per-frame processing ─────────────────────────────────────────────
+    # ── per-frame processing ───────────────────────────────────────────
 
     def _process_frame(
         self,
@@ -282,7 +285,7 @@ class CharacterReplacementPipeline:
                 logger.debug("Target '%s' has no reference faces", tf.identity_label)
                 continue
 
-            logger.debug("Track %d → target '%s' with %d reference faces", tf.track_id, target.label, len(target.reference_faces))
+            logger.debug("Track %d -> target '%s' with %d reference faces", tf.track_id, target.label, len(target.reference_faces))
 
             swap_pairs.append((tf.face_obj, target.reference_faces[0]))
 
@@ -341,6 +344,20 @@ class CharacterReplacementPipeline:
             result = self._enhancer.enhance_faces(result, tracked_faces, frame_idx)
             local["enhance"] = time.perf_counter() - _t
 
+        # 7. Temporal smoothing: exponential moving average to reduce
+        #    frame-to-frame jitter.  Blends the current result with the
+        #    previous frame using alpha from config.
+        alpha = self._cfg.temporal_smooth_alpha
+        if alpha > 0.0 and frame_idx > 0:
+            if self._prev_frame is None:
+                self._prev_frame = result.copy()
+            # EMA: smoothed = alpha * current + (1 - alpha) * previous
+            result = (
+                result.astype(np.float32) * alpha
+                + self._prev_frame.astype(np.float32) * (1.0 - alpha)
+            ).astype(np.uint8)
+            self._prev_frame = result.copy()
+
         return result, local
 
     @staticmethod
@@ -353,8 +370,6 @@ class CharacterReplacementPipeline:
             timers["swap"] += local["swap"]
             timers["blend"] += local["blend"]
             timers["enhance"] += local["enhance"]
-
-    # ── helpers ──────────────────────────────────────────────────────────
 
     @staticmethod
     def _log_timer_distribution(timers: dict) -> None:
