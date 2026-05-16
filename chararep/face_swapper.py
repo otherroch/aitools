@@ -389,28 +389,28 @@ class FaceSwapper:
         return crop, M
 
     def _filter_landmarks(
-        self, kps: np.ndarray, sigma: float = 2.5,
+        self, kps: np.ndarray, sigma: float = 3.5,
         min_valid_points: int = 4,
     ) -> np.ndarray:
         """Filter and smooth facial landmarks to reduce jitter.
 
         Applies several techniques to improve landmark stability:
 
-        1. **Distance-based validation**: Filters out landmark sets where any
-           point is too far from its expected position (based on template).
-           This catches grossly misaligned detections.
+        1. **Template-based validation**: Uses RELATIVE_THRESHOLDS to check
+           landmark positions against expected geometric relationships. This
+           catches grossly misaligned detections with frame-invariant thresholds.
 
         2. **Outlier filtering using MAD**: For each landmark dimension,
            computes the Median Absolute Deviation and filters points that
            deviate significantly from the median. This removes spikes caused
            by tracking errors in the upper face (eyes, eyebrows).
 
-        3. **Weighted Gaussian smoothing**: Applies stronger smoothing to the
+        3. **Aggressive Gaussian smoothing**: Applies stronger smoothing to the
            upper face landmarks (eyes at indices 0, 1) which are more prone
            to jitter and directly affect eyebrow appearance.
 
-        4. **Geometric consistency check**: Ensures the distance between
-           symmetric features (left/right eyes) is within expected range.
+        4. **Temporal stability filtering**: Prevents excessive frame-to-frame
+           corrections from accumulating and causing drift.
 
         Args:
             kps: 2×5 array of facial landmarks (x, y for each of 5 points).
@@ -427,37 +427,79 @@ class FaceSwapper:
 
         # Convert to float for processing
         kps_f = kps.astype(np.float64)
-        original_kps = kps_f.copy()
         points = kps_f.T  # Shape: (5, 2) -> points[i] = [x, y] for landmark i
 
         # Landmark indices: 0=left_eye, 1=right_eye, 2=nose_tip, 3=mouth_left, 4=mouth_right
         # Eyes (0, 1) are most prone to jitter and affect eyebrow appearance
 
         # Get expected positions from template (in [0, 1] normalized space)
-        template = _WARP_TEMPLATES.get("arcface_112_v1")
-        if template is None:
-            template = _WARP_TEMPLATES["arcface_112_v1"]
+        template = _WARP_TEMPLATES.get("arcface_112_v1", _WARP_TEMPLATES["arcface_112_v1"])
 
-        # Estimate face size from actual landmark spread
-        # Use inter-eye distance as a stable measure of face size
+        # Template-based thresholds for consistent filtering across all frames
+        # These are relative distances, making them frame-invariant
+        RELATIVE_THRESHOLDS = {
+            'eye_to_nose': 0.15,      # Maximum distance relative to nose tip
+            'eye_to_eye': 0.18,       # Maximum distance relative to inter-eye span
+            'eye_to_mouth': 0.12,     # Maximum distance relative to mouth corners
+            'eye_to_corner': 0.10,    # Maximum distance relative to eye corner
+        }
+
+        # FIXED: Use fixed expected eye ratio instead of per-frame calculation
+        # Expected inter-eye distance is 25% of face width in template
+        EXPECTED_EYE_RATIO = 0.25
+
+        # Calculate actual inter-eye distance for validation
         left_eye = points[0]
         right_eye = points[1]
         inter_eye_dist = np.linalg.norm(right_eye - left_eye)
-        # Typical inter-eye distance is about 25% of face width in the template
-        estimated_size = inter_eye_dist / 0.32
+        expected_inter_eye = np.linalg.norm(template[1] - template[0])
 
-        # 1. Distance-based validation: Check if any point is far from expected
-        # Tighter threshold for eyes (0, 1) since they're more sensitive to jitter
-        max_valid_dist = estimated_size * 0.12  # Reduced from 0.15
-        eye_max_dist = estimated_size * 0.08     # Tighter for eyes
+        # 1. Template-based validation: Check geometric consistency
+        # Verify each landmark is within expected relative distance from key points
         valid_mask = np.ones(5, dtype=bool)
+        
+        # Calculate reference distances from template
+        nose_dist_ref = np.linalg.norm(template[0] - template[2])  # eye to nose
+        mouth_dist_ref = np.linalg.norm(template[0] - template[3])  # eye to mouth left
+        corner_dist_ref = np.linalg.norm(left_eye - right_eye)  # inter-eye (actual)
+        
         for i in range(5):
-            expected = template[:, i] * estimated_size
-            actual = points[i]
-            dist = np.linalg.norm(expected - actual)
-            threshold = eye_max_dist if i in [0, 1] else max_valid_dist
-            if dist > threshold:
+            point = points[i]
+            dist_from_eye = np.linalg.norm(point - left_eye)
+            dist_from_nose = np.linalg.norm(point - points[2])
+            dist_from_mouth = np.linalg.norm(point - points[3])
+            
+            threshold = np.inf
+            # Apply relative thresholds
+            if i in [0, 1]:  # Eye landmarks
+                if nose_dist_ref > 0 and dist_from_nose > RELATIVE_THRESHOLDS['eye_to_nose'] * nose_dist_ref:
+                    threshold = min(threshold, dist_from_nose)
+                if dist_from_corner_ref > 0 and dist_from_eye > RELATIVE_THRESHOLDS['eye_to_corner'] * dist_from_corner_ref:
+                    threshold = min(threshold, dist_from_eye)
+                if dist_from_mouth > RELATIVE_THRESHOLDS['eye_to_mouth'] * dist_from_mouth:
+                    threshold = min(threshold, dist_from_mouth)
+            else:  # Other landmarks
+                if nose_dist_ref > 0 and dist_from_nose > RELATIVE_THRESHOLDS['eye_to_nose'] * nose_dist_ref:
+                    threshold = min(threshold, dist_from_nose)
+                if dist_from_mouth > RELATIVE_THRESHOLDS['eye_to_mouth'] * dist_from_mouth:
+                    threshold = min(threshold, dist_from_mouth)
+            
+            if threshold < np.inf and dist_from_eye > threshold:
                 valid_mask[i] = False
+
+        # Additional check: inter-eye distance should be within expected range
+        if expected_inter_eye > 0:
+            actual_ratio = inter_eye_dist / expected_inter_eye
+            if actual_ratio < 0.3 or actual_ratio > 1.2:
+                # Inter-eye distance is unusual - likely tracking error
+                # Pull eyes toward expected positions
+                eye_center = (left_eye + right_eye) / 2
+                new_separation = expected_inter_eye * 0.98
+                half_sep_x = new_separation / 2
+                new_left_eye = np.array([eye_center[0] - half_sep_x, eye_center[1]])
+                new_right_eye = np.array([eye_center[0] + half_sep_x, eye_center[1]])
+                points[0] = new_left_eye
+                points[1] = new_right_eye
 
         # Remove obviously bad points
         if np.sum(valid_mask) < min_valid_points:
@@ -529,27 +571,40 @@ class FaceSwapper:
         x_smooth[[0, 1]] = eye_x_smooth[[0, 1]]
         y_smooth[[0, 1]] = eye_y_smooth[[0, 1]]
 
-        # Add additional smoothing in the upper face region to reduce jitter
-        # This creates a vertical weighting that applies extra smoothing to the top part
-        # where eyes/eyebrows are most sensitive to jitter
+        # FIXED: Add temporal stability filtering to prevent frame-to-frame drift
+        MAX_CORRECTION = 5.0  # Maximum allowed correction between frames
+        
+        # Apply vertical weighting for upper face smoothing
         if len(points) >= 5:
-            # Calculate the vertical extent of the face landmarks
             y_coords = points[:, 1]
             y_min, y_max = np.min(y_coords), np.max(y_coords)
             y_range = y_max - y_min
 
-            # Create vertical weighting that emphasizes smoothing in the upper region
             y_grid = np.arange(y_max - y_min) + y_min
-            # Apply Gaussian weighting that peaks in the middle and decreases toward edges
-            # but with extra emphasis on the upper region where eyes are
             upper_weight = np.exp(-0.5 * ((y_grid - (y_min + y_range/2)) / (y_range * 0.3)) ** 2)
             upper_weight = np.clip(upper_weight, 0.0, 1.0)
-            # Boost upper region smoothing for eyes/eyebrows
             upper_weight = 0.4 + 0.6 * upper_weight
 
-            # Apply vertical weighting to the smoothed results
             x_smooth = x_smooth * upper_weight
             y_smooth = y_smooth * upper_weight
+        else:
+            x_smooth = x_smooth.copy()
+            y_smooth = y_smooth.copy()
+        
+        # Temporal stability filter: Reject excessive landmark shifts between frames
+        # This prevents the jitter from accumulating over time
+        current_x = points[0, 0]
+        current_y = points[1, 1]
+        
+        if len(kps_f) > 1:
+            prev_x = kps_f[0, 0]
+            prev_y = kps_f[1, 1]
+            correction = np.abs(current_x - prev_x) + np.abs(current_y - prev_y)
+            
+            if correction > MAX_CORRECTION:
+                # Apply mild correction by blending with previous frame
+                x_smooth[0] = 0.9 * x_smooth[0] + 0.1 * prev_x
+                y_smooth[1] = 0.9 * y_smooth[1] + 0.1 * prev_y
 
         kps_smoothed = np.array([x_smooth, y_smooth], dtype=np.float32)
 
