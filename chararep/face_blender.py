@@ -278,13 +278,17 @@ class FaceBlender:
                 dist_map = cv2.distanceTransform(bin_u8, cv2.DIST_L2, 5)
                 # Determine a fade width proportional to the face size
                 # so small and large faces get the same relative smoothness.
+                # SIGNIFICANTLY INCREASED fade width for upper face to
+                # eliminate jitter in eyes/eyebrows region.
                 face_dim = max(face_w, face_h)
-                fade_width = max(6, int(face_dim * 0.09))  # ~9% of face size (increased from 6%)
-                # Map distance -> alpha:
-                #   distance >= fade_width  -> alpha = 1.0 (full swap)
-                #   distance < fade_width   -> alpha = distance / fade_width
-                #   outside mask            -> alpha = 0.0
-                edge_alpha = np.clip(dist_map / fade_width, 0.0, 1.0)
+                fade_width = max(12, int(face_dim * 0.15))  # ~15% of face size (increased from 9%)
+                # Use a SMOOTHSTEP curve instead of linear ramp for
+                # much gentler transition at the edges. This dramatically
+                # reduces frame-to-frame jitter since small boundary
+                # shifts produce much smaller alpha changes.
+                # smoothstep(t) = t^2 * (3 - 2t) for t in [0, 1]
+                t = np.clip(dist_map / fade_width, 0.0, 1.0)
+                edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep curve
                 # Combine: inside the mask, modulate original mask values
                 # with the edge alpha; outside, force to zero.
                 mask_f32 = np.where(
@@ -421,22 +425,27 @@ class FaceBlender:
         if binary.any():
             # Distance transform: each pixel gets its distance to the mask boundary
             dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-            # Fade width proportional to face size for consistent smoothing
+            # SIGNIFICANTLY INCREASED fade width for upper face region
+            # to eliminate jitter in eyes/eyebrows area.
             coords_y, coords_x = np.where(binary > 0)
             if len(coords_y) > 0:
                 face_h = coords_y.max() - coords_y.min()
                 face_w = coords_x.max() - coords_x.min()
                 face_dim = max(face_h, face_w)
-                fade_width = max(8, int(face_dim * 0.12))
+                fade_width = max(14, int(face_dim * 0.18))  # ~18% (increased from 12%)
             else:
-                fade_width = 10
-            # Create smooth alpha ramp: 1.0 at center, fading to 0 at edges
-            edge_alpha = np.clip(dist / fade_width, 0.0, 1.0)
+                fade_width = 16
+            # Use SMOOTHSTEP curve for much gentler edge transition.
+            # This dramatically reduces jitter since small boundary shifts
+            # produce much smaller alpha changes near the edge.
+            t = np.clip(dist / fade_width, 0.0, 1.0)
+            edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep: t^2*(3-2t)
             # Combine: inside the mask, use distance-based alpha
             mask_f32 = np.where(binary, edge_alpha, 0.0)
         
         # Apply additional Gaussian blur for ultra-smooth transitions
-        mask_f32 = cv2.GaussianBlur(mask_f32, (7, 7), 0)
+        # Increased kernel size for more smoothing in upper face region
+        mask_f32 = cv2.GaussianBlur(mask_f32, (11, 11), 0)
         mask_f32 = np.clip(mask_f32, 0, 1)
         
         # Set the inner region (Poisson result) to full alpha

@@ -764,7 +764,7 @@ class FaceSwapper:
         dilate_k = max(9, int(crop_size * 0.18) | 1)  # ~18% of crop size (increased for smoother edges)
         mask_uint8 = (mask * 255).astype(np.uint8)
         mask_uint8 = cv2.dilate(mask_uint8, np.ones((dilate_k, dilate_k), np.uint8))
-        
+
         # Apply distance transform for smooth edge fading
         # This reduces jitter by creating a smooth gradient from center to edge
         mask_f32 = mask_uint8.astype(np.float32) / 255.0
@@ -773,20 +773,51 @@ class FaceSwapper:
             # Distance transform: each pixel gets its distance to the mask boundary
             dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
             # Fade width proportional to face size for consistent smoothing
-            fade_width = max(10, int(crop_size * 0.15))  # Increased for smoother upper face blending
-            
+            fade_width = max(14, int(crop_size * 0.22))  # Increased for smoother upper face blending
+
             # Create smooth alpha ramp: 1.0 at center, fading to 0 at edges
             alpha = np.clip(dist / fade_width, 0.0, 1.0)
-            
-            # Apply additional smoothing in the upper face region (eyes/eyebrows)
-            # to reduce jitter in that area - use a larger kernel for more smoothing
+
+            # Apply smoothstep curve for ultra-smooth falloff near edges.
+            # smoothstep(t) = 3t^2 - 2t^3  (zero derivative at endpoints)
+            # This creates a much gentler slope at the boundary than a linear
+            # ramp, which significantly reduces high-frequency jitter at the
+            # composite edge -- especially noticeable around eyes/eyebrows.
+            alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+
+            # Apply vertical position weighting: extra smoothing in upper face
+            # The eyes/eyebrows region (upper 50% of the mask) gets an
+            # additional gaussian-weighted mask so alpha drops off faster
+            # near the forehead/temple boundary, further reducing jitter.
+            coords_y, coords_x = np.where(binary > 0)
+            if len(coords_y) > 0:
+                mask_top = coords_y.min()
+                mask_mid_y = (coords_y.min() + coords_y.max()) / 2.0
+                # Build a vertical Gaussian that peaks at mask center and
+                # drops toward the top (forehead) edge where jitter is worst.
+                y_grid = np.arange(h).reshape(h, 1)
+                # sigma proportional to mask height for consistent behavior
+                mask_height = coords_y.max() - coords_y.min()
+                vert_sigma = max(20, mask_height * 0.3)
+                # Shift center slightly downward so the upper half gets
+                # stronger attenuation.
+                vert_center = mask_mid_y + mask_height * 0.15
+                vert_weight = np.exp(-0.5 * ((y_grid - vert_center) / vert_sigma) ** 2)
+                # Only attenuate (reduce alpha), never boost it.
+                vert_weight = np.clip(vert_weight, 0.0, 1.0)
+                # Scale the vertical weight so it has moderate effect (~0.6 to 1.0)
+                vert_weight = 0.4 + 0.6 * vert_weight
+                alpha = alpha * vert_weight
+
             mask = alpha
         else:
             mask = mask_f32
-        
+
         # Very heavy Gaussian blur for ultra-smooth transitions
         # Larger kernel for smoother blending, especially in the upper face region
-        mask = cv2.GaussianBlur(mask, (9, 9), 0)
+        mask = cv2.GaussianBlur(mask, (15, 15), 0)
+        # Second blur pass for even wider smoothing
+        mask = cv2.GaussianBlur(mask, (11, 11), 0)
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
         result = (
             frame.astype(np.float32) * (1.0 - mask)
