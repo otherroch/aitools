@@ -69,7 +69,7 @@ class FaceBlender:
         # edge transitions and can cause flickering
         if self._mode == "seamless":
             # Apply extra smoothing to the combined mask for seamless blending
-            combined_mask = cv2.GaussianBlur(combined_mask, (11, 11), 0)
+            combined_mask = cv2.GaussianBlur(combined_mask, (21, 21), 0)
             
             # Apply even more aggressive smoothing specifically to the upper face region
             # to reduce jitter in eyes and eyebrows
@@ -79,13 +79,13 @@ class FaceBlender:
                 mask_height = coords_y.max() - coords_y.min()
                 mask_center_y = (coords_y.min() + coords_y.max()) / 2
                 
-                # Apply stronger smoothing to upper 30% of the face where eyes/eyebrows are
-                upper_region_end = int(coords_y.min() + mask_height * 0.3)
+                # Apply stronger smoothing to upper 40% of the face where eyes/eyebrows are
+                upper_region_end = int(coords_y.min() + mask_height * 0.4)
                 if upper_region_end > 0:
                     # Extract upper region
                     upper_mask = combined_mask[:upper_region_end, :]
                     # Apply even stronger blur to upper region
-                    upper_smoothed = cv2.GaussianBlur(upper_mask, (15, 15), 0)
+                    upper_smoothed = cv2.GaussianBlur(upper_mask, (25, 25), 0)
                     combined_mask[:upper_region_end, :] = upper_smoothed
 
         if self._mode == "seamless":
@@ -371,18 +371,18 @@ class FaceBlender:
             # This helps reduce the high-frequency jitter in these sensitive areas
             if len(coords_y) > 0:
                 # Calculate upper region to apply extra smoothing
-                upper_region_end = coords_y.min() + int((coords_y.max() - coords_y.min()) * 0.3)
+                upper_region_end = coords_y.min() + int((coords_y.max() - coords_y.min()) * 0.4)
                 if upper_region_end > 0 and upper_region_end < h:
                     # Extract upper region
                     upper_mask = mask[:upper_region_end, :]
                     # Apply extra smoothing to upper region
                     # Ensure kernel size is valid (at least 1 and odd)
-                    extra_k = k * 2
-                    if extra_k < 1:
-                        extra_k = 1
-                    extra_k = extra_k | 1  # Ensure it's odd
-                    upper_smoothed = cv2.GaussianBlur(upper_mask, (extra_k, extra_k), 0)
-                    mask[:upper_region_end, :] = upper_smoothed
+            extra_k = k * 3
+            if extra_k < 1:
+                extra_k = 1
+            extra_k = extra_k | 1  # Ensure it's odd
+            upper_smoothed = cv2.GaussianBlur(upper_mask, (extra_k, extra_k), 0)
+            mask[:upper_region_end, :] = upper_smoothed
 
         return mask
 
