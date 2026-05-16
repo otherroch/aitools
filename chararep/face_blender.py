@@ -370,19 +370,19 @@ class FaceBlender:
             # Apply even more aggressive smoothing in the upper region where eyes/eyebrows are
             # This helps reduce the high-frequency jitter in these sensitive areas
             if len(coords_y) > 0:
-            # Calculate upper region to apply extra smoothing
-            upper_region_end = coords_y.min() + int((coords_y.max() - coords_y.min()) * 0.3)
-            if upper_region_end > 0 and upper_region_end < h:
-                # Extract upper region
-                upper_mask = mask[:upper_region_end, :]
-                # Apply extra smoothing to upper region
-                # Ensure kernel size is valid (at least 1 and odd)
-                extra_k = k * 2
-                if extra_k < 1:
-                    extra_k = 1
-                extra_k = extra_k | 1  # Ensure it's odd
-            upper_smoothed = cv2.GaussianBlur(upper_mask, (extra_k, extra_k), 0)
-            mask[:upper_region_end, :] = upper_smoothed
+                # Calculate upper region to apply extra smoothing
+                upper_region_end = coords_y.min() + int((coords_y.max() - coords_y.min()) * 0.3)
+                if upper_region_end > 0 and upper_region_end < h:
+                    # Extract upper region
+                    upper_mask = mask[:upper_region_end, :]
+                    # Apply extra smoothing to upper region
+                    # Ensure kernel size is valid (at least 1 and odd)
+                    extra_k = k * 2
+                    if extra_k < 1:
+                        extra_k = 1
+                    extra_k = extra_k | 1  # Ensure it's odd
+                    upper_smoothed = cv2.GaussianBlur(upper_mask, (extra_k, extra_k), 0)
+                    mask[:upper_region_end, :] = upper_smoothed
 
         return mask
 
