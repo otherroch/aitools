@@ -389,7 +389,7 @@ class FaceSwapper:
         return crop, M
 
     def _filter_landmarks(
-        self, kps: np.ndarray, sigma: float = 1.5,
+        self, kps: np.ndarray, sigma: float = 2.5,
         min_valid_points: int = 4,
     ) -> np.ndarray:
         """Filter and smooth facial landmarks to reduce jitter.
@@ -405,9 +405,12 @@ class FaceSwapper:
            deviate significantly from the median. This removes spikes caused
            by tracking errors in the upper face (eyes, eyebrows).
 
-        3. **2D Gaussian smoothing**: Applies a 2D Gaussian filter across the
-           landmark space to smooth out noise. This is particularly effective
-           for reducing jitter in small facial features like eyes.
+        3. **Weighted Gaussian smoothing**: Applies stronger smoothing to the
+           upper face landmarks (eyes at indices 0, 1) which are more prone
+           to jitter and directly affect eyebrow appearance.
+
+        4. **Geometric consistency check**: Ensures the distance between
+           symmetric features (left/right eyes) is within expected range.
 
         Args:
             kps: 2×5 array of facial landmarks (x, y for each of 5 points).
@@ -424,26 +427,36 @@ class FaceSwapper:
 
         # Convert to float for processing
         kps_f = kps.astype(np.float64)
-        points = kps_f.T  # Shape: (5, 2) -> (x1, x2, x3, x4, x5, y1, y2, y3, y4, y5)
+        original_kps = kps_f.copy()
+        points = kps_f.T  # Shape: (5, 2) -> points[i] = [x, y] for landmark i
+
+        # Landmark indices: 0=left_eye, 1=right_eye, 2=nose_tip, 3=mouth_left, 4=mouth_right
+        # Eyes (0, 1) are most prone to jitter and affect eyebrow appearance
 
         # Get expected positions from template (in [0, 1] normalized space)
         template = _WARP_TEMPLATES.get("arcface_112_v1")
         if template is None:
             template = _WARP_TEMPLATES["arcface_112_v1"]
 
-        # Estimate size from template positions (approximate crop size)
-        # The template is in [0, 1] space; assume typical crop around 100-200 pixels
-        template_extent = np.max(template, axis=0) - np.min(template, axis=0)
-        estimated_size = max(100.0, 150.0 / np.mean(template_extent))
+        # Estimate face size from actual landmark spread
+        # Use inter-eye distance as a stable measure of face size
+        left_eye = points[0]
+        right_eye = points[1]
+        inter_eye_dist = np.linalg.norm(right_eye - left_eye)
+        # Typical inter-eye distance is about 25% of face width in the template
+        estimated_size = inter_eye_dist / 0.32
 
         # 1. Distance-based validation: Check if any point is far from expected
-        max_valid_dist = estimated_size * 0.15  # Allow 15% deviation
+        # Tighter threshold for eyes (0, 1) since they're more sensitive to jitter
+        max_valid_dist = estimated_size * 0.12  # Reduced from 0.15
+        eye_max_dist = estimated_size * 0.08     # Tighter for eyes
         valid_mask = np.ones(5, dtype=bool)
         for i in range(5):
             expected = template[:, i] * estimated_size
             actual = points[i]
             dist = np.linalg.norm(expected - actual)
-            if dist > max_valid_dist:
+            threshold = eye_max_dist if i in [0, 1] else max_valid_dist
+            if dist > threshold:
                 valid_mask[i] = False
 
         # Remove obviously bad points
@@ -451,37 +464,71 @@ class FaceSwapper:
             logger.debug("_filter_landmarks: too few valid points after distance check")
             return kps_f.T
 
-        valid_points = points[valid_mask]
+        # 2. Geometric consistency: Check eye separation is reasonable
+        # Eyes should be roughly symmetric and at similar y-levels
+        eye_separation = np.linalg.norm(right_eye - left_eye)
+        expected_separation = np.linalg.norm(template[1] - template[0]) * estimated_size
+        if eye_separation > 0 and expected_separation > 0:
+            ratio = eye_separation / expected_separation
+            if ratio < 0.5 or ratio > 1.5:
+                # Eyes are too far apart or too close - likely tracking error
+                # Pull them toward expected positions
+                eye_center = (left_eye + right_eye) / 2
+                new_separation = expected_separation * 0.95  # Slightly tighter
+                half_sep_x = new_separation / 2
+                # Eyes should be roughly at the same height
+                new_left_eye = np.array([eye_center[0] - half_sep_x, eye_center[1]])
+                new_right_eye = np.array([eye_center[0] + half_sep_x, eye_center[1]])
+                points[0] = new_left_eye
+                points[1] = new_right_eye
 
-        # 2. Outlier filtering using Median Absolute Deviation (MAD)
-        # This helps remove spikes from tracking errors
-        mad_threshold = 2.0  # Points > 2 MAD from median are outliers
+        # 3. Outlier filtering using Median Absolute Deviation (MAD)
+        # More aggressive for eyes to reduce jitter
+        mad_threshold = 1.5  # Reduced from 2.0 for tighter filtering
         filtered_x = kps_f[0, :].copy()
         filtered_y = kps_f[1, :].copy()
 
-        for dim in range(len(filtered_x)):
-            # Calculate MAD
-            median = np.median(filtered_x[dim])
-            mad = np.median(np.abs(filtered_x[dim] - median))
+        # Apply different thresholds for eyes vs other landmarks
+        for dim_idx, dim_data in enumerate([filtered_x, filtered_y]):
+            dim_name = "x" if dim_idx == 0 else "y"
+            for i in range(5):
+                is_eye = i in [0, 1]
+                # Calculate MAD excluding this point for better outlier detection
+                other_points = np.delete(dim_data, i)
+                median = np.median(other_points)
+                mad = np.median(np.abs(other_points - median))
+                
+                # Threshold is tighter for eyes (upper face jitter source)
+                threshold = 1.2 if is_eye else mad_threshold
+                if mad > 1e-8:
+                    # How far is this point from the median?
+                    deviation = np.abs(dim_data[i] - median)
+                    if deviation > threshold * mad / 0.6745:
+                        # Pull toward median but preserve some identity
+                        blend = 0.3 if is_eye else 0.6
+                        dim_data[i] = blend * median + (1 - blend) * dim_data[i]
 
-            # MAD normalization (MAD is approximately 0.6745 * stddev for normal dist)
-            if mad > 1e-8:
-                filtered_x[dim] = np.clip(
-                    filtered_x[dim],
-                    median - mad_threshold * mad / 0.6745,
-                    median + mad_threshold * mad / 0.6745
-                )
-            else:
-                filtered_x[dim] = median
+        # 4. Apply weighted Gaussian smoothing
+        # Higher sigma for eyes (0, 1) to reduce jitter in the upper face
+        # which directly affects eyebrow appearance
+        sigma_eyes = sigma * 1.5  # 50% stronger smoothing for eyes
+        sigma_other = sigma
 
-        # 3. Apply 2D Gaussian smoothing to the landmark points
-        # This smooths out high-frequency noise in landmark positions
-        if sigma > 0:
-            x_smooth = gaussian_filter(filtered_x, sigma=sigma, mode='nearest')
-            y_smooth = gaussian_filter(filtered_y, sigma=sigma, mode='nearest')
-            kps_smoothed = np.array([x_smooth, y_smooth], dtype=np.float32)
-        else:
-            kps_smoothed = np.array([filtered_x, filtered_y], dtype=np.float32)
+        x_smooth = filtered_x.copy()
+        y_smooth = filtered_y.copy()
+
+        # Smooth all points with base sigma
+        x_smooth = gaussian_filter(x_smooth, sigma=sigma_other, mode='nearest')
+        y_smooth = gaussian_filter(y_smooth, sigma=sigma_other, mode='nearest')
+
+        # Additional smoothing pass for eyes (upper face region)
+        # This significantly reduces jitter in the eyes which causes eyebrow flicker
+        eye_x_smooth = gaussian_filter(filtered_x, sigma=sigma_eyes, mode='nearest')
+        eye_y_smooth = gaussian_filter(filtered_y, sigma=sigma_eyes, mode='nearest')
+        x_smooth[[0, 1]] = eye_x_smooth[[0, 1]]
+        y_smooth[[0, 1]] = eye_y_smooth[[0, 1]]
+
+        kps_smoothed = np.array([x_smooth, y_smooth], dtype=np.float32)
 
         return kps_smoothed
 
