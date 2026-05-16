@@ -1189,6 +1189,24 @@ class FaceSwapper:
             )
             return frame
 
+        # FIXED: Add temporal stability filtering to prevent frame-to-frame drift
+        # This prevents jitter from accumulating over time in the face alignment
+        if hasattr(self, '_prev_kps') and self._prev_kps is not None:
+            # Calculate the difference between current and previous landmarks
+            kps_diff = np.mean(np.abs(kps - self._prev_kps))
+            if kps_diff > 15.0:  # If difference is too large, apply temporal filtering
+                # Blend current kps with previous kps to reduce jitter
+                kps = 0.7 * kps + 0.3 * self._prev_kps
+                # Re-align with filtered landmarks
+                crop, affine_M = self._warp_face(
+                    frame, kps, size, template_name,
+                    use_landmark_filter=True,
+                    landmark_sigma=2.5,
+                )
+        
+        # Store current kps for next frame
+        self._prev_kps = kps
+
         # 3. Prepare source identity and build the ONNX feed dict
         target_tensor = self._prepare_crop_frame(crop)
 
