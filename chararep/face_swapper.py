@@ -497,7 +497,7 @@ class FaceSwapper:
                 other_points = np.delete(dim_data, i)
                 median = np.median(other_points)
                 mad = np.median(np.abs(other_points - median))
-                
+
                 # Threshold is tighter for eyes (upper face jitter source)
                 threshold = 1.2 if is_eye else mad_threshold
                 if mad > 1e-8:
@@ -528,7 +528,7 @@ class FaceSwapper:
         eye_y_smooth = gaussian_filter(filtered_y, sigma=sigma_eyes, mode='nearest')
         x_smooth[[0, 1]] = eye_x_smooth[[0, 1]]
         y_smooth[[0, 1]] = eye_y_smooth[[0, 1]]
-        
+
         # Add additional smoothing in the upper face region to reduce jitter
         # This creates a vertical weighting that applies extra smoothing to the top part
         # where eyes/eyebrows are most sensitive to jitter
@@ -537,7 +537,7 @@ class FaceSwapper:
             y_coords = points[:, 1]
             y_min, y_max = np.min(y_coords), np.max(y_coords)
             y_range = y_max - y_min
-            
+
             # Create vertical weighting that emphasizes smoothing in the upper region
             y_grid = np.arange(y_max - y_min) + y_min
             # Apply Gaussian weighting that peaks in the middle and decreases toward edges
@@ -546,7 +546,7 @@ class FaceSwapper:
             upper_weight = np.clip(upper_weight, 0.0, 1.0)
             # Boost upper region smoothing for eyes/eyebrows
             upper_weight = 0.4 + 0.6 * upper_weight
-            
+
             # Apply vertical weighting to the smoothed results
             x_smooth = x_smooth * upper_weight
             y_smooth = y_smooth * upper_weight
