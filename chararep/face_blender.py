@@ -62,16 +62,18 @@ class FaceBlender:
         face_masks: list[np.ndarray] = []
         for tf in swap_faces:
             face_mask = self._build_mask((h, w), tf.bbox, tf.landmarks)
+            face_masks.append(face_mask)
+            combined_mask = np.maximum(combined_mask, face_mask)
         # Apply additional smoothing to reduce jitter in upper face regions
         # This helps with eyes/eyebrows which are particularly sensitive to 
         # edge transitions and can cause flickering
         if self._mode == "seamless":
-            # Apply extra smoothing to the face mask for seamless blending
-            face_mask = cv2.GaussianBlur(face_mask, (11, 11), 0)
+            # Apply extra smoothing to the combined mask for seamless blending
+            combined_mask = cv2.GaussianBlur(combined_mask, (11, 11), 0)
             
             # Apply even more aggressive smoothing specifically to the upper face region
             # to reduce jitter in eyes and eyebrows
-            coords_y, coords_x = np.where(face_mask > 0)
+            coords_y, coords_x = np.where(combined_mask > 0)
             if len(coords_y) > 0:
                 # Calculate vertical extent of the face in the mask
                 mask_height = coords_y.max() - coords_y.min()
@@ -81,12 +83,10 @@ class FaceBlender:
                 upper_region_end = int(coords_y.min() + mask_height * 0.3)
                 if upper_region_end > 0:
                     # Extract upper region
-                    upper_mask = face_mask[:upper_region_end, :]
+                    upper_mask = combined_mask[:upper_region_end, :]
                     # Apply even stronger blur to upper region
                     upper_smoothed = cv2.GaussianBlur(upper_mask, (15, 15), 0)
-                    face_mask[:upper_region_end, :] = upper_smoothed
-            face_masks.append(face_mask)
-            combined_mask = np.maximum(combined_mask, face_mask)
+                    combined_mask[:upper_region_end, :] = upper_smoothed
 
         if self._mode == "seamless":
             return self._poisson_blend_combined(
@@ -361,6 +361,9 @@ class FaceBlender:
         # Enhanced for upper face region to reduce jitter
         if self._blur_k > 0:
             k = self._blur_k | 1
+            # Ensure k is at least 1 to prevent invalid kernel sizes
+            if k < 1:
+                k = 1
             # Apply additional smoothing in the upper face region for better edge blending
             mask = cv2.GaussianBlur(mask, (k, k), 0)
             
@@ -373,7 +376,12 @@ class FaceBlender:
                     # Extract upper region
                     upper_mask = mask[:upper_region_end, :]
                     # Apply extra smoothing to upper region
-                    upper_smoothed = cv2.GaussianBlur(upper_mask, (k*2, k*2), 0)
+                    # Ensure kernel size is valid (at least 1 and odd)
+                    extra_k = k * 2
+                    if extra_k < 1:
+                        extra_k = 1
+                    extra_k = extra_k | 1  # Ensure it's odd
+                    upper_smoothed = cv2.GaussianBlur(upper_mask, (extra_k, extra_k), 0)
                     mask[:upper_region_end, :] = upper_smoothed
 
         return mask
