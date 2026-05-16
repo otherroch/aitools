@@ -279,7 +279,7 @@ class FaceBlender:
                 # Determine a fade width proportional to the face size
                 # so small and large faces get the same relative smoothness.
                 face_dim = max(face_w, face_h)
-                fade_width = max(4, int(face_dim * 0.04))  # ~4% of face size
+                fade_width = max(4, int(face_dim * 0.06))  # ~6% of face size
                 # Map distance -> alpha:
                 #   distance >= fade_width  -> alpha = 1.0 (full swap)
                 #   distance < fade_width   -> alpha = distance / fade_width
