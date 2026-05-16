@@ -508,11 +508,12 @@ class FaceSwapper:
                         blend = 0.3 if is_eye else 0.6
                         dim_data[i] = blend * median + (1 - blend) * dim_data[i]
 
-        # 4. Apply weighted Gaussian smoothing
+        # 4. Apply enhanced weighted Gaussian smoothing
         # Higher sigma for eyes (0, 1) to reduce jitter in the upper face
         # which directly affects eyebrow appearance
-        sigma_eyes = sigma * 1.5  # 50% stronger smoothing for eyes
-        sigma_other = sigma
+        # Also add additional smoothing in the upper face region to reduce jitter
+        sigma_eyes = sigma * 1.8  # Even stronger smoothing for eyes
+        sigma_other = sigma * 1.2  # Slightly stronger for other landmarks
 
         x_smooth = filtered_x.copy()
         y_smooth = filtered_y.copy()
@@ -527,6 +528,28 @@ class FaceSwapper:
         eye_y_smooth = gaussian_filter(filtered_y, sigma=sigma_eyes, mode='nearest')
         x_smooth[[0, 1]] = eye_x_smooth[[0, 1]]
         y_smooth[[0, 1]] = eye_y_smooth[[0, 1]]
+        
+        # Add additional smoothing in the upper face region to reduce jitter
+        # This creates a vertical weighting that applies extra smoothing to the top part
+        # where eyes/eyebrows are most sensitive to jitter
+        if len(points) >= 5:
+            # Calculate the vertical extent of the face landmarks
+            y_coords = points[:, 1]
+            y_min, y_max = np.min(y_coords), np.max(y_coords)
+            y_range = y_max - y_min
+            
+            # Create vertical weighting that emphasizes smoothing in the upper region
+            y_grid = np.arange(y_max - y_min) + y_min
+            # Apply Gaussian weighting that peaks in the middle and decreases toward edges
+            # but with extra emphasis on the upper region where eyes are
+            upper_weight = np.exp(-0.5 * ((y_grid - (y_min + y_range/2)) / (y_range * 0.3)) ** 2)
+            upper_weight = np.clip(upper_weight, 0.0, 1.0)
+            # Boost upper region smoothing for eyes/eyebrows
+            upper_weight = 0.4 + 0.6 * upper_weight
+            
+            # Apply vertical weighting to the smoothed results
+            x_smooth = x_smooth * upper_weight
+            y_smooth = y_smooth * upper_weight
 
         kps_smoothed = np.array([x_smooth, y_smooth], dtype=np.float32)
 
@@ -813,11 +836,31 @@ class FaceSwapper:
         else:
             mask = mask_f32
 
-        # Very heavy Gaussian blur for ultra-smooth transitions
-        # Larger kernel for smoother blending, especially in the upper face region
-        mask = cv2.GaussianBlur(mask, (15, 15), 0)
-        # Second blur pass for even wider smoothing
-        mask = cv2.GaussianBlur(mask, (11, 11), 0)
+        # Apply additional smoothing to reduce jitter in all regions
+        # Use a more controlled smoothing approach to reduce overall edge vibration
+        if len(coords_y) > 0:
+            # Apply a two-pass Gaussian blur with controlled kernel sizes
+            # First pass - moderate blur
+            mask = cv2.GaussianBlur(mask, (15, 15), 0)
+            # Second pass - slightly more blur for smoother transitions
+            mask = cv2.GaussianBlur(mask, (13, 13), 0)
+            
+            # Apply extra smoothing specifically to the upper face region where jitter is most noticeable
+            # This helps reduce flickering in eyes and eyebrows
+            upper_y_start = int(mask_mid_y - mask_height * 0.15)
+            upper_y_end = int(mask_mid_y + mask_height * 0.15)
+            
+            if upper_y_start >= 0 and upper_y_end <= h:
+                # Extract upper region and apply stronger blur
+                upper_region = mask[upper_y_start:upper_y_end, :]
+                # Apply even stronger blur to upper region for better smoothing
+                upper_smoothed = cv2.GaussianBlur(upper_region, (19, 19), 0)
+                mask[upper_y_start:upper_y_end, :] = upper_smoothed
+        else:
+            # Apply standard smoothing for cases where coordinates are not available
+            mask = cv2.GaussianBlur(mask, (15, 15), 0)
+            mask = cv2.GaussianBlur(mask, (13, 13), 0)
+            
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
         result = (
             frame.astype(np.float32) * (1.0 - mask)

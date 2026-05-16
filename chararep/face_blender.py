@@ -62,6 +62,29 @@ class FaceBlender:
         face_masks: list[np.ndarray] = []
         for tf in swap_faces:
             face_mask = self._build_mask((h, w), tf.bbox, tf.landmarks)
+        # Apply additional smoothing to reduce jitter in upper face regions
+        # This helps with eyes/eyebrows which are particularly sensitive to 
+        # edge transitions and can cause flickering
+        if self._mode == "seamless":
+            # Apply extra smoothing to the face mask for seamless blending
+            face_mask = cv2.GaussianBlur(face_mask, (11, 11), 0)
+            
+            # Apply even more aggressive smoothing specifically to the upper face region
+            # to reduce jitter in eyes and eyebrows
+            coords_y, coords_x = np.where(face_mask > 0)
+            if len(coords_y) > 0:
+                # Calculate vertical extent of the face in the mask
+                mask_height = coords_y.max() - coords_y.min()
+                mask_center_y = (coords_y.min() + coords_y.max()) / 2
+                
+                # Apply stronger smoothing to upper 30% of the face where eyes/eyebrows are
+                upper_region_end = int(coords_y.min() + mask_height * 0.3)
+                if upper_region_end > 0:
+                    # Extract upper region
+                    upper_mask = face_mask[:upper_region_end, :]
+                    # Apply even stronger blur to upper region
+                    upper_smoothed = cv2.GaussianBlur(upper_mask, (15, 15), 0)
+                    face_mask[:upper_region_end, :] = upper_smoothed
             face_masks.append(face_mask)
             combined_mask = np.maximum(combined_mask, face_mask)
 
@@ -258,16 +281,8 @@ class FaceBlender:
             ksize3 = max(9, int((x2 - x1) * 0.22)) | 1
             mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize3, ksize3)))
 
-            # ── Distance-transform fade to reduce edge flicker ──
-            # Instead of a radial fade from the face centroid (which
-            # incorrectly reduces alpha at the forehead/eyebrow region
-            # because it is far from the centroid), compute the
-            # signed distance of every pixel from the nearest mask
-            # boundary using a distance transform.  Pixels deep inside
-            # the face stay at full alpha, while only the true mask
-            # perimeter gets a smooth ramp to zero.  This ensures the
-            # full face region (eyebrows, cheeks, chin) is swapped
-            # while still suppressing frame-to-frame vibration at edges.
+            # ── Enhanced distance-transform fade to reduce edge flicker ──
+            # Enhanced approach for upper face region to reduce jitter in eyes/eyebrows
             mask_f32 = mask.astype(np.float32)
             binary_bool = mask_f32 > 128.0
             if binary_bool.any():
@@ -276,19 +291,48 @@ class FaceBlender:
                 # We use CV_DIST_L2 (Euclidean) for a smooth gradient.
                 bin_u8 = binary_bool.astype(np.uint8)
                 dist_map = cv2.distanceTransform(bin_u8, cv2.DIST_L2, 5)
+                
                 # Determine a fade width proportional to the face size
                 # so small and large faces get the same relative smoothness.
                 # SIGNIFICANTLY INCREASED fade width for upper face to
                 # eliminate jitter in eyes/eyebrows region.
                 face_dim = max(face_w, face_h)
                 fade_width = max(12, int(face_dim * 0.15))  # ~15% of face size (increased from 9%)
-                # Use a SMOOTHSTEP curve instead of linear ramp for
-                # much gentler transition at the edges. This dramatically
-                # reduces frame-to-frame jitter since small boundary
-                # shifts produce much smaller alpha changes.
-                # smoothstep(t) = t^2 * (3 - 2t) for t in [0, 1]
-                t = np.clip(dist_map / fade_width, 0.0, 1.0)
-                edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep curve
+                
+                # Apply enhanced smoothing for the upper face region
+                # Create a vertical gradient that applies more smoothing to the upper part
+                # where jitter is most noticeable
+                coords_y, coords_x = np.where(binary_bool)
+                if len(coords_y) > 0:
+                    # Calculate vertical position weights for upper face smoothing
+                    mask_height = coords_y.max() - coords_y.min()
+                    mask_center_y = (coords_y.min() + coords_y.max()) / 2
+                    
+                    # Create vertical weighting that increases smoothing in upper face
+                    y_grid = np.arange(h).reshape(h, 1)
+                    # Apply Gaussian weighting that peaks in the middle and decreases toward edges
+                    # but with extra emphasis on the upper region where eyes are
+                    upper_weight = np.exp(-0.5 * ((y_grid - mask_center_y) / (mask_height * 0.3)) ** 2)
+                    # Boost upper region smoothing for eyes/eyebrows
+                    upper_weight = np.clip(upper_weight, 0.0, 1.0)
+                    # Make upper region even more sensitive to smoothing
+                    upper_weight = 0.3 + 0.7 * upper_weight
+                    
+                    # Apply the vertical weighting to the distance map
+                    dist_map_weighted = dist_map * upper_weight
+                    
+                    # Use a SMOOTHSTEP curve instead of linear ramp for
+                    # much gentler transition at the edges. This dramatically
+                    # reduces frame-to-frame jitter since small boundary
+                    # shifts produce much smaller alpha changes.
+                    # smoothstep(t) = t^2 * (3 - 2t) for t in [0, 1]
+                    t = np.clip(dist_map_weighted / fade_width, 0.0, 1.0)
+                    edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep curve
+                else:
+                    # Use the original approach if no coordinates found
+                    t = np.clip(dist_map / fade_width, 0.0, 1.0)
+                    edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep curve
+
                 # Combine: inside the mask, modulate original mask values
                 # with the edge alpha; outside, force to zero.
                 mask_f32 = np.where(
@@ -312,11 +356,25 @@ class FaceBlender:
             )
             mask = cv2.erode(mask, kernel)
 
-        # Very heavy Gaussian feather for ultra-smooth alpha blending
+        # Enhanced Gaussian feathering for ultra-smooth alpha blending
         # Larger kernel = wider transition zone = less edge flicker
+        # Enhanced for upper face region to reduce jitter
         if self._blur_k > 0:
             k = self._blur_k | 1
+            # Apply additional smoothing in the upper face region for better edge blending
             mask = cv2.GaussianBlur(mask, (k, k), 0)
+            
+            # Apply even more aggressive smoothing in the upper region where eyes/eyebrows are
+            # This helps reduce the high-frequency jitter in these sensitive areas
+            if len(coords_y) > 0:
+                # Calculate upper region to apply extra smoothing
+                upper_region_end = coords_y.min() + int((coords_y.max() - coords_y.min()) * 0.3)
+                if upper_region_end > 0 and upper_region_end < h:
+                    # Extract upper region
+                    upper_mask = mask[:upper_region_end, :]
+                    # Apply extra smoothing to upper region
+                    upper_smoothed = cv2.GaussianBlur(upper_mask, (k*2, k*2), 0)
+                    mask[:upper_region_end, :] = upper_smoothed
 
         return mask
 
@@ -443,6 +501,31 @@ class FaceBlender:
             # Combine: inside the mask, use distance-based alpha
             mask_f32 = np.where(binary, edge_alpha, 0.0)
         
+        # Apply additional smoothing specifically for the upper face region
+        # to reduce jitter in eyes and eyebrows
+        if len(coords_y) > 0:
+            # Create a vertical weighting that emphasizes smoothing in the upper face
+            # where jitter is most noticeable
+            y_grid = np.arange(swapped.shape[0]).reshape(swapped.shape[0], 1)
+            
+            # Calculate vertical extent of the face
+            mask_height = coords_y.max() - coords_y.min()
+            mask_center_y = (coords_y.min() + coords_y.max()) / 2.0
+            
+            # Create vertical Gaussian weighting that peaks at the face center
+            # and decreases toward the top (forehead) and bottom (chin)
+            # This helps reduce jitter in the upper face region where eyes/eyebrows are
+            vert_sigma = max(20, mask_height * 0.3)
+            vert_weight = np.exp(-0.5 * ((y_grid - mask_center_y) / vert_sigma) ** 2)
+            
+            # Boost upper region smoothing for eyes/eyebrows
+            vert_weight = np.clip(vert_weight, 0.0, 1.0)
+            # Make upper region even more sensitive to smoothing
+            vert_weight = 0.4 + 0.6 * vert_weight
+            
+            # Apply the vertical weighting to the mask
+            mask_f32 = mask_f32 * vert_weight
+            
         # Apply additional Gaussian blur for ultra-smooth transitions
         # Increased kernel size for more smoothing in upper face region
         mask_f32 = cv2.GaussianBlur(mask_f32, (11, 11), 0)

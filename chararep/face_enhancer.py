@@ -320,6 +320,9 @@ class FaceEnhancer:
             )
             enhanced = self._backend.enhance_crop(crop, weight=weight)
             if enhanced.shape == crop.shape:
+                # Apply additional Gaussian blur to reduce jitter in upper face regions
+                # This specifically targets the eyes and eyebrows where jitter is most noticeable
+                enhanced = cv2.GaussianBlur(enhanced, (3, 3), 0)
                 frame[y1:y2, x1:x2] = enhanced
         return frame
 
