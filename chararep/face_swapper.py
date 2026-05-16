@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import onnxruntime
 import insightface
+from scipy.ndimage import gaussian_filter
 
 from .config import PipelineConfig
 from .gpu_utils import get_onnx_providers
@@ -338,12 +339,25 @@ class FaceSwapper:
     def _warp_face(
         self, frame: np.ndarray, kps: np.ndarray, size: int,
         template_name: str = "arcface_112_v1",
+        use_landmark_filter: bool = True,
+        landmark_sigma: float = 1.5,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Align and crop a face to *size*×*size* using 5-point landmarks.
 
         The alignment template is selected by *template_name*, which must be
         a key in :data:`_WARP_TEMPLATES`.  The default ``"arcface_112_v1"``
         preserves the previous behaviour for simswap models.
+
+        Args:
+            frame: Source image to crop.
+            kps: 2×5 array of detected facial landmarks.
+            size: Output crop size.
+            template_name: Template key from :data:`_WARP_TEMPLATES`.
+            use_landmark_filter: If True, apply outlier filtering and smoothing
+                to reduce jitter from noisy landmarks (especially helpful for
+                eyes/eyebrows region).
+            landmark_sigma: Standard deviation for 2D Gaussian smoothing of
+                smoothed landmarks (applied when use_landmark_filter=True).
 
         Returns the cropped face and the 2×3 affine matrix used, so that the
         result can be pasted back with :meth:`_paste_back`.
@@ -359,6 +373,11 @@ class FaceSwapper:
             )
             norm_template = _WARP_TEMPLATES["arcface_112_v1"]
         template = norm_template * size
+
+        # Apply landmark filtering to reduce jitter from noisy detections
+        if use_landmark_filter and kps is not None:
+            kps = self._filter_landmarks(kps, landmark_sigma)
+
         M, _ = cv2.estimateAffinePartial2D(kps, template, method=cv2.RANSAC)
         if M is None:
             raise RuntimeError(
@@ -368,6 +387,105 @@ class FaceSwapper:
             )
         crop = cv2.warpAffine(frame, M, (size, size), flags=cv2.INTER_LINEAR)
         return crop, M
+
+    def _filter_landmarks(
+        self, kps: np.ndarray, sigma: float = 1.5,
+        min_valid_points: int = 4,
+    ) -> np.ndarray:
+        """Filter and smooth facial landmarks to reduce jitter.
+
+        Applies several techniques to improve landmark stability:
+
+        1. **Distance-based validation**: Filters out landmark sets where any
+           point is too far from its expected position (based on template).
+           This catches grossly misaligned detections.
+
+        2. **Outlier filtering using MAD**: For each landmark dimension,
+           computes the Median Absolute Deviation and filters points that
+           deviate significantly from the median. This removes spikes caused
+           by tracking errors in the upper face (eyes, eyebrows).
+
+        3. **2D Gaussian smoothing**: Applies a 2D Gaussian filter across the
+           landmark space to smooth out noise. This is particularly effective
+           for reducing jitter in small facial features like eyes.
+
+        Args:
+            kps: 2×5 array of facial landmarks (x, y for each of 5 points).
+            sigma: Standard deviation for 2D Gaussian smoothing.
+            min_valid_points: Minimum number of valid points required after
+                filtering (default 4, since we need at least 4 for affine).
+
+        Returns:
+            Filtered/smoothed landmark array. Returns original if filtering
+            fails or insufficient valid points remain.
+        """
+        if kps is None or kps.shape != (2, 5):
+            return kps if kps is not None else np.zeros((2, 5), dtype=np.float32)
+
+        # Convert to float for processing
+        kps_f = kps.astype(np.float64)
+        points = kps_f.T  # Shape: (5, 2) -> (x1, x2, x3, x4, x5, y1, y2, y3, y4, y5)
+
+        # Get expected positions from template (in [0, 1] normalized space)
+        template = _WARP_TEMPLATES.get("arcface_112_v1")
+        if template is None:
+            template = _WARP_TEMPLATES["arcface_112_v1"]
+
+        # Estimate size from template positions (approximate crop size)
+        # The template is in [0, 1] space; assume typical crop around 100-200 pixels
+        template_extent = np.max(template, axis=0) - np.min(template, axis=0)
+        estimated_size = max(100.0, 150.0 / np.mean(template_extent))
+
+        # 1. Distance-based validation: Check if any point is far from expected
+        max_valid_dist = estimated_size * 0.15  # Allow 15% deviation
+        valid_mask = np.ones(5, dtype=bool)
+        for i in range(5):
+            expected = template[:, i] * estimated_size
+            actual = points[i]
+            dist = np.linalg.norm(expected - actual)
+            if dist > max_valid_dist:
+                valid_mask[i] = False
+
+        # Remove obviously bad points
+        if np.sum(valid_mask) < min_valid_points:
+            logger.debug("_filter_landmarks: too few valid points after distance check")
+            return kps_f.T
+
+        valid_points = points[valid_mask]
+
+        # 2. Outlier filtering using Median Absolute Deviation (MAD)
+        # This helps remove spikes from tracking errors
+        mad_threshold = 2.0  # Points > 2 MAD from median are outliers
+        filtered_x = kps_f[0, :].copy()
+        filtered_y = kps_f[1, :].copy()
+
+        for dim in range(len(filtered_x)):
+            # Calculate MAD
+            median = np.median(filtered_x[dim])
+            mad = np.median(np.abs(filtered_x[dim] - median))
+
+            # MAD normalization (MAD is approximately 0.6745 * stddev for normal dist)
+            if mad > 1e-8:
+                filtered_x[dim] = np.clip(
+                    filtered_x[dim],
+                    median - mad_threshold * mad / 0.6745,
+                    median + mad_threshold * mad / 0.6745
+                )
+            else:
+                filtered_x[dim] = median
+
+        # 3. Apply 2D Gaussian smoothing to the landmark points
+        # This smooths out high-frequency noise in landmark positions
+        if sigma > 0:
+            x_smooth = gaussian_filter(filtered_x, sigma=sigma, mode='nearest')
+            y_smooth = gaussian_filter(filtered_y, sigma=sigma, mode='nearest')
+            kps_smoothed = np.array([x_smooth, y_smooth], dtype=np.float32)
+        else:
+            kps_smoothed = np.array([filtered_x, filtered_y], dtype=np.float32)
+
+        return kps_smoothed
+
+    # ── Model loading ────────────────────────────────────────────────────────
 
     def _prepare_crop_frame(self, crop: np.ndarray) -> np.ndarray:
         """Convert a BGR crop to a normalised ONNX input tensor ``[1,C,H,W]``."""
@@ -858,8 +976,14 @@ class FaceSwapper:
             return frame
 
         # 2. Align and crop the target face from the frame
+        # Enable landmark filtering to reduce jitter from noisy detections
+        # This is especially helpful for the upper face (eyes/eyebrows)
         try:
-            crop, affine_M = self._warp_face(frame, kps, size, template_name)
+            crop, affine_M = self._warp_face(
+                frame, kps, size, template_name,
+                use_landmark_filter=True,  # Enable jitter reduction
+                landmark_sigma=1.5,        # Gaussian smoothing strength
+            )
         except RuntimeError as exc:
             logger.warning(
                 "%s alignment failed: %s — skipping this face.",
