@@ -279,7 +279,7 @@ class FaceBlender:
                 # Determine a fade width proportional to the face size
                 # so small and large faces get the same relative smoothness.
                 face_dim = max(face_w, face_h)
-                fade_width = max(4, int(face_dim * 0.06))  # ~6% of face size
+                fade_width = max(6, int(face_dim * 0.09))  # ~9% of face size (increased from 6%)
                 # Map distance -> alpha:
                 #   distance >= fade_width  -> alpha = 1.0 (full swap)
                 #   distance < fade_width   -> alpha = distance / fade_width
@@ -389,7 +389,7 @@ class FaceBlender:
         # Shrink the mask to create a safe inner region for Poisson.
         # The inner region is where soft_mask > threshold (high values =
         # face centre).  Anything below becomes the transition zone.
-        inner_thresh = 140  # was 100, higher threshold keeps more area for Poisson
+        inner_thresh = 155  # increased from 140 to reduce jitter in eyebrow region
         inner_binary = (soft_mask > inner_thresh).astype(np.uint8) * 255
 
         # Check inner mask has enough pixels for seamlessClone

@@ -1029,7 +1029,7 @@ class FaceSwapper:
             crop, affine_M = self._warp_face(
                 frame, kps, size, template_name,
                 use_landmark_filter=True,  # Enable jitter reduction
-                landmark_sigma=1.5,        # Gaussian smoothing strength
+                landmark_sigma=2.5,        # Increased from 1.5 to reduce eyebrow jitter
             )
         except RuntimeError as exc:
             logger.warning(
