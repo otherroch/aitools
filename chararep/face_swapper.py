@@ -595,7 +595,7 @@ class FaceSwapper:
         # Dilate the mask in frame space to expand the swap region beyond
         # the exact crop boundary. Use a kernel proportional to crop size.
         crop_size = crop.shape[0]
-        dilate_k = max(3, int(crop_size * 0.08) | 1)  # ~8% of crop size
+        dilate_k = max(5, int(crop_size * 0.12) | 1)  # ~12% of crop size (increased from 8%)
         mask_uint8 = (mask * 255).astype(np.uint8)
         mask_uint8 = cv2.dilate(mask_uint8, np.ones((dilate_k, dilate_k), np.uint8))
         mask = mask_uint8.astype(np.float32) / 255.0
