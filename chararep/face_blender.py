@@ -411,18 +411,41 @@ class FaceBlender:
         except cv2.error:
             return FaceBlender._alpha_blend(original, swapped, soft_mask)
 
-        # ── Step 2: Alpha-blend transition ring ──
-        # Build a ring mask: 1.0 inside the inner region (keep poisson),
-        # smoothly fading to 0.0 outside the soft mask boundary.
-        # The ring uses the soft_mask directly as an alpha gradient.
-        ring_alpha = soft_mask.astype(np.float32) / 255.0
-        # Set the inner region to full alpha (keep poisson result)
-        ring_alpha[inner_binary > 0] = 1.0
-        ring_alpha = ring_alpha[:, :, np.newaxis]
+        # ── Step 2: Alpha-blend transition ring with distance-based fading ──
+        # Build a smooth alpha mask using distance transform for edge smoothing.
+        # This reduces jitter by creating a smooth gradient from center to edge.
+        mask_f32 = soft_mask.astype(np.float32) / 255.0
+        binary = (mask_f32 > 0.1).astype(np.uint8)
+        
+        # Use distance transform to create smooth edge fading
+        if binary.any():
+            # Distance transform: each pixel gets its distance to the mask boundary
+            dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            # Fade width proportional to face size for consistent smoothing
+            coords_y, coords_x = np.where(binary > 0)
+            if len(coords_y) > 0:
+                face_h = coords_y.max() - coords_y.min()
+                face_w = coords_x.max() - coords_x.min()
+                face_dim = max(face_h, face_w)
+                fade_width = max(8, int(face_dim * 0.12))
+            else:
+                fade_width = 10
+            # Create smooth alpha ramp: 1.0 at center, fading to 0 at edges
+            edge_alpha = np.clip(dist / fade_width, 0.0, 1.0)
+            # Combine: inside the mask, use distance-based alpha
+            mask_f32 = np.where(binary, edge_alpha, 0.0)
+        
+        # Apply additional Gaussian blur for ultra-smooth transitions
+        mask_f32 = cv2.GaussianBlur(mask_f32, (7, 7), 0)
+        mask_f32 = np.clip(mask_f32, 0, 1)
+        
+        # Set the inner region (Poisson result) to full alpha
+        mask_f32[inner_binary > 0] = 1.0
+        mask_alpha = mask_f32[:, :, np.newaxis]
 
         result = (
-            poisson_result.astype(np.float32) * ring_alpha
-            + original.astype(np.float32) * (1.0 - ring_alpha)
+            poisson_result.astype(np.float32) * mask_alpha
+            + original.astype(np.float32) * (1.0 - mask_alpha)
         )
         return np.clip(result, 0, 255).astype(np.uint8)
 

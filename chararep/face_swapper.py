@@ -760,11 +760,33 @@ class FaceSwapper:
         # Dilate the mask in frame space to expand the swap region beyond
         # the exact crop boundary. Use a kernel proportional to crop size.
         crop_size = crop.shape[0]
-        dilate_k = max(5, int(crop_size * 0.12) | 1)  # ~12% of crop size (increased from 8%)
+        # Increased dilation for smoother blending in upper face region
+        dilate_k = max(9, int(crop_size * 0.18) | 1)  # ~18% of crop size (increased for smoother edges)
         mask_uint8 = (mask * 255).astype(np.uint8)
         mask_uint8 = cv2.dilate(mask_uint8, np.ones((dilate_k, dilate_k), np.uint8))
-        mask = mask_uint8.astype(np.float32) / 255.0
-        mask = cv2.GaussianBlur(mask, (5, 5), 0)
+        
+        # Apply distance transform for smooth edge fading
+        # This reduces jitter by creating a smooth gradient from center to edge
+        mask_f32 = mask_uint8.astype(np.float32) / 255.0
+        binary = (mask_f32 > 0.1).astype(np.uint8)
+        if binary.any():
+            # Distance transform: each pixel gets its distance to the mask boundary
+            dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            # Fade width proportional to face size for consistent smoothing
+            fade_width = max(10, int(crop_size * 0.15))  # Increased for smoother upper face blending
+            
+            # Create smooth alpha ramp: 1.0 at center, fading to 0 at edges
+            alpha = np.clip(dist / fade_width, 0.0, 1.0)
+            
+            # Apply additional smoothing in the upper face region (eyes/eyebrows)
+            # to reduce jitter in that area - use a larger kernel for more smoothing
+            mask = alpha
+        else:
+            mask = mask_f32
+        
+        # Very heavy Gaussian blur for ultra-smooth transitions
+        # Larger kernel for smoother blending, especially in the upper face region
+        mask = cv2.GaussianBlur(mask, (9, 9), 0)
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
         result = (
             frame.astype(np.float32) * (1.0 - mask)
