@@ -394,23 +394,23 @@ class FaceSwapper:
     ) -> np.ndarray:
         """Filter and smooth facial landmarks to reduce jitter.
 
-        Applies several techniques to improve landmark stability:
-
-        1. **Template-based validation**: Uses RELATIVE_THRESHOLDS to check
-           landmark positions against expected geometric relationships. This
-           catches grossly misaligned detections with frame-invariant thresholds.
-
-        2. **Outlier filtering using MAD**: For each landmark dimension,
-           computes the Median Absolute Deviation and filters points that
-           deviate significantly from the median. This removes spikes caused
-           by tracking errors in the upper face (eyes, eyebrows).
-
-        3. **Aggressive Gaussian smoothing**: Applies stronger smoothing to the
-           upper face landmarks (eyes at indices 0, 1) which are more prone
-           to jitter and directly affect eyebrow appearance.
-
-        4. **Temporal stability filtering**: Prevents excessive frame-to-frame
-           corrections from accumulating and causing drift.
+        KEY FIXES for video jitter:
+        
+        1. **Fixed undefined `estimated_size` bug** - original code referenced 
+           a variable that didn't exist, causing NameError and bypassing the
+           geometric consistency check entirely.
+        
+        2. **Fixed broken temporal stability filter** - original code compared
+           landmarks within the same frame (kps_f[0,0] vs kps_f[1,1]) instead
+           of comparing across frames. Now uses instance-level _prev_kps properly.
+        
+        3. **Removed destructive vertical weighting** - the original code 
+           multiplied smoothed x/y coordinates by a vertical weight array,
+           which corrupted absolute landmark positions. This caused significant
+           frame-to-frame position jumps.
+        
+        4. **Proper temporal smoothing** - blends filtered landmarks with 
+           previous frame's smoothed landmarks to eliminate high-frequency jitter.
 
         Args:
             kps: 2×5 array of facial landmarks (x, y for each of 5 points).
@@ -436,32 +436,24 @@ class FaceSwapper:
         template = _WARP_TEMPLATES.get("arcface_112_v1", _WARP_TEMPLATES["arcface_112_v1"])
 
         # Template-based thresholds for consistent filtering across all frames
-        # These are relative distances, making them frame-invariant
         RELATIVE_THRESHOLDS = {
-            'eye_to_nose': 0.15,      # Maximum distance relative to nose tip
-            'eye_to_eye': 0.18,       # Maximum distance relative to inter-eye span
-            'eye_to_mouth': 0.12,     # Maximum distance relative to mouth corners
-            'eye_to_corner': 0.10,    # Maximum distance relative to eye corner
+            'eye_to_nose': 0.15,
+            'eye_to_eye': 0.18,
+            'eye_to_mouth': 0.12,
+            'eye_to_corner': 0.10,
         }
 
-        # FIXED: Use fixed expected eye ratio instead of per-frame calculation
-        # Expected inter-eye distance is 25% of face width in template
-        EXPECTED_EYE_RATIO = 0.25
-
-        # Calculate actual inter-eye distance for validation
         left_eye = points[0]
         right_eye = points[1]
         inter_eye_dist = np.linalg.norm(right_eye - left_eye)
         expected_inter_eye = np.linalg.norm(template[1] - template[0])
 
         # 1. Template-based validation: Check geometric consistency
-        # Verify each landmark is within expected relative distance from key points
         valid_mask = np.ones(5, dtype=bool)
         
-        # Calculate reference distances from template
-        nose_dist_ref = np.linalg.norm(template[0] - template[2])  # eye to nose
-        mouth_dist_ref = np.linalg.norm(template[0] - template[3])  # eye to mouth left
-        corner_dist_ref = np.linalg.norm(left_eye - right_eye)  # inter-eye (actual)
+        nose_dist_ref = np.linalg.norm(template[0] - template[2])
+        mouth_dist_ref = np.linalg.norm(template[0] - template[3])
+        corner_dist_ref = np.linalg.norm(left_eye - right_eye)
         
         for i in range(5):
             point = points[i]
@@ -470,15 +462,14 @@ class FaceSwapper:
             dist_from_mouth = np.linalg.norm(point - points[3])
             
             threshold = np.inf
-            # Apply relative thresholds
-            if i in [0, 1]:  # Eye landmarks
+            if i in [0, 1]:
                 if nose_dist_ref > 0 and dist_from_nose > RELATIVE_THRESHOLDS['eye_to_nose'] * nose_dist_ref:
                     threshold = min(threshold, dist_from_nose)
-                if dist_from_corner_ref > 0 and dist_from_eye > RELATIVE_THRESHOLDS['eye_to_corner'] * dist_from_corner_ref:
+                if corner_dist_ref > 0 and dist_from_eye > RELATIVE_THRESHOLDS['eye_to_corner'] * corner_dist_ref:
                     threshold = min(threshold, dist_from_eye)
                 if dist_from_mouth > RELATIVE_THRESHOLDS['eye_to_mouth'] * dist_from_mouth:
                     threshold = min(threshold, dist_from_mouth)
-            else:  # Other landmarks
+            else:
                 if nose_dist_ref > 0 and dist_from_nose > RELATIVE_THRESHOLDS['eye_to_nose'] * nose_dist_ref:
                     threshold = min(threshold, dist_from_nose)
                 if dist_from_mouth > RELATIVE_THRESHOLDS['eye_to_mouth'] * dist_from_mouth:
@@ -491,8 +482,6 @@ class FaceSwapper:
         if expected_inter_eye > 0:
             actual_ratio = inter_eye_dist / expected_inter_eye
             if actual_ratio < 0.3 or actual_ratio > 1.2:
-                # Inter-eye distance is unusual - likely tracking error
-                # Pull eyes toward expected positions
                 eye_center = (left_eye + right_eye) / 2
                 new_separation = expected_inter_eye * 0.98
                 half_sep_x = new_separation / 2
@@ -501,113 +490,92 @@ class FaceSwapper:
                 points[0] = new_left_eye
                 points[1] = new_right_eye
 
-        # Remove obviously bad points
         if np.sum(valid_mask) < min_valid_points:
             logger.debug("_filter_landmarks: too few valid points after distance check")
             return kps_f.T
 
         # 2. Geometric consistency: Check eye separation is reasonable
-        # Eyes should be roughly symmetric and at similar y-levels
+        # FIXED: Calculate estimated_size from actual face dimensions instead of 
+        # referencing undefined variable
         eye_separation = np.linalg.norm(right_eye - left_eye)
+        # Estimate face size from the inter-eye distance (template says eyes are ~25% apart)
+        estimated_size = eye_separation / 0.25
         expected_separation = np.linalg.norm(template[1] - template[0]) * estimated_size
         if eye_separation > 0 and expected_separation > 0:
             ratio = eye_separation / expected_separation
             if ratio < 0.5 or ratio > 1.5:
-                # Eyes are too far apart or too close - likely tracking error
-                # Pull them toward expected positions
                 eye_center = (left_eye + right_eye) / 2
-                new_separation = expected_separation * 0.95  # Slightly tighter
+                new_separation = expected_separation * 0.95
                 half_sep_x = new_separation / 2
-                # Eyes should be roughly at the same height
                 new_left_eye = np.array([eye_center[0] - half_sep_x, eye_center[1]])
                 new_right_eye = np.array([eye_center[0] + half_sep_x, eye_center[1]])
                 points[0] = new_left_eye
                 points[1] = new_right_eye
 
         # 3. Outlier filtering using Median Absolute Deviation (MAD)
-        # More aggressive for eyes to reduce jitter
-        mad_threshold = 1.5  # Reduced from 2.0 for tighter filtering
+        mad_threshold = 1.5
         filtered_x = kps_f[0, :].copy()
         filtered_y = kps_f[1, :].copy()
 
-        # Apply different thresholds for eyes vs other landmarks
         for dim_idx, dim_data in enumerate([filtered_x, filtered_y]):
-            dim_name = "x" if dim_idx == 0 else "y"
             for i in range(5):
                 is_eye = i in [0, 1]
-                # Calculate MAD excluding this point for better outlier detection
                 other_points = np.delete(dim_data, i)
                 median = np.median(other_points)
                 mad = np.median(np.abs(other_points - median))
 
-                # Threshold is tighter for eyes (upper face jitter source)
                 threshold = 1.2 if is_eye else mad_threshold
                 if mad > 1e-8:
-                    # How far is this point from the median?
                     deviation = np.abs(dim_data[i] - median)
                     if deviation > threshold * mad / 0.6745:
-                        # Pull toward median but preserve some identity
                         blend = 0.3 if is_eye else 0.6
                         dim_data[i] = blend * median + (1 - blend) * dim_data[i]
 
-        # 4. Apply enhanced weighted Gaussian smoothing
-        # Higher sigma for eyes (0, 1) to reduce jitter in the upper face
-        # which directly affects eyebrow appearance
-        # Also add additional smoothing in the upper face region to reduce jitter
-        sigma_eyes = sigma * 1.8  # Even stronger smoothing for eyes
-        sigma_other = sigma * 1.2  # Slightly stronger for other landmarks
+        # 4. Apply Gaussian smoothing
+        # Higher sigma for eyes to reduce jitter in the upper face
+        sigma_eyes = sigma * 1.8
+        sigma_other = sigma * 1.2
 
-        x_smooth = filtered_x.copy()
-        y_smooth = filtered_y.copy()
-
-        # Smooth all points with base sigma
-        x_smooth = gaussian_filter(x_smooth, sigma=sigma_other, mode='nearest')
-        y_smooth = gaussian_filter(y_smooth, sigma=sigma_other, mode='nearest')
+        x_smooth = gaussian_filter(filtered_x.copy(), sigma=sigma_other, mode='nearest')
+        y_smooth = gaussian_filter(filtered_y.copy(), sigma=sigma_other, mode='nearest')
 
         # Additional smoothing pass for eyes (upper face region)
-        # This significantly reduces jitter in the eyes which causes eyebrow flicker
         eye_x_smooth = gaussian_filter(filtered_x, sigma=sigma_eyes, mode='nearest')
         eye_y_smooth = gaussian_filter(filtered_y, sigma=sigma_eyes, mode='nearest')
         x_smooth[[0, 1]] = eye_x_smooth[[0, 1]]
         y_smooth[[0, 1]] = eye_y_smooth[[0, 1]]
 
-        # FIXED: Add temporal stability filtering to prevent frame-to-frame drift
-        MAX_CORRECTION = 5.0  # Maximum allowed correction between frames
+        # 5. TEMPORAL STABILITY FILTERING (FIXED)
+        # ORIGINAL BUG: compared kps_f[0,0] with kps_f[1,1] (same frame, different points)
+        # FIXED: compare with previous frame's smoothed landmarks via self._prev_kps
+        MAX_CORRECTION = 5.0
         
-        # Apply vertical weighting for upper face smoothing
-        if len(points) >= 5:
-            y_coords = points[:, 1]
-            y_min, y_max = np.min(y_coords), np.max(y_coords)
-            y_range = y_max - y_min
-
-            y_grid = np.arange(y_max - y_min) + y_min
-            upper_weight = np.exp(-0.5 * ((y_grid - (y_min + y_range/2)) / (y_range * 0.3)) ** 2)
-            upper_weight = np.clip(upper_weight, 0.0, 1.0)
-            upper_weight = 0.4 + 0.6 * upper_weight
-
-            x_smooth = x_smooth * upper_weight
-            y_smooth = y_smooth * upper_weight
+        # Initialize temporal filter state on first frame
+        if not hasattr(self, '_prev_smoothed_kps') or self._prev_smoothed_kps is None:
+            self._prev_smoothed_kps = np.array([x_smooth, y_smooth])
         else:
-            x_smooth = x_smooth.copy()
-            y_smooth = y_smooth.copy()
-        
-        # Temporal stability filter: Reject excessive landmark shifts between frames
-        # This prevents the jitter from accumulating over time
-        current_x = points[0, 0]
-        current_y = points[1, 1]
-        
-        if len(kps_f) > 1:
-            prev_x = kps_f[0, 0]
-            prev_y = kps_f[1, 1]
-            correction = np.abs(current_x - prev_x) + np.abs(current_y - prev_y)
+            # Blend current smoothed landmarks with previous frame to reduce jitter
+            # This is the KEY fix for video jitter - proper temporal smoothing
+            prev_x = self._prev_smoothed_kps[0]
+            prev_y = self._prev_smoothed_kps[1]
             
-            if correction > MAX_CORRECTION:
-                # Apply mild correction by blending with previous frame
-                x_smooth[0] = 0.9 * x_smooth[0] + 0.1 * prev_x
-                y_smooth[1] = 0.9 * y_smooth[1] + 0.1 * prev_y
+            # Calculate per-landmark correction magnitude
+            for i in range(5):
+                correction_x = np.abs(x_smooth[i] - prev_x[i])
+                correction_y = np.abs(y_smooth[i] - prev_y[i])
+                total_correction = correction_x + correction_y
+                
+                if total_correction > MAX_CORRECTION:
+                    # Excessive jump detected - blend toward previous position
+                    # Use stronger blending for eyes (more jitter-prone)
+                    blend_factor = 0.7 if i in [0, 1] else 0.6
+                    x_smooth[i] = blend_factor * x_smooth[i] + (1 - blend_factor) * prev_x[i]
+                    y_smooth[i] = blend_factor * y_smooth[i] + (1 - blend_factor) * prev_y[i]
+            
+            # Update previous frame landmarks for next frame
+            self._prev_smoothed_kps = np.array([x_smooth, y_smooth])
 
         kps_smoothed = np.array([x_smooth, y_smooth], dtype=np.float32)
-
         return kps_smoothed
 
     # ── Model loading ────────────────────────────────────────────────────────
@@ -1189,23 +1157,11 @@ class FaceSwapper:
             )
             return frame
 
-        # FIXED: Add temporal stability filtering to prevent frame-to-frame drift
-        # This prevents jitter from accumulating over time in the face alignment
-        if hasattr(self, '_prev_kps') and self._prev_kps is not None:
-            # Calculate the difference between current and previous landmarks
-            kps_diff = np.mean(np.abs(kps - self._prev_kps))
-            if kps_diff > 15.0:  # If difference is too large, apply temporal filtering
-                # Blend current kps with previous kps to reduce jitter
-                kps = 0.7 * kps + 0.3 * self._prev_kps
-                # Re-align with filtered landmarks
-                crop, affine_M = self._warp_face(
-                    frame, kps, size, template_name,
-                    use_landmark_filter=True,
-                    landmark_sigma=2.5,
-                )
-        
-        # Store current kps for next frame
-        self._prev_kps = kps
+        # NOTE: Temporal stability filtering is now handled inside _filter_landmarks
+        # via self._prev_smoothed_kps. The _warp_face call above already applies
+        # landmark filtering (use_landmark_filter=True), which includes proper
+        # frame-to-frame temporal smoothing. No additional temporal filtering
+        # is needed here.
 
         # 3. Prepare source identity and build the ONNX feed dict
         target_tensor = self._prepare_crop_frame(crop)
