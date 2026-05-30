@@ -149,6 +149,40 @@ class TestBuildMask:
         mask = blender._build_mask((100, 100), bbox, lm)
         assert mask is not None
 
+    def test_mask_covers_eyebrow_region(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+
+        mask = blender._build_mask((220, 220), bbox, lm)
+
+        assert mask[62, 75] > 0
+        assert mask[62, 125] > 0
+
+    def test_mask_is_stable_under_small_landmark_shift(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm1 = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+        lm2 = np.array(
+            [[77, 84], [123, 86], [101, 111], [83, 146], [117, 144]],
+            dtype=np.float32,
+        )
+
+        mask1 = blender._build_mask((220, 220), bbox, lm1)
+        mask2 = blender._build_mask((220, 220), bbox, lm2)
+
+        roi1 = mask1[40:170, 40:160].astype(np.int16)
+        roi2 = mask2[40:170, 40:160].astype(np.int16)
+        assert np.mean(np.abs(roi1 - roi2)) < 16.0
+
 
 # ---------------------------------------------------------------------------
 # FaceBlender seamless mode (single face)

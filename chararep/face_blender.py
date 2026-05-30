@@ -18,6 +18,18 @@ from .face_detector import TrackedFace
 
 logger = logging.getLogger(__name__)
 
+_BLEND_TEMPLATE = np.array(
+    [
+        [0.37691676, 0.46864664],
+        [0.62285697, 0.46912813],
+        [0.50123859, 0.61331904],
+        [0.39308822, 0.72541100],
+        [0.61150205, 0.72490465],
+    ],
+    dtype=np.float32,
+)
+_BLEND_MASK_SIZE = 256
+
 
 class FaceBlender:
     """Blends swapped face images smoothly into the original frame."""
@@ -26,6 +38,131 @@ class FaceBlender:
         self._mode = cfg.blend_mode
         self._blur_k = cfg.mask_blur_kernel
         self._erode_px = cfg.mask_erode_pixels
+        self._canonical_mask_cache: dict[int, np.ndarray] = {}
+
+    @staticmethod
+    def _normalize_landmarks(landmarks: np.ndarray | None) -> np.ndarray | None:
+        """Return finite landmarks in stable ``(5, 2)`` layout when available."""
+        if landmarks is None:
+            return None
+
+        pts = np.array(landmarks, dtype=np.float32, copy=True)
+        if pts.shape == (2, 5):
+            pts = pts.T
+        if pts.shape != (5, 2) or not np.isfinite(pts).all():
+            return None
+
+        if pts[0, 0] > pts[1, 0]:
+            pts[[0, 1]] = pts[[1, 0]]
+        if pts[3, 0] > pts[4, 0]:
+            pts[[3, 4]] = pts[[4, 3]]
+        return pts
+
+    @staticmethod
+    def _blend_template(size: int) -> np.ndarray:
+        """Return the canonical 5-point template in pixel coordinates."""
+        return _BLEND_TEMPLATE * float(size)
+
+    def _canonical_face_mask(self, size: int) -> np.ndarray:
+        """Build a stable face-shaped mask in canonical aligned space."""
+        cached = self._canonical_mask_cache.get(size)
+        if cached is not None:
+            return cached
+
+        template = self._blend_template(size)
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+        extra_pts = np.vstack(
+            [
+                np.array([eye_mid[0], eye_mid[1] - mid_height * 1.35]),
+                np.array([left_eye[0] - eye_dist * 1.0, left_eye[1] - mid_height * 0.7]),
+                np.array([right_eye[0] + eye_dist * 1.0, right_eye[1] - mid_height * 0.7]),
+                np.array([left_eye[0] - eye_dist * 1.1, eye_mid[1] + mid_height * 0.1]),
+                np.array([right_eye[0] + eye_dist * 1.1, eye_mid[1] + mid_height * 0.1]),
+                np.array([mouth_left[0] - eye_dist * 0.95, mouth_left[1] + mid_height * 0.7]),
+                np.array([mouth_right[0] + eye_dist * 0.95, mouth_right[1] + mid_height * 0.7]),
+                np.array([mouth_mid[0], mouth_mid[1] + mid_height * 1.2]),
+            ],
+            dtype=np.float32,
+        )
+
+        hull_pts = np.vstack([template, extra_pts])
+        hull_pts[:, 0] = np.clip(hull_pts[:, 0], 0.0, float(size - 1))
+        hull_pts[:, 1] = np.clip(hull_pts[:, 1], 0.0, float(size - 1))
+
+        mask = np.zeros((size, size), dtype=np.uint8)
+        hull = cv2.convexHull(hull_pts.astype(np.int32))
+        cv2.fillConvexPoly(mask, hull, 255)
+
+        base_k = max(15, int(size * 0.09)) | 1
+        mask_f32 = cv2.GaussianBlur(mask, (base_k, base_k), 0).astype(np.float32) / 255.0
+        mask_f32 = mask_f32 * mask_f32 * (3.0 - 2.0 * mask_f32)
+
+        y_grid = np.arange(size, dtype=np.float32).reshape(size, 1)
+        brow_center = eye_mid[1] - mid_height * 0.05
+        brow_sigma = max(8.0, mid_height * 0.65)
+        brow_band = np.exp(-0.5 * ((y_grid - brow_center) / brow_sigma) ** 2)
+        top_start = eye_mid[1] - mid_height * 1.05
+        top_end = eye_mid[1] + mid_height * 0.2
+        top_span = max(top_end - top_start, 1.0)
+        top_ramp = np.clip((y_grid - top_start) / top_span, 0.0, 1.0)
+        brow_weight = np.minimum(0.72 + 0.28 * top_ramp, 1.0 - brow_band * 0.22)
+        mask_f32 *= brow_weight
+
+        self._canonical_mask_cache[size] = mask_f32
+        return mask_f32
+
+    def _build_aligned_mask(
+        self,
+        frame_shape: tuple[int, int],
+        bbox: np.ndarray,
+        landmarks: np.ndarray | None,
+    ) -> np.ndarray | None:
+        """Warp a canonical face mask into frame space using facial landmarks."""
+        pts = self._normalize_landmarks(landmarks)
+        if pts is None:
+            return None
+
+        h, w = frame_shape
+        template = self._blend_template(_BLEND_MASK_SIZE)
+        affine, _ = cv2.estimateAffinePartial2D(pts, template, method=cv2.RANSAC)
+        if affine is None or not np.isfinite(affine).all():
+            return None
+
+        det = affine[0, 0] * affine[1, 1] - affine[0, 1] * affine[1, 0]
+        if abs(det) < 1e-6:
+            return None
+
+        mask_src = self._canonical_face_mask(_BLEND_MASK_SIZE)
+        affine_inv = cv2.invertAffineTransform(affine)
+        warped = cv2.warpAffine(
+            mask_src,
+            affine_inv,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+
+        x1, y1, x2, y2 = bbox.astype(int)
+        face_w = max(x2 - x1, 2)
+        face_h = max(y2 - y1, 2)
+        pad_x = max(2, int(face_w * 0.55))
+        pad_y = max(2, int(face_h * 0.7))
+        clip_x1 = max(0, x1 - pad_x)
+        clip_y1 = max(0, y1 - pad_y)
+        clip_x2 = min(w, x2 + pad_x)
+        clip_y2 = min(h, y2 + pad_y)
+        clip_mask = np.zeros((h, w), dtype=np.float32)
+        clip_mask[clip_y1:clip_y2, clip_x1:clip_x2] = 1.0
+        warped *= clip_mask
+
+        local_k = max(7, int(max(face_w, face_h) * 0.12)) | 1
+        warped = cv2.GaussianBlur(warped, (local_k, local_k), 0)
+        return np.clip(warped * 255.0, 0, 255).astype(np.uint8)
 
     def blend_all(
         self,
@@ -120,229 +257,9 @@ class FaceBlender:
         x1, y1, x2, y2 = bbox.astype(int)
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
-        face_w = x2 - x1
-        face_h = y2 - y1
-
-        if landmarks is not None and len(landmarks) >= 5:
-            pts = landmarks.astype(np.float32)
-            # pts layout: [left_eye, right_eye, nose_tip, mouth_left, mouth_right]
-
-            # ── Synthesise eyebrow points ──
-            # The eyes are at pts[0] and pts[1]. Eyebrows sit roughly
-            # 10-15% of face-height above each eye. We place two points
-            # above and slightly outside the eyes to capture the full
-            # brow arch, then two more points higher to reach the
-            # forehead/hairline region.
-            # Aggressive offsets to ensure full eyebrow + cheek coverage.
-            # 0.42 pushes forehead points well into the hairline region
-            # so eyebrows are fully included in the swapped area.
-            brow_offset_y = face_h * 0.42
-            brow_spread_x = face_w * 0.25  # significantly wider for full brow arch
-            left_eye = pts[0]
-            right_eye = pts[1]
-
-            # Primary eyebrow points (directly above each eye)
-            left_brow = np.array([left_eye[0] - brow_spread_x * 0.6,
-                                  left_eye[1] - brow_offset_y])
-            right_brow = np.array([right_eye[0] + brow_spread_x * 0.6,
-                                   right_eye[1] - brow_offset_y])
-
-            # Forehead points (higher, between eyes)
-            eye_mid_y = (left_eye[1] + right_eye[1]) / 2.0
-            eye_mid_x = (left_eye[0] + right_eye[0]) / 2.0
-            forehead_center = np.array([eye_mid_x,
-                                        left_eye[1] - brow_offset_y * 2.5])
-            forehead_left = np.array([left_eye[0] - brow_spread_x * 1.2,
-                                      left_eye[1] - brow_offset_y * 2.0])
-            forehead_right = np.array([right_eye[0] + brow_spread_x * 1.2,
-                                       right_eye[1] - brow_offset_y * 2.0])
-
-            # ── Additional forehead/temple/ear points ──
-            # 14 points per side (28 total) to cover the full forehead,
-            # temples, sideburns, and upper-cheek region.  These fill
-            # gaps between the 5-point landmarks and the synthesized
-            # eyebrow/forehead points, ensuring the convex hull spans
-            # from jaw to hairline on each side.
-            mouth_left = pts[3]
-            mouth_right = pts[4]
-            nose = pts[2]
-            temple_y = eye_mid_y - face_h * 0.15
-            brow2_y = eye_mid_y - face_h * 0.35
-            hairline_y = forehead_center[1] - face_h * 0.15
-            sideburn_y = mouth_left[1] + face_h * 0.05
-
-            # Left side (7 points): temple, brow-arch, forehead-edge,
-            # hairline-left, sideburn, upper-cheek, mid-temple
-            left_temple = np.array([left_eye[0] - face_w * 0.45, temple_y])
-            left_brow_arch = np.array([left_eye[0] - face_w * 0.35, brow2_y])
-            left_forehead_edge = np.array([
-                left_eye[0] - face_w * 0.50,
-                left_eye[1] - brow_offset_y * 1.5,
-            ])
-            left_hairline = np.array([
-                eye_mid_x - face_w * 0.40,
-                hairline_y,
-            ])
-            left_sideburn = np.array([
-                left_eye[0] - face_w * 0.55,
-                sideburn_y,
-            ])
-            left_upper_cheek = np.array([
-                left_eye[0] - face_w * 0.30,
-                left_eye[1] - face_h * 0.02,
-            ])
-            left_mid_temple = np.array([
-                left_eye[0] - face_w * 0.40,
-                (temple_y + brow2_y) / 2.0,
-            ])
-
-            # Right side (7 points): mirror of left side
-            right_temple = np.array([right_eye[0] + face_w * 0.45, temple_y])
-            right_brow_arch = np.array([right_eye[0] + face_w * 0.35, brow2_y])
-            right_forehead_edge = np.array([
-                right_eye[0] + face_w * 0.50,
-                right_eye[1] - brow_offset_y * 1.5,
-            ])
-            right_hairline = np.array([
-                eye_mid_x + face_w * 0.40,
-                hairline_y,
-            ])
-            right_sideburn = np.array([
-                right_eye[0] + face_w * 0.55,
-                sideburn_y,
-            ])
-            right_upper_cheek = np.array([
-                right_eye[0] + face_w * 0.30,
-                right_eye[1] - face_h * 0.02,
-            ])
-            right_mid_temple = np.array([
-                right_eye[0] + face_w * 0.40,
-                (temple_y + brow2_y) / 2.0,
-            ])
-
-            # ── Synthesise jawline/cheek points ──
-            # Extend the hull outward along the jaw to cover cheeks and
-            # chin more fully.
-            mouth_left = pts[3]
-            mouth_right = pts[4]
-            nose = pts[2]
-
-            # Jaw points: extend mouth corners outward and downward
-            jaw_extend_x = face_w * 0.28  # aggressively wider for full cheeks
-            jaw_extend_y = face_h * 0.25  # aggressively deeper for full jawline
-            jaw_left = np.array([mouth_left[0] - jaw_extend_x,
-                                 mouth_left[1] + jaw_extend_y])
-            jaw_right = np.array([mouth_right[0] + jaw_extend_x,
-                                  mouth_right[1] + jaw_extend_y])
-            # Chin point
-            chin = np.array([(mouth_left[0] + mouth_right[0]) / 2.0,
-                             mouth_left[1] + jaw_extend_y * 1.4])
-
-            # ── Build expanded convex hull ──
-            # 5 original + 5 brow/forehead + 28 temple/cheek/hairline + 3 jaw
-            # = 41 total points for a tight convex hull
-            expanded_pts = np.vstack([
-                pts,            # original 5 landmarks
-                left_brow,
-                right_brow,
-                forehead_center,
-                forehead_left,
-                forehead_right,
-                left_temple,
-                left_brow_arch,
-                left_forehead_edge,
-                left_hairline,
-                left_sideburn,
-                left_upper_cheek,
-                left_mid_temple,
-                right_temple,
-                right_brow_arch,
-                right_forehead_edge,
-                right_hairline,
-                right_sideburn,
-                right_upper_cheek,
-                right_mid_temple,
-                jaw_left,
-                jaw_right,
-                chin,
-            ]).astype(np.int32)
-
-            hull = cv2.convexHull(expanded_pts)
-            cv2.fillConvexPoly(mask, hull, 255)
-
-            # Aggressive multi-directional dilation to eliminate gaps
-            # and expand the mask well beyond the landmark hull
-            ksize = max(5, int((x2 - x1) * 0.12)) | 1
-            mask = cv2.dilate(mask, np.ones((ksize, ksize), np.uint8))
-            # Second pass for even wider coverage
-            ksize2 = max(7, int((x2 - x1) * 0.18)) | 1
-            mask = cv2.dilate(mask, np.ones((ksize2, ksize2), np.uint8))
-            # Third pass with elliptical kernel for smooth expansion
-            ksize3 = max(9, int((x2 - x1) * 0.22)) | 1
-            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize3, ksize3)))
-
-            # ── Enhanced distance-transform fade to reduce edge flicker ──
-            # Enhanced approach for upper face region to reduce jitter in eyes/eyebrows
-            mask_f32 = mask.astype(np.float32)
-            binary_bool = mask_f32 > 128.0
-            if binary_bool.any():
-                # distanceTransform on the binary mask gives, for each
-                # foreground pixel, its shortest distance to the boundary.
-                # We use CV_DIST_L2 (Euclidean) for a smooth gradient.
-                bin_u8 = binary_bool.astype(np.uint8)
-                dist_map = cv2.distanceTransform(bin_u8, cv2.DIST_L2, 5)
-                
-                # Determine a fade width proportional to the face size
-                # so small and large faces get the same relative smoothness.
-                # SIGNIFICANTLY INCREASED fade width for upper face to
-                # eliminate jitter in eyes/eyebrows region.
-                face_dim = max(face_w, face_h)
-                fade_width = max(12, int(face_dim * 0.15))  # ~15% of face size (increased from 9%)
-                
-                # Apply enhanced smoothing for the upper face region
-                # Create a vertical gradient that applies more smoothing to the upper part
-                # where jitter is most noticeable
-                coords_y, coords_x = np.where(binary_bool)
-                if len(coords_y) > 0:
-                    # Calculate vertical position weights for upper face smoothing
-                    mask_height = coords_y.max() - coords_y.min()
-                    mask_center_y = (coords_y.min() + coords_y.max()) / 2
-                    
-                    # Create vertical weighting that increases smoothing in upper face
-                    y_grid = np.arange(h).reshape(h, 1)
-                    # Apply Gaussian weighting that peaks in the middle and decreases toward edges
-                    # but with extra emphasis on the upper region where eyes are
-                    upper_weight = np.exp(-0.5 * ((y_grid - mask_center_y) / (mask_height * 0.3)) ** 2)
-                    # Boost upper region smoothing for eyes/eyebrows
-                    upper_weight = np.clip(upper_weight, 0.0, 1.0)
-                    # Make upper region even more sensitive to smoothing
-                    upper_weight = 0.3 + 0.7 * upper_weight
-                    
-                    # Apply the vertical weighting to the distance map
-                    dist_map_weighted = dist_map * upper_weight
-                    
-                    # Use a SMOOTHSTEP curve instead of linear ramp for
-                    # much gentler transition at the edges. This dramatically
-                    # reduces frame-to-frame jitter since small boundary
-                    # shifts produce much smaller alpha changes.
-                    # smoothstep(t) = t^2 * (3 - 2t) for t in [0, 1]
-                    t = np.clip(dist_map_weighted / fade_width, 0.0, 1.0)
-                    edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep curve
-                else:
-                    # Use the original approach if no coordinates found
-                    t = np.clip(dist_map / fade_width, 0.0, 1.0)
-                    edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep curve
-
-                # Combine: inside the mask, modulate original mask values
-                # with the edge alpha; outside, force to zero.
-                mask_f32 = np.where(
-                    binary_bool,
-                    mask_f32 * edge_alpha,
-                    0.0,
-                )
-
-            mask = np.clip(mask_f32, 0, 255).astype(np.uint8)
-
+        aligned_mask = self._build_aligned_mask(frame_shape, bbox, landmarks)
+        if aligned_mask is not None:
+            mask = aligned_mask
         else:
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             rx, ry = (x2 - x1) // 2, (y2 - y1) // 2
@@ -361,28 +278,9 @@ class FaceBlender:
         # Enhanced for upper face region to reduce jitter
         if self._blur_k > 0:
             k = self._blur_k | 1
-            # Ensure k is at least 1 to prevent invalid kernel sizes
             if k < 1:
                 k = 1
-            # Apply additional smoothing in the upper face region for better edge blending
             mask = cv2.GaussianBlur(mask, (k, k), 0)
-            
-            # Apply even more aggressive smoothing in the upper region where eyes/eyebrows are
-            # This helps reduce the high-frequency jitter in these sensitive areas
-            if len(coords_y) > 0:
-                # Calculate upper region to apply extra smoothing
-                upper_region_end = coords_y.min() + int((coords_y.max() - coords_y.min()) * 0.3)
-                if upper_region_end > 0 and upper_region_end < h:
-                    # Extract upper region
-                    upper_mask = mask[:upper_region_end, :]
-                    # Apply extra smoothing to upper region
-                    # Ensure kernel size is valid (at least 1 and odd)
-                    extra_k = k * 2
-                    if extra_k < 1:
-                        extra_k = 1
-                    extra_k = extra_k | 1  # Ensure it's odd
-                    upper_smoothed = cv2.GaussianBlur(upper_mask, (extra_k, extra_k), 0)
-                    mask[:upper_region_end, :] = upper_smoothed
 
         return mask
 
