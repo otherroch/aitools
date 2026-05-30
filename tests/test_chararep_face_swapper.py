@@ -286,6 +286,32 @@ class TestWarpFace:
             swapper._warp_face(frame, kps, size=256)
 
 
+class TestFilterLandmarks:
+    def _make_swapper(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")
+        return FaceSwapper(cfg)
+
+    def test_accepts_row_major_landmarks(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        filtered = swapper._filter_landmarks(kps)
+        assert filtered.shape == (5, 2)
+        np.testing.assert_array_equal(filtered, kps)
+
+    def test_transposes_legacy_column_major_landmarks(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        filtered = swapper._filter_landmarks(kps.T)
+        assert filtered.shape == (5, 2)
+        np.testing.assert_array_equal(filtered, kps)
+
+
 class TestPrepareCropFrame:
     def test_output_shape_and_dtype(self, tmp_path):
         cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")

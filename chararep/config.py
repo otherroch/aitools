@@ -66,10 +66,9 @@ class PipelineConfig:
     mask_erode_pixels: int = 1  # minimal erosion to maximize swap area while preventing hard edges
 
     # ── Temporal smoothing ────────────────────────────────────────────────
-    # Exponential moving average alpha to reduce frame-to-frame jitter.
-    # 0.0 = no smoothing (current frame only), 1.0 = maximum smoothing.
-    # Typical values: 0.3-0.6 for balanced stability vs responsiveness.
-    temporal_smooth_alpha: float = 0.5
+    # Previous-frame weight for overlap-only temporal smoothing.
+    # 0.0 disables it; small values such as 0.1-0.2 can damp residual shimmer.
+    temporal_smooth_alpha: float = 0.0
 
     # ── Logging ──────────────────────────────────────────────────────────
     log_level: str = "INFO"

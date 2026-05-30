@@ -64,6 +64,8 @@ class CharacterReplacementPipeline:
 
         # Temporal smoothing state: for localized EMA on face regions
         self._prev_face_part: np.ndarray | None = None
+        self._prev_face_mask: np.ndarray | None = None
+        self._landmark_history: dict[int, tuple[int, np.ndarray]] = {}
 
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
@@ -71,6 +73,161 @@ class CharacterReplacementPipeline:
             used,
             total,
         )
+
+    @staticmethod
+    def _normalize_landmarks(landmarks: np.ndarray | None) -> np.ndarray | None:
+        """Return landmarks as a finite ``(5, 2)`` float32 array."""
+        if landmarks is None:
+            return None
+
+        pts = np.array(landmarks, dtype=np.float32, copy=True)
+        if pts.shape == (2, 5):
+            pts = pts.T
+        if pts.shape != (5, 2) or not np.isfinite(pts).all():
+            return None
+
+        if pts[0, 0] > pts[1, 0]:
+            pts[[0, 1]] = pts[[1, 0]]
+        if pts[3, 0] > pts[4, 0]:
+            pts[[3, 4]] = pts[[4, 3]]
+        return pts
+
+    @staticmethod
+    def _is_active_track(track) -> bool:
+        """Treat tracks without an explicit age marker as active."""
+        age = getattr(track, "age_since_seen", 0)
+        if isinstance(age, (int, np.integer)):
+            return int(age) == 0
+        return True
+
+    def _smooth_track_landmarks(
+        self,
+        track_id: int,
+        frame_idx: int,
+        landmarks: np.ndarray,
+        bbox: np.ndarray,
+    ) -> np.ndarray:
+        """Apply per-track landmark damping on the sequential pipeline path."""
+        history = getattr(self, "_landmark_history", None)
+        if history is None:
+            self._landmark_history = {}
+            history = self._landmark_history
+
+        current = landmarks.astype(np.float32, copy=True)
+        prev_state = history.get(track_id)
+        if prev_state is None:
+            history[track_id] = (frame_idx, current)
+            return current
+
+        prev_frame_idx, prev_landmarks = prev_state
+        if frame_idx <= prev_frame_idx or frame_idx - prev_frame_idx > 1:
+            history[track_id] = (frame_idx, current)
+            return current
+
+        bbox_f = np.array(bbox, dtype=np.float32, copy=False)
+        face_size = max(
+            float(bbox_f[2] - bbox_f[0]),
+            float(bbox_f[3] - bbox_f[1]),
+            float(np.linalg.norm(current[1] - current[0]) * 2.5),
+            1.0,
+        )
+        max_step = max(1.5, face_size * 0.08)
+
+        delta = current - prev_landmarks
+        delta_norm = np.linalg.norm(delta, axis=1, keepdims=True)
+        scale = np.minimum(1.0, max_step / np.maximum(delta_norm, 1e-6))
+        capped = prev_landmarks + delta * scale
+
+        current_weight = np.array(
+            [0.45, 0.45, 0.55, 0.65, 0.65], dtype=np.float32
+        )[:, np.newaxis]
+        smoothed = prev_landmarks + (capped - prev_landmarks) * current_weight
+
+        history[track_id] = (frame_idx, smoothed.astype(np.float32, copy=True))
+        return smoothed.astype(np.float32)
+
+    def _stabilize_track_landmarks(
+        self,
+        tracked_faces: list,
+        frame_idx: int,
+    ) -> None:
+        """Stabilize active face landmarks before worker threads start swapping."""
+        active_ids: set[int] = set()
+
+        for tf in tracked_faces:
+            if not self._is_active_track(tf):
+                continue
+
+            pts = self._normalize_landmarks(getattr(tf, "landmarks", None))
+            if pts is None:
+                continue
+
+            track_id = int(getattr(tf, "track_id", -1))
+            active_ids.add(track_id)
+            smoothed = self._smooth_track_landmarks(track_id, frame_idx, pts, tf.bbox)
+            tf.landmarks = smoothed
+
+            face_obj = getattr(tf, "face_obj", None)
+            if face_obj is not None:
+                try:
+                    face_obj.kps = smoothed.copy()
+                except Exception:
+                    logger.debug(
+                        "Could not store stabilized keypoints on face object for track %s",
+                        track_id,
+                    )
+
+        history = getattr(self, "_landmark_history", None)
+        if not history:
+            return
+
+        max_age = max(1, int(self._cfg.tracker_max_age))
+        stale_tracks = [
+            track_id
+            for track_id, (last_frame_idx, _) in history.items()
+            if track_id not in active_ids and frame_idx - last_frame_idx > max_age
+        ]
+        for track_id in stale_tracks:
+            history.pop(track_id, None)
+
+    def _apply_temporal_face_blend(
+        self,
+        result: np.ndarray,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        """Blend only the overlap between consecutive face masks when enabled."""
+        if mask is None or not np.any(mask):
+            self._prev_face_part = None
+            self._prev_face_mask = None
+            return result
+
+        history_weight = float(np.clip(self._cfg.temporal_smooth_alpha, 0.0, 1.0))
+        current = result.astype(np.float32)
+        mask_f32 = mask.astype(np.float32) / 255.0
+
+        prev_face_part = getattr(self, "_prev_face_part", None)
+        prev_face_mask = getattr(self, "_prev_face_mask", None)
+        if (
+            history_weight > 0.0
+            and prev_face_part is not None
+            and prev_face_mask is not None
+        ):
+            overlap_mask = np.minimum(mask_f32, prev_face_mask)
+            overlap_area = float(overlap_mask.sum())
+            current_area = float(mask_f32.sum())
+            overlap_ratio = overlap_area / current_area if current_area > 0.0 else 0.0
+
+            if overlap_ratio >= 0.35:
+                overlap_mask = overlap_mask[:, :, np.newaxis]
+                blended = (
+                    current * (1.0 - history_weight)
+                    + prev_face_part * history_weight
+                )
+                current = blended * overlap_mask + current * (1.0 - overlap_mask)
+
+        self._prev_face_part = current.copy()
+        self._prev_face_mask = mask_f32.copy()
+        return np.clip(current, 0, 255).astype(np.uint8)
 
     # ── public entry point ────────────────────────────────────────────
 
@@ -216,28 +373,7 @@ class CharacterReplacementPipeline:
         frame, future = pending.popleft()
         result, local, mask = future.result()
 
-        # Apply localized temporal smoothing (EMA) to face region only
-        alpha = self._cfg.temporal_smooth_alpha
-        if alpha > 0.0 and frame_count > 0 and self._prev_face_part is not None:
-            current_face_part = result.astype(np.float32)
-            smoothed_face_part = (
-                current_face_part * alpha 
-                + self._prev_face_part * (1.0 - alpha)
-            )
-            
-            mask_f32 = mask.astype(np.float32) / 255.0
-            mask_f32 = mask_f32[:, :, np.newaxis]
-            
-            result = (
-                smoothed_face_part * mask_f32 
-                + frame.astype(np.float32) * (1.0 - mask_f32)
-            ).astype(np.uint8)
-            
-            self._prev_face_part = smoothed_face_part
-        else:
-            mask_f32 = mask.astype(np.float32) / 255.0
-            mask_f32 = mask_f32[:, :, np.newaxis]
-            self._prev_face_part = result.astype(np.float32) * mask_f32 + frame.astype(np.float32) * (1.0 - mask_f32)
+        result = self._apply_temporal_face_blend(result, mask)
 
         writer.write(result)
         frame_count += 1
@@ -258,34 +394,8 @@ class CharacterReplacementPipeline:
         """Detect → recognise → swap → enhance → blend for one frame."""
         prep = self._prepare_frame(frame, frame_idx, stats)
         result, local, mask = self._finish_frame(*prep)
-        
-        # Apply localized temporal smoothing (EMA) to face region only
-        alpha = self._cfg.temporal_smooth_alpha
-        if alpha > 0.0 and frame_idx > 0 and self._prev_face_part is not None:
-            # The 'face_part' is the composited result where mask is 1
-            current_face_part = result.astype(np.float32)
-            
-            # EMA: smoothed = alpha * current + (1 - alpha) * previous
-            smoothed_face_part = (
-                current_face_part * alpha 
-                + self._prev_face_part * (1.0 - alpha)
-            )
-            
-            # Re-composite: smooth face + original background
-            mask_f32 = mask.astype(np.float32) / 255.0
-            mask_f32 = mask_f32[:, :, np.newaxis]
-            
-            result = (
-                smoothed_face_part * mask_f32 
-                + frame.astype(np.float32) * (1.0 - mask_f32)
-            ).astype(np.uint8)
-            
-            self._prev_face_part = smoothed_face_part
-        else:
-            # No smoothing: just update the state for next frame
-            mask_f32 = mask.astype(np.float32) / 255.0
-            mask_f32 = mask_f32[:, :, np.newaxis]
-            self._prev_face_part = result.astype(np.float32) * mask_f32 + frame.astype(np.float32) * (1.0 - mask_f32)
+
+        result = self._apply_temporal_face_blend(result, mask)
 
         self._merge_finish_stats(stats, local)
         return result
@@ -305,12 +415,17 @@ class CharacterReplacementPipeline:
 
         # 1. Detect & track faces
         _t = time.perf_counter()
-        tracked_faces = self._detector.detect(frame)
+        tracked_faces = [
+            tf for tf in self._detector.detect(frame)
+            if self._is_active_track(tf)
+        ]
         if timers is not None:
             timers["detect"] += time.perf_counter() - _t
 
         if not tracked_faces:
             return frame, frame_idx, [], []
+
+        self._stabilize_track_landmarks(tracked_faces, frame_idx)
 
         logger.debug("Frame %d: Detected %d faces", frame_idx, len(tracked_faces))
 
