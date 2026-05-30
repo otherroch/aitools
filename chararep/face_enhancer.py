@@ -41,6 +41,19 @@ _RESIDUAL_HISTORY_WEIGHT = 0.2
 # Scale factor for normalising pixel values to [-1, 1].
 _NORM_SCALE = 127.5
 
+# Normalised FFHQ-style 5-point template used to align faces before
+# enhancement when a backend supports canonical aligned crops.
+_ENHANCEMENT_ALIGN_TEMPLATE = np.array(
+    [
+        [0.37691676, 0.46864664],
+        [0.62285697, 0.46912813],
+        [0.50123859, 0.61331904],
+        [0.39308822, 0.72541100],
+        [0.61150205, 0.72490465],
+    ],
+    dtype=np.float32,
+)
+
 
 # ---------------------------------------------------------------------------
 # Backend: GFPGAN (PyTorch)
@@ -48,6 +61,8 @@ _NORM_SCALE = 127.5
 
 class _GfpganBackend:
     """Thin wrapper around the GFPGAN restorer."""
+
+    aligned_face_size = None
 
     def __init__(self, cfg: PipelineConfig):
         self._restorer = None
@@ -153,6 +168,7 @@ class _OnnxCodeFormerBackend:
     """
 
     _INPUT_SIZE = 512
+    aligned_face_size = _INPUT_SIZE
 
     def __init__(self, cfg: PipelineConfig):
         self._session = None
@@ -255,6 +271,7 @@ class FaceEnhancer:
         self._backend = None
         self._track_boxes: dict[int, tuple[int, np.ndarray]] = {}
         self._track_residuals: dict[int, tuple[int, np.ndarray]] = {}
+        self._aligned_mask_cache: dict[int, np.ndarray] = {}
 
         if not cfg.enable_face_enhancement:
             logger.info("Face enhancement disabled.")
@@ -320,6 +337,120 @@ class FaceEnhancer:
         x2 = float(np.clip(x2, x1 + 2.0, frame_w))
         y2 = float(np.clip(y2, y1 + 2.0, frame_h))
         return int(np.floor(x1)), int(np.floor(y1)), int(np.ceil(x2)), int(np.ceil(y2))
+
+    @staticmethod
+    def _aligned_template(size: int) -> np.ndarray:
+        """Return the canonical enhancer template in pixel coordinates."""
+        return _ENHANCEMENT_ALIGN_TEMPLATE * float(size)
+
+    def _estimate_enhancement_affine(
+        self,
+        landmarks,
+        size: int,
+    ) -> np.ndarray | None:
+        """Estimate a canonical face-alignment warp from stabilized landmarks."""
+        pts = self._normalize_landmarks(landmarks)
+        if pts is None:
+            return None
+
+        template = self._aligned_template(size)
+        affine, _ = cv2.estimateAffinePartial2D(pts, template, method=cv2.RANSAC)
+        if affine is None or not np.isfinite(affine).all():
+            return None
+
+        det = affine[0, 0] * affine[1, 1] - affine[0, 1] * affine[1, 0]
+        if abs(det) < 1e-6:
+            return None
+        return affine.astype(np.float32)
+
+    def _build_aligned_enhancement_mask(self, size: int) -> np.ndarray:
+        """Return a soft canonical face mask for aligned enhancement crops."""
+        cached = self._aligned_mask_cache.get(size)
+        if cached is not None:
+            return cached
+
+        template = self._aligned_template(size)
+        eye_mid = (template[0] + template[1]) * 0.5
+        mouth_mid = (template[3] + template[4]) * 0.5
+        eye_dist = max(float(np.linalg.norm(template[1] - template[0])), 1.0)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.85)
+
+        extra_pts = np.vstack(
+            [
+                np.array([eye_mid[0], eye_mid[1] - mid_height * 1.45]),
+                np.array([template[0, 0] - eye_dist * 0.9, template[0, 1] - mid_height * 0.9]),
+                np.array([template[1, 0] + eye_dist * 0.9, template[1, 1] - mid_height * 0.9]),
+                np.array([template[3, 0] - eye_dist * 0.95, template[3, 1] + mid_height * 0.8]),
+                np.array([template[4, 0] + eye_dist * 0.95, template[4, 1] + mid_height * 0.8]),
+                np.array([mouth_mid[0], mouth_mid[1] + mid_height * 1.1]),
+            ],
+            dtype=np.float32,
+        )
+
+        hull_pts = np.vstack([template, extra_pts])
+        hull_pts[:, 0] = np.clip(hull_pts[:, 0], 0.0, float(size - 1))
+        hull_pts[:, 1] = np.clip(hull_pts[:, 1], 0.0, float(size - 1))
+
+        mask = np.zeros((size, size), dtype=np.uint8)
+        hull = cv2.convexHull(hull_pts.astype(np.int32))
+        cv2.fillConvexPoly(mask, hull, 255)
+
+        blur_k = max(17, int(size * 0.09)) | 1
+        mask_f32 = cv2.GaussianBlur(mask, (blur_k, blur_k), 0).astype(np.float32) / 255.0
+        mask_f32 = mask_f32 * mask_f32 * (3.0 - 2.0 * mask_f32)
+        self._aligned_mask_cache[size] = mask_f32
+        return mask_f32
+
+    def _apply_aligned_enhancement(
+        self,
+        frame: np.ndarray,
+        tracked_face,
+        track_id: int,
+        frame_idx: int,
+        weight: float,
+    ) -> bool:
+        """Enhance a landmark-aligned canonical face crop and warp it back."""
+        align_size = int(getattr(self._backend, "aligned_face_size", 0) or 0)
+        if align_size < 16:
+            return False
+
+        affine = self._estimate_enhancement_affine(
+            getattr(tracked_face, "landmarks", None),
+            align_size,
+        )
+        if affine is None:
+            return False
+
+        aligned = cv2.warpAffine(
+            frame,
+            affine,
+            (align_size, align_size),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT101,
+        )
+        enhanced = self._backend.enhance_crop(aligned, weight=weight)
+        if enhanced.shape != aligned.shape:
+            return False
+
+        residual = enhanced.astype(np.float32) - aligned.astype(np.float32)
+        if track_id >= 0:
+            residual = self._stabilize_enhancement_residual(track_id, frame_idx, residual)
+
+        mask = self._build_aligned_enhancement_mask(align_size)[:, :, np.newaxis]
+        residual *= mask
+
+        affine_inv = cv2.invertAffineTransform(affine)
+        warped_residual = cv2.warpAffine(
+            residual,
+            affine_inv,
+            (frame.shape[1], frame.shape[0]),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+
+        blended = frame.astype(np.float32) + warped_residual.astype(np.float32)
+        frame[:] = np.clip(blended, 0, 255).astype(np.uint8)
+        return True
 
     def _propose_enhancement_box(
         self,
@@ -557,6 +688,15 @@ class FaceEnhancer:
 
             track_id = int(getattr(tf, "track_id", -1))
             active_track_ids.add(track_id)
+            if self._apply_aligned_enhancement(
+                frame,
+                tf,
+                track_id,
+                frame_idx,
+                weight,
+            ):
+                continue
+
             box = self._propose_enhancement_box(tf, h, w)
             if track_id >= 0:
                 box = self._stabilize_enhancement_box(track_id, frame_idx, box, h, w)

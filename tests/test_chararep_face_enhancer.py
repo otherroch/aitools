@@ -1,6 +1,7 @@
 """Tests for face_enhancer.py."""
 
 import types
+import cv2
 import numpy as np
 import pytest
 
@@ -209,8 +210,48 @@ class TestFaceEnhancerEnhanceFaces:
         center_y = (y1 + y2) // 2
         assert result[center_y, center_x, 0] < 160
 
+    def test_enhance_faces_prefers_aligned_crop_when_backend_supports_it(self, monkeypatch):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+        enhancer._backend.aligned_face_size = 64
+
+        seen = {}
+
+        def _enhance(crop, weight=0.7):
+            seen["shape"] = crop.shape
+            return np.clip(crop.astype(np.int16) + 20, 0, 255).astype(np.uint8)
+
+        monkeypatch.setattr(enhancer._backend, "enhance_crop", _enhance)
+
+        frame = np.full((180, 180, 3), 100, dtype=np.uint8)
+        face = _make_tracked_face(
+            50,
+            40,
+            130,
+            140,
+            label="hero",
+            landmarks=_make_landmarks(55, 45, 125, 135),
+        )
+
+        result = enhancer.enhance_faces(frame.copy(), [face], frame_idx=0)
+
+        assert seen["shape"] == (64, 64, 3)
+        assert result.mean() > frame.mean()
+
 
 class TestEnhancementStabilizationHelpers:
+    def test_estimate_enhancement_affine_maps_landmarks_to_template(self):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+        landmarks = _make_landmarks(60, 50, 140, 150)
+
+        affine = enhancer._estimate_enhancement_affine(landmarks, 128)
+
+        assert affine is not None
+        transformed = cv2.transform(landmarks[np.newaxis, :, :], affine)[0]
+        template = enhancer._aligned_template(128)
+        assert np.max(np.abs(transformed - template)) < 5.0
+
     def test_propose_enhancement_box_recenters_on_landmarks(self):
         cfg = _make_cfg(enable=True)
         enhancer = FaceEnhancer(cfg)
