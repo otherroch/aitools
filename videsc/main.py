@@ -33,11 +33,60 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     logging.getLogger().setLevel(getattr(logging, getattr(args, "log_level", "INFO")))
-    logger.debug("videsc starting  vl=%s  log_level=%s", args.vl, getattr(args, "log_level", "INFO"))
+    logger.debug("videsc starting  vl=%s  vllm=%s  log_level=%s", args.vl, args.vllm, getattr(args, "log_level", "INFO"))
 
+    if args.vllm:
+        return _run_vllm(args)
     if args.vl:
         return _run_vl(args)
     return _run_wd14(args)
+
+
+def _run_vllm(args) -> int:
+    """Run video description via a remote vLLM server."""
+    import tempfile
+    import shutil
+    from pathlib import Path
+    from videsc.pipeline.vllm_runner import run_single_video_vllm, run_batch_vllm
+
+    is_batch = bool(args.videos or args.indir or getattr(args, "filelist", None))
+
+    logger.debug("_run_vllm: is_batch=%s  host=%s  port=%d  model=%s",
+                 is_batch, args.vllm_host, args.vllm_port, args.vllm_model)
+
+    if is_batch:
+        return run_batch_vllm(args)
+
+    # Handle YouTube URL: download to a temp dir and set args.video
+    tmp_dir = None
+    if args.youtube_url:
+        from videsc.describe import _download_youtube_video
+
+        if not args.youtube_api_key:
+            logger.error("videsc: --youtube-url requires --youtube-api-key")
+            return 1
+
+        if not args.outdir and args.output_dir:
+            args.outdir = str(args.output_dir)
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="videsc_yt_"))
+        logger.info("Downloading YouTube video %s …", args.youtube_url)
+        video_path = _download_youtube_video(args.youtube_url, tmp_dir)
+        if video_path is None:
+            logger.error("Failed to download YouTube video: %s", args.youtube_url)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 1
+        args.video = video_path
+
+    if not args.video:
+        logger.error("videsc --vllm: --video or --youtube-url is required for single-video mode")
+        return 1
+
+    try:
+        return run_single_video_vllm(args)
+    finally:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _run_vl(args) -> int:

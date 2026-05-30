@@ -22,6 +22,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, or Qwen3.5) instead of the WD14 tagger.",
     )
+    p.add_argument(
+        "--vllm",
+        action="store_true",
+        help="Use a remote vLLM server for video description instead of loading a local model.",
+    )
 
     # =========================================================================
     # WD14 mode arguments (active when --vl is NOT set)
@@ -332,6 +337,67 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     vl.add_argument("--seed", type=int, default=4051888)
     vl.add_argument("--rep_pen", type=float, default=1.05, help="repetition penalty. Default is 1.0")
 
+    # =========================================================================
+    # vLLM mode arguments (active when --vllm IS set)
+    # =========================================================================
+    vllm = p.add_argument_group(
+        "vLLM mode (--vllm) — remote vLLM server",
+        "Used when --vllm is set. Connects to an OpenAI-compatible vLLM server.\n"
+        "Requires --video, --videos, --indir, or --filelist.",
+    )
+    vllm.add_argument(
+        "--vllm-host",
+        type=str,
+        default="localhost",
+        help="Hostname of the vLLM server (default: localhost).",
+    )
+    vllm.add_argument(
+        "--vllm-port",
+        type=int,
+        default=8000,
+        help="Port of the vLLM server (default: 8000).",
+    )
+    vllm.add_argument(
+        "--vllm-model",
+        type=str,
+        default="default",
+        help="Model name served by the vLLM server (as reported by /v1/models).",
+    )
+    vllm.add_argument(
+        "--vllm-api-key",
+        type=str,
+        default="EMPTY",
+        help="API key for the vLLM server (default: EMPTY).",
+    )
+    vllm.add_argument(
+        "--vllm-temperature",
+        type=float,
+        default=0.7,
+        help="Sampling temperature for vLLM generation (default: 0.7).",
+    )
+    vllm.add_argument(
+        "--vllm-fps",
+        type=float,
+        default=1.0,
+        help="Frames per second to sample from video for vLLM (default: 1.0).",
+    )
+    vllm.add_argument(
+        "--vllm-chunk-duration",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help=(
+            "Split video into chunks of this duration (seconds) before sending\n"
+            "to vLLM. If 0 (default), the entire video is processed at once."
+        ),
+    )
+    vllm.add_argument(
+        "--vllm-max-image-size",
+        type=int,
+        default=1280,
+        help="Maximum image edge size (pixels) when encoding frames for vLLM (default: 1280).",
+    )
+
     # ── Logging ──────────────────────────────────────────────────────────────
     p.add_argument(
         "--log-level",
@@ -365,10 +431,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
     # Post-parse validation for WD14 mode (--vl not set)
-    if not args.vl:
+    if not args.vl and not args.vllm:
         if args.input_dir is None and args.youtube_url is None:
             p.error("one of --input-dir or --youtube-url is required")
         if args.youtube_url is not None and args.youtube_api_key is None:
             p.error("--youtube-api-key is required when using --youtube-url")
+
+    # Post-parse validation for vLLM mode
+    if args.vllm:
+        if not args.video and not args.videos and not args.indir and not getattr(args, "filelist", None):
+            if not args.youtube_url:
+                p.error("--vllm requires --video, --videos, --indir, --filelist, or --youtube-url")
 
     return args
