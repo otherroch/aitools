@@ -25,12 +25,37 @@ def _frame(h=100, w=100) -> np.ndarray:
     return np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
 
 
-def _make_tracked_face(x1=10, y1=10, x2=50, y2=50, label="villain"):
+def _make_landmarks(x1=10, y1=10, x2=50, y2=50) -> np.ndarray:
+    cx = (x1 + x2) / 2.0
+    eye_y = y1 + (y2 - y1) * 0.35
+    mouth_y = y1 + (y2 - y1) * 0.72
+    return np.array(
+        [
+            [x1 + (x2 - x1) * 0.28, eye_y],
+            [x1 + (x2 - x1) * 0.72, eye_y],
+            [cx, y1 + (y2 - y1) * 0.52],
+            [x1 + (x2 - x1) * 0.34, mouth_y],
+            [x1 + (x2 - x1) * 0.66, mouth_y],
+        ],
+        dtype=np.float32,
+    )
+
+
+def _make_tracked_face(
+    x1=10,
+    y1=10,
+    x2=50,
+    y2=50,
+    label="villain",
+    landmarks=None,
+    track_id=0,
+):
     """Create a minimal TrackedFace-like object for testing."""
     return types.SimpleNamespace(
-        track_id=0,
+        track_id=track_id,
         bbox=np.array([x1, y1, x2, y2], dtype=np.float32),
         identity_label=label,
+        landmarks=landmarks,
     )
 
 
@@ -155,6 +180,78 @@ class TestFaceEnhancerEnhanceFaces:
         faces = [_make_tracked_face()]
         result = enhancer.enhance_faces(frame, faces, frame_idx=0)
         np.testing.assert_array_equal(result, original)
+
+    def test_enhance_faces_uses_soft_mask_pasteback(self, monkeypatch):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+        frame = np.full((200, 200, 3), 200, dtype=np.uint8)
+        face = _make_tracked_face(
+            60,
+            50,
+            140,
+            150,
+            label="hero",
+            landmarks=_make_landmarks(60, 50, 140, 150),
+        )
+
+        monkeypatch.setattr(
+            enhancer._backend,
+            "enhance_crop",
+            lambda crop, weight=0.7: np.zeros_like(crop),
+        )
+
+        box = enhancer._propose_enhancement_box(face, 200, 200)
+        result = enhancer.enhance_faces(frame.copy(), [face], frame_idx=0)
+
+        x1, y1, x2, y2 = box
+        assert result[y1 + 2, x1 + 2, 0] >= 180
+        center_x = (x1 + x2) // 2
+        center_y = (y1 + y2) // 2
+        assert result[center_y, center_x, 0] < 160
+
+
+class TestEnhancementStabilizationHelpers:
+    def test_propose_enhancement_box_recenters_on_landmarks(self):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+        face = _make_tracked_face(
+            40,
+            40,
+            100,
+            120,
+            landmarks=_make_landmarks(70, 40, 130, 120),
+        )
+
+        x1, _, x2, _ = enhancer._propose_enhancement_box(face, 200, 200)
+        box_cx = (x1 + x2) / 2.0
+        raw_bbox_cx = float((face.bbox[0] + face.bbox[2]) / 2.0)
+        landmark_cx = float(face.landmarks[:, 0].mean())
+
+        assert abs(box_cx - landmark_cx) < abs(raw_bbox_cx - landmark_cx)
+
+    def test_stabilize_enhancement_box_limits_jump(self):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+
+        first = enhancer._stabilize_enhancement_box(1, 0, (40, 40, 140, 180), 300, 300)
+        second = enhancer._stabilize_enhancement_box(1, 1, (100, 40, 200, 180), 300, 300)
+
+        first_cx = (first[0] + first[2]) / 2.0
+        second_cx = (second[0] + second[2]) / 2.0
+        assert second_cx - first_cx < 60
+        assert second_cx - first_cx > 0
+
+    def test_stabilize_enhancement_residual_damps_low_frequency(self):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+        base = np.full((32, 32, 3), 40, dtype=np.float32)
+        zero = np.zeros((32, 32, 3), dtype=np.float32)
+
+        first = enhancer._stabilize_enhancement_residual(5, 0, base)
+        second = enhancer._stabilize_enhancement_residual(5, 1, zero)
+
+        assert first.mean() == pytest.approx(40.0)
+        assert 0.0 < second.mean() < 40.0
 
 
 # ---------------------------------------------------------------------------
