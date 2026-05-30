@@ -62,8 +62,8 @@ class CharacterReplacementPipeline:
         self._enhancer = FaceEnhancer(cfg)
         self._blender = FaceBlender(cfg)
 
-        # Temporal smoothing state: previous blended frame for EMA
-        self._prev_frame: np.ndarray | None = None
+        # Temporal smoothing state: for localized EMA on face regions
+        self._prev_face_part: np.ndarray | None = None
 
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
@@ -185,7 +185,8 @@ class CharacterReplacementPipeline:
 
                 # Submit parallel: swap + blend + enhance
                 future = pool.submit(self._finish_frame, *prep)
-                pending.append(future)
+                # We store the frame with the future to allow localized EMA in _drain_one
+                pending.append((frame_data, future))
 
                 # Once we hit capacity, drain the oldest result to
                 # keep at most *batch_size* frames in flight.
@@ -212,7 +213,32 @@ class CharacterReplacementPipeline:
         total_frames: int,
     ) -> int:
         """Wait for the oldest pending future and write its result."""
-        result, local = pending.popleft().result()
+        frame, future = pending.popleft()
+        result, local, mask = future.result()
+
+        # Apply localized temporal smoothing (EMA) to face region only
+        alpha = self._cfg.temporal_smooth_alpha
+        if alpha > 0.0 and frame_count > 0 and self._prev_face_part is not None:
+            current_face_part = result.astype(np.float32)
+            smoothed_face_part = (
+                current_face_part * alpha 
+                + self._prev_face_part * (1.0 - alpha)
+            )
+            
+            mask_f32 = mask.astype(np.float32) / 255.0
+            mask_f32 = mask_f32[:, :, np.newaxis]
+            
+            result = (
+                smoothed_face_part * mask_f32 
+                + frame.astype(np.float32) * (1.0 - mask_f32)
+            ).astype(np.uint8)
+            
+            self._prev_face_part = smoothed_face_part
+        else:
+            mask_f32 = mask.astype(np.float32) / 255.0
+            mask_f32 = mask_f32[:, :, np.newaxis]
+            self._prev_face_part = result.astype(np.float32) * mask_f32 + frame.astype(np.float32) * (1.0 - mask_f32)
+
         writer.write(result)
         frame_count += 1
         self._merge_finish_stats(stats, local)
@@ -231,7 +257,36 @@ class CharacterReplacementPipeline:
     ) -> np.ndarray:
         """Detect → recognise → swap → enhance → blend for one frame."""
         prep = self._prepare_frame(frame, frame_idx, stats)
-        result, local = self._finish_frame(*prep)
+        result, local, mask = self._finish_frame(*prep)
+        
+        # Apply localized temporal smoothing (EMA) to face region only
+        alpha = self._cfg.temporal_smooth_alpha
+        if alpha > 0.0 and frame_idx > 0 and self._prev_face_part is not None:
+            # The 'face_part' is the composited result where mask is 1
+            current_face_part = result.astype(np.float32)
+            
+            # EMA: smoothed = alpha * current + (1 - alpha) * previous
+            smoothed_face_part = (
+                current_face_part * alpha 
+                + self._prev_face_part * (1.0 - alpha)
+            )
+            
+            # Re-composite: smooth face + original background
+            mask_f32 = mask.astype(np.float32) / 255.0
+            mask_f32 = mask_f32[:, :, np.newaxis]
+            
+            result = (
+                smoothed_face_part * mask_f32 
+                + frame.astype(np.float32) * (1.0 - mask_f32)
+            ).astype(np.uint8)
+            
+            self._prev_face_part = smoothed_face_part
+        else:
+            # No smoothing: just update the state for next frame
+            mask_f32 = mask.astype(np.float32) / 255.0
+            mask_f32 = mask_f32[:, :, np.newaxis]
+            self._prev_face_part = result.astype(np.float32) * mask_f32 + frame.astype(np.float32) * (1.0 - mask_f32)
+
         self._merge_finish_stats(stats, local)
         return result
 
@@ -305,7 +360,7 @@ class CharacterReplacementPipeline:
     ) -> tuple:
         """Swap, blend, and enhance faces (safe to run in worker threads).
 
-        Returns ``(processed_frame, local_stats)`` where *local_stats*
+        Returns ``(processed_frame, local_stats, mask)`` where *local_stats*
         contains per-frame counters and timer deltas to merge back into
         the run stats.
         """
@@ -318,7 +373,7 @@ class CharacterReplacementPipeline:
         }
 
         if not swap_pairs:
-            return frame, local
+            return frame, local, np.zeros(frame.shape[:2], dtype=np.uint8)
 
         # 4. Run face swaps (inswapper with paste_back)
         original = frame.copy()
@@ -333,7 +388,7 @@ class CharacterReplacementPipeline:
         #    image rather than the hard inswapper paste-back boundary,
         #    and can smooth over the transition zone itself.
         _t = time.perf_counter()
-        result = self._blender.blend_all(original, result, tracked_faces, frame_idx)
+        result, mask = self._blender.blend_all(original, result, tracked_faces, frame_idx)
         local["blend"] = time.perf_counter() - _t
 
         # 6. Optional face enhancement (GFPGAN) – after blend so it
@@ -344,21 +399,7 @@ class CharacterReplacementPipeline:
             result = self._enhancer.enhance_faces(result, tracked_faces, frame_idx)
             local["enhance"] = time.perf_counter() - _t
 
-        # 7. Temporal smoothing: exponential moving average to reduce
-        #    frame-to-frame jitter.  Blends the current result with the
-        #    previous frame using alpha from config.
-        alpha = self._cfg.temporal_smooth_alpha
-        if alpha > 0.0 and frame_idx > 0:
-            if self._prev_frame is None:
-                self._prev_frame = result.copy()
-            # EMA: smoothed = alpha * current + (1 - alpha) * previous
-            result = (
-                result.astype(np.float32) * alpha
-                + self._prev_frame.astype(np.float32) * (1.0 - alpha)
-            ).astype(np.uint8)
-            self._prev_frame = result.copy()
-
-        return result, local
+        return result, local, mask
 
     @staticmethod
     def _merge_finish_stats(stats: dict, local: dict) -> None:

@@ -120,7 +120,7 @@ class TestFinishFrame:
     def test_no_swap_pairs_returns_original(self):
         pipe = _stub_pipeline()
         frame = np.ones((4, 4, 3), dtype=np.uint8) * 42
-        result, local = pipe._finish_frame(frame, 0, [], [])
+        result, local, mask = pipe._finish_frame(frame, 0, [], [])
         assert np.array_equal(result, frame)
         assert local["frames_swapped"] == 0
 
@@ -129,15 +129,14 @@ class TestFinishFrame:
         pipe._swapper.swap_multiple.return_value = np.zeros(
             (4, 4, 3), dtype=np.uint8
         )
-        pipe._blender.blend_all.return_value = np.zeros(
-            (4, 4, 3), dtype=np.uint8
-        )
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
         tracked = [MagicMock()]
         pairs = [("src", "tgt")]
 
-        result, local = pipe._finish_frame(frame, 0, tracked, pairs)
+        result, local, mask = pipe._finish_frame(frame, 0, tracked, pairs)
         assert local["frames_swapped"] == 1
         assert local["faces_swapped"] == 1
         pipe._swapper.swap_multiple.assert_called_once()
@@ -152,12 +151,10 @@ class TestFinishFrame:
         pipe._swapper.swap_multiple.return_value = np.zeros(
             (4, 4, 3), dtype=np.uint8
         )
-        pipe._blender.blend_all.return_value = np.zeros(
-            (4, 4, 3), dtype=np.uint8
-        )
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
-        result, local = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
+        result, local, mask = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
         pipe._enhancer.enhance_faces.assert_called_once()
         assert local["enhance"] >= 0.0
 
@@ -166,12 +163,10 @@ class TestFinishFrame:
         pipe._swapper.swap_multiple.return_value = np.zeros(
             (4, 4, 3), dtype=np.uint8
         )
-        pipe._blender.blend_all.return_value = np.zeros(
-            (4, 4, 3), dtype=np.uint8
-        )
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
-        _, local = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
+        _, local, mask = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
         assert local["swap"] >= 0.0
         assert local["blend"] >= 0.0
 
@@ -255,8 +250,8 @@ class TestDrainOne:
         }
 
         future = Future()
-        future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local))
-        pending = deque([future])
+        future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local, np.zeros((2, 2), dtype=np.uint8)))
+        pending = deque([(np.zeros((2, 2, 3), dtype=np.uint8), future)])
 
         count = pipe._drain_one(pending, writer, stats, 0, 0.0, 100)
         assert count == 1
@@ -296,6 +291,7 @@ class TestRunParallel:
                     "blend": 0.0,
                     "enhance": 0.0,
                 },
+                np.zeros((4, 4), dtype=np.uint8)
             )
         )
 
@@ -465,7 +461,7 @@ class TestTrackedFaceSnapshot:
                 "swap": 0.0,
                 "blend": 0.0,
                 "enhance": 0.0,
-            }
+            }, np.zeros((4, 4), dtype=np.uint8)
 
         pipe._finish_frame = MagicMock(side_effect=capture_finish)
 

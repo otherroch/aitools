@@ -101,7 +101,7 @@ class TestBlendAllNoOp:
             landmarks=np.zeros((5, 2)),
             identity_label=None,
         )
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         np.testing.assert_array_equal(result, swapped)
 
     def test_empty_faces_returns_swapped(self):
@@ -109,7 +109,7 @@ class TestBlendAllNoOp:
         blender = FaceBlender(cfg)
         original = _solid(100, 100, (255, 0, 0))
         swapped = _solid(100, 100, (0, 255, 0))
-        result = blender.blend_all(original, swapped, [], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [], frame_idx=0)
         np.testing.assert_array_equal(result, swapped)
 
 
@@ -162,7 +162,7 @@ class TestBlendAllSeamless:
         original = _solid(h, w, (100, 100, 100))
         swapped = _solid(h, w, (50, 50, 50))
         tf = _make_tracked([40, 40, 160, 160])
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         assert result.shape == (h, w, 3)
 
     def test_two_faces_seamless(self):
@@ -174,7 +174,7 @@ class TestBlendAllSeamless:
         swapped = _solid(h, w, (50, 50, 50))
         tf1 = _make_tracked([10, 50, 80, 150])
         tf2 = _make_tracked([300, 50, 390, 150])
-        result = blender.blend_all(original, swapped, [tf1, tf2], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf1, tf2], frame_idx=0)
         assert result.shape == (h, w, 3)
 
 
@@ -190,6 +190,6 @@ class TestBlendAllAlpha:
         original = _solid(h, w, (255, 0, 0))
         swapped = _solid(h, w, (0, 0, 255))
         tf = _make_tracked([40, 40, 160, 160])
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         assert result.shape == (h, w, 3)
         assert result.dtype == np.uint8

@@ -33,7 +33,7 @@ class FaceBlender:
         swapped: np.ndarray,
         faces: list[TrackedFace],
         frame_idx: int,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Blend all swapped faces at once.
 
         Builds a combined soft mask from every face that has been swapped
@@ -46,14 +46,14 @@ class FaceBlender:
             faces:    tracked faces from this frame.
 
         Returns:
-            Blended BGR frame.
+            Tuple of (Blended BGR frame, combined soft mask).
         """
         h, w = original.shape[:2]
         combined_mask = np.zeros((h, w), dtype=np.uint8)
 
         swap_faces = [f for f in faces if f.identity_label is not None]
         if not swap_faces:
-            return swapped
+            return swapped, combined_mask
 
         logger.debug("Frame %d: Blending %d swapped faces with mode '%s'", frame_idx, len(swap_faces), self._mode)
 
@@ -91,8 +91,8 @@ class FaceBlender:
         if self._mode == "seamless":
             return self._poisson_blend_combined(
                 original, swapped, combined_mask, swap_faces, face_masks
-            )
-        return self._alpha_blend(original, swapped, combined_mask)
+            ), combined_mask
+        return self._alpha_blend(original, swapped, combined_mask), combined_mask
 
     # ── mask construction ────────────────────────────────────────────────
 
