@@ -12,6 +12,7 @@ from chararep.config import PipelineConfig
 from chararep.face_swapper import (
     FaceSwapper,
     _ARCFACE_112_V1,
+    _WARP_TEMPLATES,
     _detect_model_type,
     _get_simswap_params,
 )
@@ -363,6 +364,25 @@ class TestNormalizeCropFrame:
 
 
 class TestPasteBack:
+    def test_feature_core_mask_is_stronger_on_eyes_than_forehead(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+
+        mask = swapper._build_feature_core_mask(256, "arcface_128")
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+
+        eye_y = int(round(float(left_eye[1])))
+        eye_x = int(round(float(left_eye[0])))
+        forehead_y = int(round(float(eye_mid[1] - mid_height * 0.60)))
+        forehead_x = int(round(float(eye_mid[0])))
+
+        assert mask[eye_y, eye_x] > mask[forehead_y, forehead_x] + 0.2
+
     def test_output_shape_preserved(self, tmp_path):
         cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")
         swapper = FaceSwapper(cfg)
@@ -382,6 +402,28 @@ class TestPasteBack:
         M_zero = np.zeros((2, 3), dtype=np.float32)
         result = swapper._paste_back(frame, crop, M_zero)
         np.testing.assert_array_equal(result, frame)
+
+    def test_paste_back_keeps_eye_core_stronger_than_forehead(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+        frame = np.zeros((300, 300, 3), dtype=np.uint8)
+        crop = np.full((256, 256, 3), 200, dtype=np.uint8)
+        M = np.eye(2, 3, dtype=np.float32)
+
+        result = swapper._paste_back(frame, crop, M, template_name="arcface_128")
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+
+        eye_y = int(round(float(left_eye[1])))
+        eye_x = int(round(float(left_eye[0])))
+        forehead_y = int(round(float(eye_mid[1] - mid_height * 0.60)))
+        forehead_x = int(round(float(eye_mid[0])))
+
+        assert int(result[eye_y, eye_x, 0]) > int(result[forehead_y, forehead_x, 0]) + 20
 
 
 class TestPrepareSourceEmbedding:
