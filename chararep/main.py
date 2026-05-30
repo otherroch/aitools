@@ -341,6 +341,17 @@ def _scan_image_dir(folder: str, kind: str) -> list[str]:
 def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
     """Construct a PipelineConfig from CLI arguments."""
 
+    temporal_smooth_alpha = getattr(
+        args,
+        "temporal_smooth_alpha",
+        PipelineConfig.temporal_smooth_alpha,
+    )
+    if (
+        not isinstance(temporal_smooth_alpha, (int, float))
+        or isinstance(temporal_smooth_alpha, bool)
+    ):
+        temporal_smooth_alpha = PipelineConfig.temporal_smooth_alpha
+
     characters: list[CharacterMapping] = []
     for find_folder, replace_folder in args.characters:
         label = Path(find_folder).name
@@ -376,7 +387,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         blend_mode=args.blend_mode,
         mask_blur_kernel=args.mask_blur_kernel,
         mask_erode_pixels=args.mask_erode_pixels,
-        temporal_smooth_alpha=args.temporal_smooth_alpha,
+        temporal_smooth_alpha=float(temporal_smooth_alpha),
         log_level="DEBUG" if args.verbose else "INFO",
         log_file=args.log_file,
         enable_timers=args.timers,
