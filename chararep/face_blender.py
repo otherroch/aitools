@@ -103,15 +103,19 @@ class FaceBlender:
         mask_f32 = mask_f32 * mask_f32 * (3.0 - 2.0 * mask_f32)
 
         y_grid = np.arange(size, dtype=np.float32).reshape(size, 1)
-        brow_center = eye_mid[1] - mid_height * 0.05
-        brow_sigma = max(8.0, mid_height * 0.65)
-        brow_band = np.exp(-0.5 * ((y_grid - brow_center) / brow_sigma) ** 2)
-        top_start = eye_mid[1] - mid_height * 1.05
-        top_end = eye_mid[1] + mid_height * 0.2
-        top_span = max(top_end - top_start, 1.0)
-        top_ramp = np.clip((y_grid - top_start) / top_span, 0.0, 1.0)
-        brow_weight = np.minimum(0.72 + 0.28 * top_ramp, 1.0 - brow_band * 0.22)
-        mask_f32 *= brow_weight
+        forehead_start = eye_mid[1] - mid_height * 1.15
+        forehead_end = eye_mid[1] - mid_height * 0.18
+        forehead_span = max(forehead_end - forehead_start, 1.0)
+        forehead_t = np.clip((y_grid - forehead_start) / forehead_span, 0.0, 1.0)
+        forehead_t = forehead_t * forehead_t * (3.0 - 2.0 * forehead_t)
+        # Keep the actual brow strip close to full identity strength while
+        # reserving the stronger attenuation for the forehead transition above it.
+        brow_core_center = eye_mid[1] - mid_height * 0.02
+        brow_core_sigma = max(6.0, mid_height * 0.22)
+        brow_core = np.exp(-0.5 * ((y_grid - brow_core_center) / brow_core_sigma) ** 2)
+        forehead_weight = 0.70 + 0.30 * forehead_t
+        brow_restore = 0.18 * brow_core * (1.0 - forehead_weight)
+        mask_f32 *= np.clip(forehead_weight + brow_restore, 0.0, 1.0)
 
         self._canonical_mask_cache[size] = mask_f32
         return mask_f32
@@ -160,8 +164,24 @@ class FaceBlender:
         clip_mask[clip_y1:clip_y2, clip_x1:clip_x2] = 1.0
         warped *= clip_mask
 
-        local_k = max(7, int(max(face_w, face_h) * 0.12)) | 1
+        local_k = max(5, int(max(face_w, face_h) * 0.08)) | 1
         warped = cv2.GaussianBlur(warped, (local_k, local_k), 0)
+
+        eye_line = float((pts[0, 1] + pts[1, 1]) * 0.5)
+        forehead_end = int(np.clip(eye_line - face_h * 0.04, 0, h))
+        forehead_start = int(np.clip(eye_line - face_h * 0.55, 0, forehead_end))
+        if forehead_end > forehead_start:
+            stronger_k = max(local_k + 4, int(max(face_w, face_h) * 0.13)) | 1
+            smoother = cv2.GaussianBlur(warped, (stronger_k, stronger_k), 0)
+            y_grid = np.arange(h, dtype=np.float32).reshape(h, 1)
+            ramp = np.clip(
+                (forehead_end - y_grid) / max(float(forehead_end - forehead_start), 1.0),
+                0.0,
+                1.0,
+            )
+            ramp = ramp * ramp * (3.0 - 2.0 * ramp)
+            warped = warped * (1.0 - ramp) + smoother * ramp
+
         return np.clip(warped * 255.0, 0, 255).astype(np.uint8)
 
     def blend_all(

@@ -118,6 +118,24 @@ class TestBlendAllNoOp:
 # ---------------------------------------------------------------------------
 
 class TestBuildMask:
+    def test_canonical_mask_preserves_brow_core_more_than_forehead(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+
+        template = blender._blend_template(256)
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.9)
+        brow_row = int(round(float(eye_mid[1] - mid_height * 0.02)))
+        forehead_row = int(round(float(eye_mid[1] - mid_height * 0.55)))
+        mid_col = int(round(float(eye_mid[0])))
+
+        mask = blender._canonical_face_mask(256)
+
+        assert mask[brow_row, mid_col] > mask[forehead_row, mid_col] + 0.08
+
     def test_mask_nonzero_inside_bbox(self):
         cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
         blender = FaceBlender(cfg)
@@ -182,6 +200,20 @@ class TestBuildMask:
         roi1 = mask1[40:170, 40:160].astype(np.int16)
         roi2 = mask2[40:170, 40:160].astype(np.int16)
         assert np.mean(np.abs(roi1 - roi2)) < 16.0
+
+    def test_aligned_mask_keeps_brow_line_stronger_than_forehead(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+
+        mask = blender._build_aligned_mask((220, 220), bbox, lm)
+
+        assert mask is not None
+        assert mask[78, 100] > mask[50, 100] + 12
 
 
 # ---------------------------------------------------------------------------
