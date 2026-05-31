@@ -459,7 +459,7 @@ class TestVidescMainRuntime:
 
     def test_main_dispatch(self, monkeypatch):
         mod = self._import_main(monkeypatch)
-        monkeypatch.setitem(sys.modules, "videsc.cli.args", types.SimpleNamespace(parse_args=lambda _a=None: types.SimpleNamespace(vl=True)))
+        monkeypatch.setitem(sys.modules, "videsc.cli.args", types.SimpleNamespace(parse_args=lambda _a=None: types.SimpleNamespace(vl=True, vllm=False)))
         monkeypatch.setattr(mod, "_run_vl", lambda _a: 9)
         monkeypatch.setattr(mod, "_run_wd14", lambda _a: 3)
         assert mod.main([]) == 9
