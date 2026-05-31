@@ -4,16 +4,16 @@ Generate AI-powered text descriptions for video files.
 
 `videsc` supports two modes selectable via the `--vl` flag:
 
-| | WD14 mode (default) | VL mode (`--vl`) |
-|---|---|---|
-| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 (LLM) |
-| **Output style** | Comma-separated tag list | Fluent natural-language paragraphs |
-| **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) |
-| **Audio support** | No | Yes (Whisper ASR integration, Qwen models only) |
-| **Custom prompts** | No | Yes (`--prompt` / `--system`) |
-| **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling |
+| | WD14 mode (default) | VL mode (`--vl`) | vLLM mode (`--vllm`) |
+|---|---|---|---|
+| **Model** | WD14 ONNX tagger | Qwen3-VL / Qwen3-Omni / Qwen3.5 / Gemma 4 (LLM) | Any vision-language model served by a remote vLLM server |
+| **Output style** | Comma-separated tag list | Fluent natural-language paragraphs | Fluent natural-language paragraphs |
+| **GPU required** | No (CPU-capable) | Strongly recommended (8 GB+ VRAM) | No (GPU runs on the remote vLLM server) |
+| **Audio support** | No | Yes (Whisper ASR integration, Qwen models only) | No |
+| **Custom prompts** | No | Yes (`--prompt` / `--system`) | Yes (`--prompt` / `--system`) |
+| **Best for** | Fast tagging, LoRA caption files | Rich scene descriptions, storytelling | Multi-machine / shared-server inference, large models that don't fit locally |
 
-Use the default WD14 mode when you need quick, reproducible tag-based captions that work on any hardware. Use `--vl` when you need detailed, human-readable descriptions — for example to create training captions that capture narrative context, character actions, or dialogue.
+Use the default WD14 mode when you need quick, reproducible tag-based captions that work on any hardware. Use `--vl` when you need detailed, human-readable descriptions — for example to create training captions that capture narrative context, character actions, or dialogue. Use `--vllm` when the model you want to use is already served by a remote vLLM instance — this offloads GPU inference to the server and allows the client machine to be CPU-only.
 
 ## Installation
 
@@ -23,9 +23,14 @@ pip install -e .
 
 # With Qwen3-VL support for --vl mode
 pip install -e ".[vl]"
+
+# With vLLM remote server support for --vllm mode
+pip install -e ".[vllm]"
 ```
 
 A CUDA-capable GPU is strongly recommended for VL mode. For lower VRAM use `--quant 4bit` or `--quant 8bit`.
+
+vLLM mode does not require a local GPU — all inference runs on the remote vLLM server. The client only needs the `openai` and `requests` Python packages (installed by the `vllm` extra) plus OpenCV for frame extraction.
 
 ## WD14 mode usage
 
@@ -164,6 +169,149 @@ videsc --vl --gemma4 --consolidate \
 videsc --vl --gemma4 --consolidate --window-size 5 --video ./long_clip.mp4
 ```
 
+## vLLM mode usage (`--vllm`)
+
+vLLM mode offloads video description inference to a remote [vLLM](https://docs.vllm.ai/) server that exposes an OpenAI-compatible `/v1/chat/completions` endpoint. Any vision-language model served by vLLM can be used (e.g. Qwen3-VL, LLaVA, InternVL). The client extracts frames locally with OpenCV, encodes them as base64 JPEG images, and sends them alongside a text prompt to the server.
+
+### Prerequisites
+
+1. **A running vLLM server** serving a vision-language model. For example:
+
+   ```bash
+   # Install vLLM on the server machine
+   pip install vllm
+
+   # Start vLLM with a vision-language model
+   vllm serve Qwen/Qwen3-VL-8B-Instruct \
+        --host 0.0.0.0 --port 8000 \
+        --max-model-len 32768
+   ```
+
+2. **Client dependencies** installed on the machine running `videsc`:
+
+   ```bash
+   pip install -e ".[vllm]"
+   # Also requires OpenCV (pip install opencv-python) for frame extraction
+   ```
+
+### Connection & verification
+
+On initialisation the client sends a `GET` request to the `/v1/models` endpoint of the vLLM server. If the server is unreachable or returns an error, a `RuntimeError` is raised immediately — this "fail fast" behaviour prevents long waits or silent failures when the server URL is misconfigured.
+
+### Basic usage
+
+```bash
+# Describe a single video using a vLLM server on localhost:8000
+videsc --vllm --video ./interview.mp4
+
+# Specify the model name (must match what vLLM is serving)
+videsc --vllm --video ./interview.mp4 --vllm-model Qwen/Qwen3-VL-8B-Instruct
+
+# Connect to a remote server
+videsc --vllm --video ./interview.mp4 \
+       --vllm-host gpu-server.local --vllm-port 8000
+
+# Use a full base URL (for reverse proxies, TLS, or non-standard paths)
+videsc --vllm --video ./interview.mp4 \
+       --vllm-base-url https://proxy.example.com/vllm/v1
+
+# Use an API key (if the vLLM server requires authentication)
+videsc --vllm --video ./interview.mp4 --vllm-api-key "my-secret-key"
+
+# Adjust sampling temperature and top-p
+videsc --vllm --video ./interview.mp4 \
+       --vllm-temperature 0.5 --vllm-top-p 0.9
+
+# Custom prompt and system message
+videsc --vllm --video ./interview.mp4 \
+       --prompt "Describe the scene, characters, and key actions in detail." \
+       --system "You are an expert video analyst."
+
+# Dry run — load config and extract frames but skip generation
+videsc --vllm --video ./interview.mp4 --dry
+```
+
+### Video chunking
+
+For long videos, you can split the video into chunks of a fixed duration. Each chunk is processed independently and the resulting descriptions are concatenated. This is useful when the model has a limited context window or when processing very long videos.
+
+```bash
+# Split into 30-second chunks
+videsc --vllm --video ./long_lecture.mp4 --vllm-chunk-duration 30
+
+# Combine chunking with segment consolidation (structured summary)
+videsc --vllm --video ./long_lecture.mp4 \
+       --vllm-chunk-duration 30 --consolidate
+```
+
+When `--consolidate` is enabled and the video produces more than one chunk, the pipeline generates a structured summary by sending all per-segment descriptions back to the vLLM server in a text-only consolidation call. The output file contains:
+
+1. A **Consolidated Summary** section (overview, timeline, entities, actions, themes).
+2. The **Per-Segment Descriptions** section with the raw output from each chunk.
+
+You can customise the consolidation prompt with `--consolidate-prompt`.
+
+### Frame sampling
+
+Frames are extracted using OpenCV at a configurable FPS rate. You can control the number of frames sent to the model and the maximum image size:
+
+```bash
+# Sample at 2 frames per second instead of the default 1
+videsc --vllm --video ./clip.mp4 --vllm-fps 2.0
+
+# Reduce image size for faster upload / lower VRAM on the server
+videsc --vllm --video ./clip.mp4 --vllm-max-image-size 640
+
+# Process only a segment of the video
+videsc --vllm --video ./clip.mp4 --clip-start 10.0 --clip-end 60.0
+```
+
+### Batch processing
+
+vLLM mode supports processing multiple videos in parallel using threads:
+
+```bash
+# Describe all videos in a directory
+videsc --vllm --indir ./videos --ext .mp4 .mov \
+       --vllm-host gpu-server.local
+
+# Use glob patterns
+videsc --vllm --videos "./footage/**/*.mp4" --outdir ./captions
+
+# Use a filelist
+videsc --vllm --filelist ./my_videos.txt --outdir ./captions
+
+# Process 4 videos in parallel
+videsc --vllm --indir ./videos --workers 4
+
+# Dry run — list which videos would be processed
+videsc --vllm --indir ./videos --dry-run
+```
+
+### YouTube support
+
+vLLM mode also supports YouTube URLs. The video is downloaded to a temporary directory, processed, and then cleaned up:
+
+```bash
+videsc --vllm --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
+       --youtube-api-key "YOUR_API_KEY" --outdir ./captions
+```
+
+### Output
+
+Output `.txt` files are placed in a `desc-vllm-<model>` subdirectory alongside each video by default (where `<model>` is the `--vllm-model` name with `/` replaced by `_`), or in the directory specified by `--outdir`.
+
+### Architecture
+
+```
+CLI (args.py)  →  main.py._run_vllm()  →  vllm_runner.py  →  VLLMClient (model/vllm_client.py)
+                                            ├─ extract_frames_as_pil() (cv2 → PIL)
+                                            ├─ run_single_video_vllm() (chunking, consolidation)
+                                            └─ run_batch_vllm() (ThreadPoolExecutor)
+```
+
+The `VLLMClient` wraps the OpenAI Python SDK, pointing it at the vLLM server's base URL. Frames are encoded as base64 JPEG images and sent as `image_url` content parts in the chat messages. The client supports configurable `temperature`, `top_p`, and `max_tokens` parameters.
+
 Key differences from Qwen-VL mode:
 - Frames are extracted as still images via OpenCV (no `qwen-vl-utils` needed).
 - Videos longer than `--gemma4-chunk-duration` (default 30 s) are automatically
@@ -184,6 +332,7 @@ Output `.txt` files are placed alongside each video in a `desc-<model>` subdirec
 | Flag | Description |
 |------|-------------|
 | `--vl` | Use Qwen3-VL vision-language model instead of the WD14 tagger |
+| `--vllm` | Use a remote vLLM server for video description instead of loading a local model |
 
 ### WD14 mode arguments
 
@@ -293,3 +442,41 @@ These values are *edge multipliers*: the actual pixel count per frame is `value 
 | `--seed` | `4051888` | Random seed |
 | `--half_cpu` | — | Limit PyTorch to half the available CPU cores |
 | `--dry` | — | Load the model but skip generation (for testing) |
+
+### vLLM mode arguments (`--vllm`)
+
+#### Connection
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--vllm-host` | `localhost` | Hostname of the vLLM server |
+| `--vllm-port` | `8000` | Port of the vLLM server |
+| `--vllm-base-url` | — | Full base URL for the vLLM server (e.g. `http://host:8000/v1`). Overrides `--vllm-host` and `--vllm-port` when set |
+| `--vllm-model` | `default` | Model name served by the vLLM server (as reported by `/v1/models`) |
+| `--vllm-api-key` | `EMPTY` | API key for the vLLM server |
+
+#### Generation
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--vllm-temperature` | `0.7` | Sampling temperature for vLLM generation |
+| `--vllm-top-p` | `0.95` | Nucleus sampling (top-p) parameter |
+| `--max-new-tokens` | `8192` | Maximum tokens to generate (shared with VL mode) |
+
+#### Frame extraction
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--vllm-fps` | `1.0` | Frames per second to sample from the video |
+| `--vllm-max-image-size` | `1280` | Maximum image edge size in pixels when encoding frames |
+| `--vllm-chunk-duration` | `0.0` | Split video into chunks of this duration (seconds); `0` = process entire video at once |
+| `--clip-start` | `0.0` | Start time in seconds (shared with VL mode) |
+| `--clip-end` | `-1.0` | End time in seconds; `-1` = full video (shared with VL mode) |
+
+#### Consolidation
+
+When `--consolidate` is set and the video produces multiple chunks, the per-segment descriptions are sent to the vLLM server for a final structured summary. The consolidation flags (`--consolidate`, `--consolidate-prompt`, `--window-size`) behave identically to Gemma 4 mode — see the [Segment consolidation](#segment-consolidation---consolidate) section above.
+
+#### Input / output / batch
+
+vLLM mode reuses the same input, output, and batch flags as VL mode: `--video`, `--videos`, `--indir`, `--filelist`, `--ext`, `--outdir`, `--workers`, `--batch-mode`, `--sleep`, `--dry-run`. See the [VL mode arguments](#vl-mode-arguments---vl) section for details.

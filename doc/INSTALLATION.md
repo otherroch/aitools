@@ -30,10 +30,13 @@ pip install --group vl
 # 8. With YouTube download support (adds yt-dlp)
 pip install --group youtube
 
-# 9. Including dev / test dependencies
+# 9. With vLLM remote server support for videsc --vllm (adds openai, requests)
+pip install --group vllm
+
+# 10. Including dev / test dependencies
 pip install --group dev
 
-# 10. install the aitools
+# 11. install the aitools
 pip install -e .  
 ```
 
@@ -97,6 +100,15 @@ Transformers library, and related dependencies. Install them with
 recommended (8 GB+ for the default 8B model; use `--quant 4bit` or `--quant 8bit`
 to reduce VRAM requirements).
 
+### videsc vLLM mode
+
+The `--vllm` flag connects to a remote vLLM server for inference. Install the
+client dependencies with `pip install -e ".[vllm]"` (adds `openai>=1.0.0` and
+`requests>=2.31.0`). OpenCV (`opencv-python`) is also required for local frame
+extraction. No local GPU is needed — all model inference runs on the remote
+server. See the [videsc documentation](VIDESC.md#vllm-mode-usage---vllm) for
+server setup instructions and usage examples.
+
 ### chararep
 
 Requires an NVIDIA GPU with CUDA support. The `[chararep]`
@@ -133,9 +145,11 @@ aitools/
 │   ├── audio/
 │   │   └── transcription.py  # Whisper-based audio transcription
 │   ├── model/
-│   │   └── loader.py     # Qwen3-VL / Qwen3-Omni / Gemma4 model loading
+│   │   ├── loader.py     # Qwen3-VL / Qwen3-Omni / Gemma4 model loading
+│   │   └── vllm_client.py # OpenAI-compatible client for remote vLLM servers
 │   ├── pipeline/
-│   │   └── runner.py     # Batch & single-video runner for VL mode
+│   │   ├── runner.py     # Batch & single-video runner for VL mode
+│   │   ├── vllm_runner.py # Batch & single-video runner for vLLM mode
 │   │   └── prompt.py     # Summary prompt generation for Gemma4 mode
 │   ├── video/
 │   │   ├── info.py       # Video metadata extraction
