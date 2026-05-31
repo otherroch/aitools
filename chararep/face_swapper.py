@@ -466,10 +466,19 @@ class FaceSwapper:
         if pts.shape != (5, 2) or not np.isfinite(pts).all():
             return pts
 
-        if pts[0, 0] > pts[1, 0]:
+        # Use epsilon tolerance to avoid swapping nearly-equal landmarks
+        # This prevents platform-specific floating-point differences from
+        # causing different outputs
+        EPSILON = 0.5  # 0.5 pixels - only swap if difference is meaningful
+
+        # Ensure left eye is consistently to the left of right eye
+        if pts[0, 0] > pts[1, 0] + EPSILON:
             pts[[0, 1]] = pts[[1, 0]]
-        if pts[3, 0] > pts[4, 0]:
+
+        # Ensure left mouth corner is consistently to the left of right mouth corner
+        if pts[3, 0] > pts[4, 0] + EPSILON:
             pts[[3, 4]] = pts[[4, 3]]
+
         return pts
 
     # ── Model loading ────────────────────────────────────────────────────────
