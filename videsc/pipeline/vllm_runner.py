@@ -206,7 +206,11 @@ def run_single_video_vllm(args) -> int:
     result = "\n\n".join(all_descriptions)
 
     # Consolidate if requested and multiple chunks
-    if getattr(args, "consolidate", False) and len(all_descriptions) > 1:
+    if (
+        getattr(args, "consolidate", False)
+        and not getattr(args, "dry", False)
+        and len(all_descriptions) > 1
+    ):
         result = _consolidate_vllm(all_descriptions, client, args)
 
     # Write output
