@@ -1,5 +1,7 @@
 """Tests for face_blender.py."""
 
+import types
+
 import numpy as np
 import pytest
 
@@ -28,7 +30,30 @@ def _solid(h, w, color=(128, 0, 0)) -> np.ndarray:
     return frame
 
 
-def _make_tracked(bbox, identity_label="hero", landmarks=None) -> TrackedFace:
+def _make_dense_brow_face(landmarks: np.ndarray):
+    left_eye, right_eye = landmarks[0], landmarks[1]
+    mouth_mid = (landmarks[3] + landmarks[4]) * 0.5
+    eye_mid = (left_eye + right_eye) * 0.5
+    eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+    face_h = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+    def _brow_arc(center: np.ndarray) -> np.ndarray:
+        xs = np.linspace(-1.0, 1.0, 8, dtype=np.float32)
+        ys = -face_h * (0.14 + 0.05 * (1.0 - xs * xs))
+        return np.column_stack(
+            [
+                center[0] + xs * eye_dist * 0.24,
+                center[1] + ys,
+            ]
+        ).astype(np.float32)
+
+    dense = np.full((106, 2), np.nan, dtype=np.float32)
+    dense[0:8] = _brow_arc(left_eye)
+    dense[16:24] = _brow_arc(right_eye)
+    return types.SimpleNamespace(landmark_2d_106=dense)
+
+
+def _make_tracked(bbox, identity_label="hero", landmarks=None, face_obj=None) -> TrackedFace:
     if landmarks is None:
         x1, y1, x2, y2 = bbox
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
@@ -47,6 +72,7 @@ def _make_tracked(bbox, identity_label="hero", landmarks=None) -> TrackedFace:
         bbox=np.array(bbox, dtype=np.float32),
         landmarks=landmarks,
         identity_label=identity_label,
+        face_obj=face_obj,
     )
 
 
@@ -214,6 +240,27 @@ class TestBuildMask:
 
         assert mask is not None
         assert mask[78, 100] > mask[50, 100] + 12
+
+    def test_dense_brow_core_stays_stable_under_small_landmark_shift(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm1 = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+        lm2 = np.array(
+            [[77, 84], [123, 86], [101, 111], [83, 146], [117, 144]],
+            dtype=np.float32,
+        )
+        dense_face = _make_dense_brow_face(lm1)
+
+        mask1 = blender._build_mask((220, 220), bbox, lm1, dense_face)
+        mask2 = blender._build_mask((220, 220), bbox, lm2, dense_face)
+
+        brow1 = mask1[58:92, 55:145].astype(np.int16)
+        brow2 = mask2[58:92, 55:145].astype(np.int16)
+        assert np.mean(np.abs(brow1 - brow2)) < 10.0
 
 
 # ---------------------------------------------------------------------------
