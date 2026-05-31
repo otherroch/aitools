@@ -64,7 +64,7 @@ def extract_frames_as_pil(
         video_fps = 25.0
 
     start_frame = int(start_sec * video_fps)
-    end_frame = min(int(end_sec * video_fps), total_video_frames) if end_sec > start_sec else total_video_frames
+    end_frame = min(int(end_sec * video_fps), total_video_frames) if end_sec > 0 else total_video_frames
 
     frame_interval = max(1.0, video_fps / fps) if fps > 0 else video_fps
 

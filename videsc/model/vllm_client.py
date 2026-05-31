@@ -54,7 +54,7 @@ class VLLMClient:
             models_url = f"{self.base_url}/models"
             headers = {}
             if self.api_key and self.api_key != "EMPTY":
-                headers["Authorization"] = f"******"
+                headers["Authorization"] = "Bearer " + self.api_key
             resp = _requests.get(models_url, headers=headers, timeout=10)
             resp.raise_for_status()
             logger.debug("VLLMClient: server verification OK (%s)", models_url)
