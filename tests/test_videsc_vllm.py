@@ -37,6 +37,8 @@ def _make_vllm_args(**overrides) -> argparse.Namespace:
         vllm_model="test-model",
         vllm_api_key="EMPTY",
         vllm_temperature=0.7,
+        vllm_top_p=0.95,
+        vllm_base_url=None,
         vllm_fps=1.0,
         vllm_chunk_duration=0.0,
         vllm_max_image_size=1280,
@@ -73,10 +75,12 @@ def _make_vllm_args(**overrides) -> argparse.Namespace:
 class TestVLLMClient:
     """Tests for videsc.model.vllm_client.VLLMClient."""
 
+    @patch("videsc.model.vllm_client._requests.get")
     @patch("openai.OpenAI")
-    def test_init_creates_client(self, mock_openai_cls):
+    def test_init_creates_client(self, mock_openai_cls, mock_requests_get):
         from videsc.model.vllm_client import VLLMClient
 
+        mock_requests_get.return_value = MagicMock(status_code=200)
         client = VLLMClient(host="myhost", port=9000, model="my-model", api_key="key123")
         mock_openai_cls.assert_called_once_with(
             base_url="http://myhost:9000/v1",
@@ -85,20 +89,46 @@ class TestVLLMClient:
         assert client.model == "my-model"
         assert client.max_tokens == 8192
 
+    @patch("videsc.model.vllm_client._requests.get")
     @patch("openai.OpenAI")
-    def test_encode_frame_returns_base64(self, mock_openai_cls):
+    def test_init_with_base_url(self, mock_openai_cls, mock_requests_get):
         from videsc.model.vllm_client import VLLMClient
 
+        mock_requests_get.return_value = MagicMock(status_code=200)
+        client = VLLMClient(base_url="http://custom-server:9999/v1", model="my-model")
+        assert client.base_url == "http://custom-server:9999/v1"
+        mock_openai_cls.assert_called_once_with(
+            base_url="http://custom-server:9999/v1",
+            api_key="EMPTY",
+        )
+
+    @patch("videsc.model.vllm_client._requests.get")
+    @patch("openai.OpenAI")
+    def test_init_verify_connection_failure(self, mock_openai_cls, mock_requests_get):
+        from videsc.model.vllm_client import VLLMClient
+
+        mock_requests_get.side_effect = ConnectionError("Connection refused")
+        with pytest.raises(RuntimeError, match="Failed to connect"):
+            VLLMClient(host="badhost", port=9000, model="my-model")
+
+    @patch("videsc.model.vllm_client._requests.get")
+    @patch("openai.OpenAI")
+    def test_encode_frame_returns_base64(self, mock_openai_cls, mock_requests_get):
+        from videsc.model.vllm_client import VLLMClient
+
+        mock_requests_get.return_value = MagicMock(status_code=200)
         client = VLLMClient()
         frame = _dummy_frame()
         b64 = client._encode_frame(frame)
         assert isinstance(b64, str)
         assert len(b64) > 0
 
+    @patch("videsc.model.vllm_client._requests.get")
     @patch("openai.OpenAI")
-    def test_encode_frame_resizes_large_images(self, mock_openai_cls):
+    def test_encode_frame_resizes_large_images(self, mock_openai_cls, mock_requests_get):
         from videsc.model.vllm_client import VLLMClient
 
+        mock_requests_get.return_value = MagicMock(status_code=200)
         client = VLLMClient()
         large_frame = _dummy_frame(size=(3000, 2000))
         b64 = client._encode_frame(large_frame, max_size=640)
@@ -106,10 +136,12 @@ class TestVLLMClient:
         assert isinstance(b64, str)
         assert len(b64) > 0
 
+    @patch("videsc.model.vllm_client._requests.get")
     @patch("openai.OpenAI")
-    def test_build_content(self, mock_openai_cls):
+    def test_build_content(self, mock_openai_cls, mock_requests_get):
         from videsc.model.vllm_client import VLLMClient
 
+        mock_requests_get.return_value = MagicMock(status_code=200)
         client = VLLMClient()
         frames = [_dummy_frame(), _dummy_frame()]
         content = client.build_content(frames, "Describe this.")
@@ -120,10 +152,12 @@ class TestVLLMClient:
         assert content[2]["type"] == "text"
         assert content[2]["text"] == "Describe this."
 
+    @patch("videsc.model.vllm_client._requests.get")
     @patch("openai.OpenAI")
-    def test_generate_calls_api(self, mock_openai_cls):
+    def test_generate_calls_api(self, mock_openai_cls, mock_requests_get):
         from videsc.model.vllm_client import VLLMClient
 
+        mock_requests_get.return_value = MagicMock(status_code=200)
         mock_client_instance = MagicMock()
         mock_openai_cls.return_value = mock_client_instance
 
@@ -140,10 +174,12 @@ class TestVLLMClient:
         assert result == "A video showing a cat."
         mock_client_instance.chat.completions.create.assert_called_once()
 
+    @patch("videsc.model.vllm_client._requests.get")
     @patch("openai.OpenAI")
-    def test_describe_frames(self, mock_openai_cls):
+    def test_describe_frames(self, mock_openai_cls, mock_requests_get):
         from videsc.model.vllm_client import VLLMClient
 
+        mock_requests_get.return_value = MagicMock(status_code=200)
         mock_client_instance = MagicMock()
         mock_openai_cls.return_value = mock_client_instance
 
@@ -267,6 +303,8 @@ class TestVLLMArgs:
         assert args.vllm_host == "localhost"
         assert args.vllm_port == 8000
         assert args.vllm_model == "default"
+        assert args.vllm_base_url is None
+        assert args.vllm_top_p == 0.95
 
     def test_vllm_custom_options(self):
         from videsc.cli.args import parse_args
@@ -279,6 +317,7 @@ class TestVLLMArgs:
             "--vllm-model", "Qwen/Qwen2.5-VL-72B",
             "--vllm-api-key", "my-secret",
             "--vllm-temperature", "0.3",
+            "--vllm-top-p", "0.9",
             "--vllm-fps", "2.0",
             "--vllm-chunk-duration", "30",
         ])
@@ -287,8 +326,19 @@ class TestVLLMArgs:
         assert args.vllm_model == "Qwen/Qwen2.5-VL-72B"
         assert args.vllm_api_key == "my-secret"
         assert args.vllm_temperature == 0.3
+        assert args.vllm_top_p == 0.9
         assert args.vllm_fps == 2.0
         assert args.vllm_chunk_duration == 30.0
+
+    def test_vllm_base_url_option(self):
+        from videsc.cli.args import parse_args
+
+        args = parse_args([
+            "--vllm",
+            "--video", "/tmp/v.mp4",
+            "--vllm-base-url", "http://custom:9999/v1",
+        ])
+        assert args.vllm_base_url == "http://custom:9999/v1"
 
     def test_vllm_requires_video_input(self):
         from videsc.cli.args import parse_args

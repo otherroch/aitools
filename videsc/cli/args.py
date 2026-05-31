@@ -358,6 +358,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Port of the vLLM server (default: 8000).",
     )
     vllm.add_argument(
+        "--vllm-base-url",
+        type=str,
+        default=None,
+        help=(
+            "Full base URL for the vLLM server (e.g. http://host:8000/v1).\n"
+            "Overrides --vllm-host and --vllm-port when set."
+        ),
+    )
+    vllm.add_argument(
         "--vllm-model",
         type=str,
         default="default",
@@ -374,6 +383,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.7,
         help="Sampling temperature for vLLM generation (default: 0.7).",
+    )
+    vllm.add_argument(
+        "--vllm-top-p",
+        type=float,
+        default=0.95,
+        help="Nucleus sampling (top-p) for vLLM generation (default: 0.95).",
     )
     vllm.add_argument(
         "--vllm-fps",

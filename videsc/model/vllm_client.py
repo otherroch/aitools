@@ -12,6 +12,7 @@ import logging
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
+import requests as _requests
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -28,16 +29,39 @@ class VLLMClient:
         api_key: str = "EMPTY",
         max_tokens: int = 8192,
         temperature: float = 0.7,
+        top_p: float = 0.95,
+        base_url: Optional[str] = None,
     ):
         from openai import OpenAI as _OpenAI
 
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.top_p = top_p
 
-        base_url = f"http://{host}:{port}/v1"
-        self.client = _OpenAI(base_url=base_url, api_key=api_key)
-        logger.info("VLLMClient: connected to %s  model=%s", base_url, model)
+        if base_url:
+            self.base_url = base_url.rstrip("/")
+        else:
+            self.base_url = f"http://{host}:{port}/v1"
+        self.api_key = api_key
+        self.client = _OpenAI(base_url=self.base_url, api_key=api_key)
+        self._verify_connection()
+        logger.info("VLLMClient: connected to %s  model=%s", self.base_url, model)
+
+    def _verify_connection(self) -> None:
+        """Verify the vLLM server is reachable by querying the /models endpoint."""
+        try:
+            models_url = f"{self.base_url}/models"
+            headers = {}
+            if self.api_key and self.api_key != "EMPTY":
+                headers["Authorization"] = f"******"
+            resp = _requests.get(models_url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            logger.debug("VLLMClient: server verification OK (%s)", models_url)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to connect to vLLM server at {self.base_url}: {e}"
+            ) from e
 
     def _encode_frame(self, frame: Image.Image, max_size: int = 1280) -> str:
         """Encode a PIL Image to a base64 JPEG string, resizing if needed."""
@@ -86,6 +110,7 @@ class VLLMClient:
         messages: List[Dict[str, Any]],
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
     ) -> str:
         """Send messages to the vLLM server and return the generated text.
 
@@ -93,6 +118,7 @@ class VLLMClient:
             messages: OpenAI-style chat messages.
             max_tokens: Override instance max_tokens.
             temperature: Override instance temperature.
+            top_p: Override instance top_p.
 
         Returns:
             The generated text string.
@@ -102,6 +128,7 @@ class VLLMClient:
             messages=messages,
             max_tokens=max_tokens or self.max_tokens,
             temperature=temperature if temperature is not None else self.temperature,
+            top_p=top_p if top_p is not None else self.top_p,
         )
         text = response.choices[0].message.content or ""
         logger.debug("VLLMClient.generate: received %d chars", len(text))

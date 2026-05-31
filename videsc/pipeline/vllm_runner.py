@@ -12,7 +12,6 @@ and optionally consolidates results via the same vLLM server.
 
 import logging
 import tempfile
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
@@ -123,6 +122,8 @@ def _create_vllm_client(args):
         api_key=getattr(args, "vllm_api_key", "EMPTY"),
         max_tokens=args.max_new_tokens,
         temperature=getattr(args, "vllm_temperature", 0.7),
+        top_p=getattr(args, "vllm_top_p", 0.95),
+        base_url=getattr(args, "vllm_base_url", None),
     )
 
 
