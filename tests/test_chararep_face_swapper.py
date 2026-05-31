@@ -312,6 +312,26 @@ class TestWarpFace:
         # Matrix should have finite values
         assert np.all(np.isfinite(M))
 
+    def test_similarity_transform_is_stable_under_small_landmark_perturbation(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        template = (_WARP_TEMPLATES["arcface_128"] * 256.0).astype(np.float32)
+        base_kps = np.array(
+            [[100, 120], [180, 120], [140, 170], [105, 220], [175, 220]],
+            dtype=np.float32,
+        )
+        perturbed_kps = base_kps.copy()
+        perturbed_kps[3] += np.array([2.0, -1.0], dtype=np.float32)
+        perturbed_kps[4] += np.array([-2.0, 1.0], dtype=np.float32)
+
+        M1 = swapper._estimate_similarity_transform(base_kps, template)
+        M2 = swapper._estimate_similarity_transform(perturbed_kps, template)
+
+        assert M1 is not None
+        assert M2 is not None
+        scale1 = float(np.sqrt(abs(np.linalg.det(M1[:, :2]))))
+        scale2 = float(np.sqrt(abs(np.linalg.det(M2[:, :2]))))
+        assert abs(scale1 - scale2) < 0.015
+
     def test_warp_raises_on_degenerate_landmarks(self, tmp_path):
         """All-identical landmarks make RANSAC return None → RuntimeError."""
         swapper = self._make_swapper(tmp_path)

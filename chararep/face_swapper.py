@@ -386,15 +386,64 @@ class FaceSwapper:
                 f"(expected (5, 2), got {kps.shape})."
             )
 
-        M, _ = cv2.estimateAffinePartial2D(kps, template, method=cv2.RANSAC)
+        M = self._estimate_similarity_transform(kps, template)
         if M is None:
             raise RuntimeError(
-                "Face alignment failed: could not estimate affine transform "
-                "from the detected landmarks. The face may be too small, "
+                "Face alignment failed: could not estimate a stable similarity "
+                "transform from the detected landmarks. The face may be too small, "
                 "occluded, or at an extreme angle."
             )
         crop = cv2.warpAffine(frame, M, (size, size), flags=cv2.INTER_LINEAR)
         return crop, M
+
+    @staticmethod
+    def _estimate_similarity_transform(
+        src: np.ndarray,
+        dst: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """Return a stable 2D similarity transform mapping *src* to *dst*."""
+        src_pts = np.asarray(src, dtype=np.float32)
+        dst_pts = np.asarray(dst, dtype=np.float32)
+        if (
+            src_pts.shape != dst_pts.shape
+            or src_pts.ndim != 2
+            or src_pts.shape[1] != 2
+            or src_pts.shape[0] < 2
+            or not np.isfinite(src_pts).all()
+            or not np.isfinite(dst_pts).all()
+        ):
+            return None
+
+        src_mean = src_pts.mean(axis=0)
+        dst_mean = dst_pts.mean(axis=0)
+        src_centered = src_pts - src_mean
+        dst_centered = dst_pts - dst_mean
+        src_var = float(np.mean(np.sum(src_centered * src_centered, axis=1)))
+        if src_var < 1e-6 or np.linalg.matrix_rank(src_centered) < 2:
+            return None
+
+        cov = (dst_centered.T @ src_centered) / float(src_pts.shape[0])
+        try:
+            U, singular_values, Vt = np.linalg.svd(cov)
+        except np.linalg.LinAlgError:
+            return None
+
+        rotation = U @ Vt
+        if np.linalg.det(rotation) < 0:
+            U[:, -1] *= -1.0
+            rotation = U @ Vt
+
+        scale = float(np.sum(singular_values) / src_var)
+        if not np.isfinite(scale) or scale < 1e-6:
+            return None
+
+        translation = dst_mean - scale * (rotation @ src_mean)
+        M = np.zeros((2, 3), dtype=np.float32)
+        M[:, :2] = (scale * rotation).astype(np.float32)
+        M[:, 2] = translation.astype(np.float32)
+        if not np.isfinite(M).all():
+            return None
+        return M
 
     def _filter_landmarks(
         self, kps: np.ndarray, sigma: float = 3.5,
