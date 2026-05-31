@@ -615,9 +615,35 @@ class FaceSwapper:
         return x.astype(np.uint8)
 
     @staticmethod
+    def _align_feature_landmarks(face, affine_M: np.ndarray) -> Optional[np.ndarray]:
+        """Return dense face landmarks transformed into crop space."""
+        if face is None:
+            return None
+
+        for attr in ("landmark_2d_106", "landmark_3d_68"):
+            points = getattr(face, attr, None)
+            if points is None:
+                continue
+
+            pts = np.asarray(points, dtype=np.float32)
+            if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 2:
+                continue
+
+            pts = pts[:, :2]
+            valid = np.isfinite(pts).all(axis=1)
+            if not np.any(valid):
+                continue
+
+            pts = pts[valid]
+            return cv2.transform(pts.reshape(1, -1, 2), affine_M)[0]
+
+        return None
+
+    @staticmethod
     def _build_feature_core_mask(
         crop_size: int,
         template_name: str,
+        aligned_landmarks: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Return an aligned eye-and-brow core mask in crop space."""
         norm_template = _WARP_TEMPLATES.get(template_name)
@@ -641,26 +667,57 @@ class FaceSwapper:
             max(4, int(round(mid_height * 0.24))),
         )
 
-        cv2.ellipse(
-            mask,
-            tuple(np.round(left_eye).astype(int)),
-            eye_axes,
-            0,
-            0,
-            360,
-            1.0,
-            -1,
-        )
-        cv2.ellipse(
-            mask,
-            tuple(np.round(right_eye).astype(int)),
-            eye_axes,
-            0,
-            0,
-            360,
-            1.0,
-            -1,
-        )
+        live_landmarks: Optional[np.ndarray] = None
+        if aligned_landmarks is not None:
+            live_landmarks = np.asarray(aligned_landmarks, dtype=np.float32)
+            if live_landmarks.ndim == 2 and live_landmarks.shape[1] >= 2:
+                live_landmarks = live_landmarks[:, :2]
+                live_landmarks = live_landmarks[np.isfinite(live_landmarks).all(axis=1)]
+                if live_landmarks.shape[0] == 0:
+                    live_landmarks = None
+            else:
+                live_landmarks = None
+
+        def _draw_eye_core(center: np.ndarray) -> None:
+            if live_landmarks is not None:
+                x_radius = eye_dist * 0.28
+                eye_top = center[1] - mid_height * 0.24
+                eye_bottom = center[1] + mid_height * 0.22
+                eye_points = live_landmarks[
+                    (np.abs(live_landmarks[:, 0] - center[0]) <= x_radius)
+                    & (live_landmarks[:, 1] >= eye_top)
+                    & (live_landmarks[:, 1] <= eye_bottom)
+                ]
+                if eye_points.shape[0] >= 4:
+                    hull = cv2.convexHull(eye_points.astype(np.float32))
+                    span = np.maximum(eye_points.max(axis=0) - eye_points.min(axis=0), 1.0)
+                    eye_layer = np.zeros_like(mask)
+                    cv2.fillConvexPoly(eye_layer, np.round(hull).astype(np.int32), 1.0)
+
+                    pad_x = max(2, int(round(span[0] * 0.14)))
+                    pad_y = max(1, int(round(span[1] * 0.30)))
+                    kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
+                    eye_layer = cv2.dilate(
+                        (eye_layer * 255).astype(np.uint8),
+                        kernel,
+                        iterations=1,
+                    ).astype(np.float32) / 255.0
+                    np.maximum(mask, eye_layer, out=mask)
+                    return
+
+            cv2.ellipse(
+                mask,
+                tuple(np.round(center).astype(int)),
+                eye_axes,
+                0,
+                0,
+                360,
+                1.0,
+                -1,
+            )
+
+        _draw_eye_core(left_eye)
+        _draw_eye_core(right_eye)
 
         left_brow_center = left_eye + np.array([0.0, -mid_height * 0.50], dtype=np.float32)
         right_brow_center = right_eye + np.array([0.0, -mid_height * 0.50], dtype=np.float32)
@@ -714,6 +771,7 @@ class FaceSwapper:
         crop: np.ndarray,
         affine_M: np.ndarray,
         template_name: str = "arcface_112_v1",
+        aligned_landmarks: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Composite *crop* back into *frame* using the inverse of *affine_M*.
 
@@ -750,7 +808,11 @@ class FaceSwapper:
         mask = cv2.warpAffine(
             crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR
         )
-        feature_core = self._build_feature_core_mask(crop.shape[0], template_name)
+        feature_core = self._build_feature_core_mask(
+            crop.shape[0],
+            template_name,
+            aligned_landmarks=aligned_landmarks,
+        )
         feature_core = cv2.warpAffine(
             feature_core,
             M_inv,
@@ -1113,6 +1175,7 @@ class FaceSwapper:
                 self._model_type, exc,
             )
             return frame
+        aligned_landmarks = self._align_feature_landmarks(frame_face, affine_M)
 
         # 3. Prepare source identity and build the ONNX feed dict
         target_tensor = self._prepare_crop_frame(crop)
@@ -1168,6 +1231,7 @@ class FaceSwapper:
             result_crop,
             affine_M,
             template_name=template_name,
+            aligned_landmarks=aligned_landmarks,
         )
 
     # ── Public interface ─────────────────────────────────────────────────────
