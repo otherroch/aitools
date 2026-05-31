@@ -881,6 +881,7 @@ class FaceSwapper:
         # This reduces jitter by creating a smooth gradient from center to edge
         mask_f32 = mask_uint8.astype(np.float32) / 255.0
         binary = (mask_f32 > 0.1).astype(np.uint8)
+        coords_y = np.array([], dtype=np.int64)
         if binary.any():
             # Distance transform: each pixel gets its distance to the mask boundary
             dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
