@@ -275,7 +275,7 @@ Config JSON format
         type=int,
         default=2,
         dest="mask_erode_pixels",
-        help="Pixels to erode from mask to avoid boundary artifacts (default: 2).",
+        help="Pixels to erode from mask to avoid boundary artifacts (default: 1).",
     )
     p.add_argument(
         "--temporal-smooth-alpha",
