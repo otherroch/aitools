@@ -78,6 +78,14 @@ def _run_vllm(args) -> int:
             return 1
         args.video = video_path
 
+        if getattr(args, "save_video", None) is not None:
+            dest = Path(args.save_video)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(video_path, dest)
+            logger.info("Saved video to %s", dest)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
     if not args.video:
         logger.error("videsc --vllm: --video or --youtube-url is required for single-video mode")
         return 1
