@@ -145,19 +145,20 @@ def run_single_video_vllm(args) -> int:
     max_size = getattr(args, "vllm_max_image_size", 1280)
 
     # Determine chunks
-    if chunk_duration > 0 and duration > chunk_duration:
+    clip_start = getattr(args, "clip_start", 0.0)
+    clip_end = getattr(args, "clip_end", -1.0)
+    start_bound = max(0.0, clip_start)
+    end_bound = min(clip_end if clip_end > 0 else duration, duration)
+
+    if chunk_duration > 0 and (end_bound - start_bound) > chunk_duration:
         chunks = []
-        t = 0.0
-        while t < duration:
-            end = min(t + chunk_duration, duration)
+        t = start_bound
+        while t < end_bound:
+            end = min(t + chunk_duration, end_bound)
             chunks.append((t, end))
             t = end
     else:
-        clip_start = getattr(args, "clip_start", 0.0)
-        clip_end = getattr(args, "clip_end", -1.0)
-        start = clip_start
-        end = clip_end if clip_end > 0 else duration
-        chunks = [(start, end)]
+        chunks = [(start_bound, end_bound)]
 
     logger.info("run_single_video_vllm: %d chunk(s) for %.1fs video", len(chunks), duration)
 
