@@ -250,7 +250,6 @@ class TestFinishFrame:
             (4, 4, 3), dtype=np.uint8
         )
         pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
-        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
         tracked = [MagicMock()]
