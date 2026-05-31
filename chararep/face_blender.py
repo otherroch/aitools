@@ -9,6 +9,7 @@ original background.  Two strategies are available:
 """
 
 import logging
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -18,6 +19,18 @@ from .face_detector import TrackedFace
 
 logger = logging.getLogger(__name__)
 
+_BLEND_TEMPLATE = np.array(
+    [
+        [0.37691676, 0.46864664],
+        [0.62285697, 0.46912813],
+        [0.50123859, 0.61331904],
+        [0.39308822, 0.72541100],
+        [0.61150205, 0.72490465],
+    ],
+    dtype=np.float32,
+)
+_BLEND_MASK_SIZE = 256
+
 
 class FaceBlender:
     """Blends swapped face images smoothly into the original frame."""
@@ -26,6 +39,223 @@ class FaceBlender:
         self._mode = cfg.blend_mode
         self._blur_k = cfg.mask_blur_kernel
         self._erode_px = cfg.mask_erode_pixels
+        self._canonical_mask_cache: dict[int, np.ndarray] = {}
+
+    @staticmethod
+    def _normalize_landmarks(landmarks: np.ndarray | None) -> np.ndarray | None:
+        """Return finite landmarks in stable ``(5, 2)`` layout when available."""
+        if landmarks is None:
+            return None
+
+        pts = np.array(landmarks, dtype=np.float32, copy=True)
+        if pts.shape == (2, 5):
+            pts = pts.T
+        if pts.shape != (5, 2) or not np.isfinite(pts).all():
+            return None
+
+        if pts[0, 0] > pts[1, 0]:
+            pts[[0, 1]] = pts[[1, 0]]
+        if pts[3, 0] > pts[4, 0]:
+            pts[[3, 4]] = pts[[4, 3]]
+        return pts
+
+    @staticmethod
+    def _blend_template(size: int) -> np.ndarray:
+        """Return the canonical 5-point template in pixel coordinates."""
+        return _BLEND_TEMPLATE * float(size)
+
+    @staticmethod
+    def _extract_dense_landmarks(face_obj: object | None) -> Optional[np.ndarray]:
+        """Return finite dense 2D landmarks from the backend face object."""
+        if face_obj is None:
+            return None
+
+        for attr in ("landmark_2d_106", "landmark_3d_68"):
+            points = getattr(face_obj, attr, None)
+            if points is None:
+                continue
+
+            pts = np.asarray(points, dtype=np.float32)
+            if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 2:
+                continue
+
+            pts = pts[:, :2]
+            pts = pts[np.isfinite(pts).all(axis=1)]
+            if pts.shape[0] > 0:
+                return pts
+        return None
+
+    def _build_brow_core_mask(
+        self,
+        frame_shape: tuple[int, int],
+        landmarks: np.ndarray | None,
+        face_obj: object | None,
+    ) -> np.ndarray | None:
+        """Return a soft brow-core mask when dense landmarks are available."""
+        pts = self._normalize_landmarks(landmarks)
+        dense = self._extract_dense_landmarks(face_obj)
+        if pts is None or dense is None:
+            return None
+
+        h, w = frame_shape
+        left_eye, right_eye = pts[0], pts[1]
+        mouth_mid = (pts[3] + pts[4]) * 0.5
+        eye_mid = (left_eye + right_eye) * 0.5
+        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        face_h = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+        brow_mask = np.zeros((h, w), dtype=np.float32)
+        for eye_center in (left_eye, right_eye):
+            candidates = dense[
+                (np.abs(dense[:, 0] - eye_center[0]) <= eye_dist * 0.42)
+                & (dense[:, 1] >= eye_center[1] - face_h * 0.42)
+                & (dense[:, 1] <= eye_center[1] - face_h * 0.02)
+            ]
+            if candidates.shape[0] < 4:
+                continue
+
+            eye_mask = np.zeros((h, w), dtype=np.uint8)
+            hull = cv2.convexHull(candidates.astype(np.float32))
+            cv2.fillConvexPoly(eye_mask, np.round(hull).astype(np.int32), 255)
+
+            pad_x = max(3, int(round(eye_dist * 0.12)))
+            pad_y = max(2, int(round(face_h * 0.05)))
+            kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
+            eye_mask = cv2.dilate(eye_mask, kernel, iterations=1)
+            brow_mask = np.maximum(brow_mask, eye_mask.astype(np.float32) / 255.0)
+
+        if brow_mask.max() <= 0.0:
+            return None
+
+        blur_k = max(7, int(max(face_h, eye_dist) * 0.10)) | 1
+        brow_mask = cv2.GaussianBlur(brow_mask, (blur_k, blur_k), 0)
+        y_grid = np.arange(h, dtype=np.float32).reshape(h, 1)
+        eye_line = float(eye_mid[1])
+        top_start = eye_line - face_h * 0.38
+        top_end = eye_line - face_h * 0.02
+        top_span = max(top_end - top_start, 1.0)
+        top_t = np.clip((y_grid - top_start) / top_span, 0.0, 1.0)
+        top_t = top_t * top_t * (3.0 - 2.0 * top_t)
+        brow_mask *= 0.18 + 0.82 * top_t
+        return np.clip(brow_mask * 255.0, 0, 255).astype(np.uint8)
+
+    def _canonical_face_mask(self, size: int) -> np.ndarray:
+        """Build a stable face-shaped mask in canonical aligned space."""
+        cached = self._canonical_mask_cache.get(size)
+        if cached is not None:
+            return cached
+
+        template = self._blend_template(size)
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+        extra_pts = np.vstack(
+            [
+                np.array([eye_mid[0], eye_mid[1] - mid_height * 1.18]),
+                np.array([left_eye[0] - eye_dist * 0.96, left_eye[1] - mid_height * 0.55]),
+                np.array([right_eye[0] + eye_dist * 0.96, right_eye[1] - mid_height * 0.55]),
+                np.array([left_eye[0] - eye_dist * 1.1, eye_mid[1] + mid_height * 0.1]),
+                np.array([right_eye[0] + eye_dist * 1.1, eye_mid[1] + mid_height * 0.1]),
+                np.array([mouth_left[0] - eye_dist * 0.95, mouth_left[1] + mid_height * 0.7]),
+                np.array([mouth_right[0] + eye_dist * 0.95, mouth_right[1] + mid_height * 0.7]),
+                np.array([mouth_mid[0], mouth_mid[1] + mid_height * 1.2]),
+            ],
+            dtype=np.float32,
+        )
+
+        hull_pts = np.vstack([template, extra_pts])
+        hull_pts[:, 0] = np.clip(hull_pts[:, 0], 0.0, float(size - 1))
+        hull_pts[:, 1] = np.clip(hull_pts[:, 1], 0.0, float(size - 1))
+
+        mask = np.zeros((size, size), dtype=np.uint8)
+        hull = cv2.convexHull(hull_pts.astype(np.int32))
+        cv2.fillConvexPoly(mask, hull, 255)
+
+        base_k = max(15, int(size * 0.09)) | 1
+        mask_f32 = cv2.GaussianBlur(mask, (base_k, base_k), 0).astype(np.float32) / 255.0
+        mask_f32 = mask_f32 * mask_f32 * (3.0 - 2.0 * mask_f32)
+
+        y_grid = np.arange(size, dtype=np.float32).reshape(size, 1)
+        forehead_start = eye_mid[1] - mid_height * 0.98
+        forehead_end = eye_mid[1] - mid_height * 0.14
+        forehead_span = max(forehead_end - forehead_start, 1.0)
+        forehead_t = np.clip((y_grid - forehead_start) / forehead_span, 0.0, 1.0)
+        forehead_t = forehead_t * forehead_t * (3.0 - 2.0 * forehead_t)
+        # Keep the actual brow strip close to full identity strength while
+        # reserving the stronger attenuation for the forehead transition above it.
+        brow_core_center = eye_mid[1] - mid_height * 0.02
+        brow_core_sigma = max(6.0, mid_height * 0.22)
+        brow_core = np.exp(-0.5 * ((y_grid - brow_core_center) / brow_core_sigma) ** 2)
+        forehead_weight = 0.25 + 0.75 * forehead_t
+        brow_restore = 0.22 * brow_core * (1.0 - forehead_weight)
+        mask_f32 *= np.clip(forehead_weight + brow_restore, 0.0, 1.0)
+
+        # Keep upper-face smoothing in canonical space so the brow/forehead
+        # transition does not get re-anchored to slightly different frame-space
+        # eye lines on each frame.
+        upper_k = max(base_k + 6, int(size * 0.12)) | 1
+        upper_smoother = cv2.GaussianBlur(mask_f32, (upper_k, upper_k), 0)
+        upper_start = eye_mid[1] - mid_height * 0.90
+        upper_end = eye_mid[1] - mid_height * 0.05
+        upper_span = max(upper_end - upper_start, 1.0)
+        upper_t = np.clip((upper_end - y_grid) / upper_span, 0.0, 1.0)
+        upper_t = upper_t * upper_t * (3.0 - 2.0 * upper_t)
+        mask_f32 = mask_f32 * (1.0 - upper_t) + upper_smoother * upper_t
+
+        self._canonical_mask_cache[size] = mask_f32
+        return mask_f32
+
+    def _build_aligned_mask(
+        self,
+        frame_shape: tuple[int, int],
+        bbox: np.ndarray,
+        landmarks: np.ndarray | None,
+    ) -> np.ndarray | None:
+        """Warp a canonical face mask into frame space using facial landmarks."""
+        pts = self._normalize_landmarks(landmarks)
+        if pts is None:
+            return None
+
+        h, w = frame_shape
+        template = self._blend_template(_BLEND_MASK_SIZE)
+        affine, _ = cv2.estimateAffinePartial2D(pts, template, method=cv2.RANSAC)
+        if affine is None or not np.isfinite(affine).all():
+            return None
+
+        det = affine[0, 0] * affine[1, 1] - affine[0, 1] * affine[1, 0]
+        if abs(det) < 1e-6:
+            return None
+
+        mask_src = self._canonical_face_mask(_BLEND_MASK_SIZE)
+        affine_inv = cv2.invertAffineTransform(affine)
+        warped = cv2.warpAffine(
+            mask_src,
+            affine_inv,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+
+        x1, y1, x2, y2 = bbox.astype(int)
+        face_w = max(x2 - x1, 2)
+        face_h = max(y2 - y1, 2)
+        pad_x = max(2, int(face_w * 0.55))
+        pad_y = max(2, int(face_h * 0.7))
+        clip_x1 = max(0, x1 - pad_x)
+        clip_y1 = max(0, y1 - pad_y)
+        clip_x2 = min(w, x2 + pad_x)
+        clip_y2 = min(h, y2 + pad_y)
+        clip_mask = np.zeros((h, w), dtype=np.float32)
+        clip_mask[clip_y1:clip_y2, clip_x1:clip_x2] = 1.0
+        warped *= clip_mask
+
+        local_k = max(5, int(max(face_w, face_h) * 0.08)) | 1
+        warped = cv2.GaussianBlur(warped, (local_k, local_k), 0)
+
+        return np.clip(warped * 255.0, 0, 255).astype(np.uint8)
 
     def blend_all(
         self,
@@ -33,7 +263,7 @@ class FaceBlender:
         swapped: np.ndarray,
         faces: list[TrackedFace],
         frame_idx: int,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Blend all swapped faces at once.
 
         Builds a combined soft mask from every face that has been swapped
@@ -46,14 +276,14 @@ class FaceBlender:
             faces:    tracked faces from this frame.
 
         Returns:
-            Blended BGR frame.
+            Tuple of (Blended BGR frame, combined soft mask).
         """
         h, w = original.shape[:2]
         combined_mask = np.zeros((h, w), dtype=np.uint8)
 
         swap_faces = [f for f in faces if f.identity_label is not None]
         if not swap_faces:
-            return swapped
+            return swapped, combined_mask
 
         logger.debug("Frame %d: Blending %d swapped faces with mode '%s'", frame_idx, len(swap_faces), self._mode)
 
@@ -61,15 +291,38 @@ class FaceBlender:
         # can reuse them instead of rebuilding per face.
         face_masks: list[np.ndarray] = []
         for tf in swap_faces:
-            face_mask = self._build_mask((h, w), tf.bbox, tf.landmarks)
+            face_mask = self._build_mask((h, w), tf.bbox, tf.landmarks, tf.face_obj)
             face_masks.append(face_mask)
             combined_mask = np.maximum(combined_mask, face_mask)
+        # Apply additional smoothing to reduce jitter in upper face regions
+        # This helps with eyes/eyebrows which are particularly sensitive to 
+        # edge transitions and can cause flickering
+        if self._mode == "seamless":
+            # Apply extra smoothing to the combined mask for seamless blending
+            combined_mask = cv2.GaussianBlur(combined_mask, (15, 15), 0)
+            
+            # Apply even more aggressive smoothing specifically to the upper face region
+            # to reduce jitter in eyes and eyebrows
+            coords_y, coords_x = np.where(combined_mask > 0)
+            if len(coords_y) > 0:
+                # Calculate vertical extent of the face in the mask
+                mask_height = coords_y.max() - coords_y.min()
+                mask_center_y = (coords_y.min() + coords_y.max()) / 2
+                
+                # Apply stronger smoothing to upper 40% of the face where eyes/eyebrows are
+                upper_region_end = int(coords_y.min() + mask_height * 0.3)
+                if upper_region_end > 0:
+                    # Extract upper region
+                    upper_mask = combined_mask[:upper_region_end, :]
+                    # Apply even stronger blur to upper region
+                    upper_smoothed = cv2.GaussianBlur(upper_mask, (19, 19), 0)
+                    combined_mask[:upper_region_end, :] = upper_smoothed
 
         if self._mode == "seamless":
             return self._poisson_blend_combined(
                 original, swapped, combined_mask, swap_faces, face_masks
-            )
-        return self._alpha_blend(original, swapped, combined_mask)
+            ), combined_mask
+        return self._alpha_blend(original, swapped, combined_mask), combined_mask
 
     # ── mask construction ────────────────────────────────────────────────
 
@@ -78,63 +331,55 @@ class FaceBlender:
         frame_shape: tuple[int, int],
         bbox: np.ndarray,
         landmarks: np.ndarray | None,
+        face_obj: object | None = None,
     ) -> np.ndarray:
-        """Create a soft binary mask for a single face region."""
+        """Create a soft binary mask for a single face region.
+
+        The 5-point landmark set from InsightFace (left eye, right eye,
+        nose tip, mouth corners) is sparse and misses eyebrows/forehead.
+        This method synthesises additional points by expanding the
+        landmark hull outward so the convex hull covers the full face
+        including eyebrows, hairline, and jawline.
+
+        Edge vibration/flicker is reduced by applying a radial distance
+        ramp from the face centroid so the alpha smoothly drops to near-
+        zero at the boundary rather than an abrupt binary cut-off.
+        """
         h, w = frame_shape
         mask = np.zeros((h, w), dtype=np.uint8)
 
         x1, y1, x2, y2 = bbox.astype(int)
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
-
-        if landmarks is not None and len(landmarks) >= 5:
-            pts = landmarks.astype(np.int32)
-            hull = cv2.convexHull(pts)
-            cv2.fillConvexPoly(mask, hull, 255)
-            # Dilate to include forehead and sides
-            ksize = max(1, int((x2 - x1) * 0.15)) | 1
-            mask = cv2.dilate(mask, np.ones((ksize, ksize), np.uint8))
-            # Fade the mask downward so it does not bleed into beard/chin.
-            # Use bbox proportion (stable per-frame) rather than mouth
-            # landmark y-position, which shifts as the person talks and
-            # causes Poisson-clone flickering when clip_y changes each frame.
-            face_h = y2 - y1
-            # Clip the mask at ~82% of the face bbox height, which
-            # empirically lands around the upper chin / jaw line for
-            # typical frontal and three-quarter views. This keeps the
-            # blended region out of beards/chins while preserving cheeks.
-            clip_y = min(h, y1 + int(face_h * 0.82))
-            # Use ~20% of face height as the half-width of the vertical
-            # fade band. This gives a soft transition instead of a hard
-            # edge and scales with face size, while the max() ensures the
-            # fade is at least as wide as the dilation kernel.
-            fade_px = max(ksize // 2 + 1, int(face_h * 0.20))
-            start_fade = max(0, clip_y - fade_px)
-            end_fade = min(h, clip_y + fade_px)
-            if start_fade < end_fade:
-                fade_len = end_fade - start_fade
-                ramp = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-                mask[start_fade:end_fade, :] = (
-                    mask[start_fade:end_fade, :].astype(np.float32)
-                    * ramp[:, np.newaxis]
-                ).astype(np.uint8)
-            mask[end_fade:, :] = 0
+        aligned_mask = self._build_aligned_mask(frame_shape, bbox, landmarks)
+        if aligned_mask is not None:
+            mask = aligned_mask
         else:
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             rx, ry = (x2 - x1) // 2, (y2 - y1) // 2
             cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
 
-        # Erode to pull the mask inward
+        brow_core_mask = self._build_brow_core_mask(frame_shape, landmarks, face_obj)
+
+        # Erode to pull the mask inward slightly (prevents border artefacts)
+        # Use 0 erosion to maximize swap area - rely on blur for edge smoothness
         if self._erode_px > 0:
             kernel = np.ones(
                 (self._erode_px * 2 + 1, self._erode_px * 2 + 1), np.uint8
             )
             mask = cv2.erode(mask, kernel)
 
-        # Feather the edges
+        # Enhanced Gaussian feathering for ultra-smooth alpha blending
+        # Larger kernel = wider transition zone = less edge flicker
+        # Enhanced for upper face region to reduce jitter
         if self._blur_k > 0:
             k = self._blur_k | 1
+            if k < 1:
+                k = 1
             mask = cv2.GaussianBlur(mask, (k, k), 0)
+
+        if brow_core_mask is not None:
+            mask = np.maximum(mask, brow_core_mask)
 
         return mask
 
@@ -148,7 +393,15 @@ class FaceBlender:
         faces: list[TrackedFace],
         face_masks: list[np.ndarray] | None = None,
     ) -> np.ndarray:
-        """Poisson seamless clone applied per-face.
+        """Hybrid Poisson + alpha blend to reduce edge vibration.
+
+        Strategy:
+        1. Run seamlessClone with a *shrunk* binary mask so the hard
+           poisson boundary sits well inside the visible face region.
+        2. After Poisson, alpha-blend a soft transition ring between
+           the poisson region and the original background. This ring
+           uses the full (expanded) soft mask so the final composite
+           has no abrupt edges.
 
         When there is only one face, a single seamlessClone call is used.
         For multiple faces the clone is applied independently for each face
@@ -164,44 +417,134 @@ class FaceBlender:
                         to avoid redundant ``_build_mask`` calls).
         """
         if len(faces) == 1:
-            # Fast path: single face – use the combined mask centroid.
-            coords = np.argwhere(mask > 0)
-            if coords.size == 0:
-                return swapped
-            cy = int(coords[:, 0].mean())
-            cx = int(coords[:, 1].mean())
-            binary_mask = (mask > 128).astype(np.uint8) * 255
-            try:
-                return cv2.seamlessClone(
-                    swapped, original, binary_mask, (cx, cy), cv2.NORMAL_CLONE
-                )
-            except cv2.error:
-                return self._alpha_blend(original, swapped, mask)
+            return self._hybrid_blend_one(
+                original, swapped, mask
+            )
 
-        # Multiple faces: blend iteratively so each clone uses only its own
-        # face mask, ensuring the centre is always inside the painted region.
-        # Reuse cached masks from blend_all when available.
+        # Multiple faces: blend iteratively
         h, w = original.shape[:2]
         result = original.copy()
         for i, tf in enumerate(faces):
             face_mask = (
                 face_masks[i]
                 if face_masks is not None and i < len(face_masks)
-                else self._build_mask((h, w), tf.bbox, tf.landmarks)
+                else self._build_mask((h, w), tf.bbox, tf.landmarks, tf.face_obj)
             )
-            coords = np.argwhere(face_mask > 0)
-            if coords.size == 0:
-                continue
-            cy = int(coords[:, 0].mean())
-            cx = int(coords[:, 1].mean())
-            binary = (face_mask > 128).astype(np.uint8) * 255
-            try:
-                result = cv2.seamlessClone(
-                    swapped, result, binary, (cx, cy), cv2.NORMAL_CLONE
-                )
-            except cv2.error:
-                result = self._alpha_blend(result, swapped, face_mask)
+            result = self._hybrid_blend_one(result, swapped, face_mask)
         return result
+
+    @staticmethod
+    def _hybrid_blend_one(
+        original: np.ndarray,
+        swapped: np.ndarray,
+        soft_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Blend one face region using Poisson core + alpha ring.
+
+        The soft_mask (0-255) defines the full face area.  We shrink
+        it to create a tighter binary mask for seamlessClone (pushing
+        the hard poisson boundary inward), then alpha-composite a ring
+        around that boundary to feather it smoothly.
+        """
+        coords = np.argwhere(soft_mask > 0)
+        if coords.size == 0:
+            return swapped
+
+        cy = int(coords[:, 0].mean())
+        cx = int(coords[:, 1].mean())
+
+        # Shrink the mask to create a safe inner region for Poisson.
+        # The inner region is where soft_mask > threshold (high values =
+        # face centre).  Anything below becomes the transition zone.
+        inner_thresh = 155  # increased from 140 to reduce jitter in eyebrow region
+        inner_binary = (soft_mask > inner_thresh).astype(np.uint8) * 255
+
+        # Check inner mask has enough pixels for seamlessClone
+        if inner_binary.sum() < 200:
+            # Mask too small — fall back to plain alpha blend
+            return FaceBlender._alpha_blend(original, swapped, soft_mask)
+
+        # Shrink inner mask slightly to guarantee the boundary is
+        # safely inside the face (reduces artefacts).
+        # One erosion pass instead of two keeps the Poisson region wider.
+        erode_kernel = np.ones((3, 3), np.uint8)
+        inner_binary = cv2.erode(inner_binary, erode_kernel)
+
+        # ── Step 1: Poisson clone the inner region ──
+        try:
+            poisson_result = cv2.seamlessClone(
+                swapped, original, inner_binary, (cx, cy), cv2.NORMAL_CLONE
+            )
+        except cv2.error:
+            return FaceBlender._alpha_blend(original, swapped, soft_mask)
+
+        # ── Step 2: Alpha-blend transition ring with distance-based fading ──
+        # Build a smooth alpha mask using distance transform for edge smoothing.
+        # This reduces jitter by creating a smooth gradient from center to edge.
+        mask_f32 = soft_mask.astype(np.float32) / 255.0
+        binary = (mask_f32 > 0.1).astype(np.uint8)
+        
+        # Use distance transform to create smooth edge fading
+        if binary.any():
+            # Distance transform: each pixel gets its distance to the mask boundary
+            dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            # SIGNIFICANTLY INCREASED fade width for upper face region
+            # to eliminate jitter in eyes/eyebrows area.
+            coords_y, coords_x = np.where(binary > 0)
+            if len(coords_y) > 0:
+                face_h = coords_y.max() - coords_y.min()
+                face_w = coords_x.max() - coords_x.min()
+                face_dim = max(face_h, face_w)
+                fade_width = max(14, int(face_dim * 0.18))  # ~18% (increased from 12%)
+            else:
+                fade_width = 16
+            # Use SMOOTHSTEP curve for much gentler edge transition.
+            # This dramatically reduces jitter since small boundary shifts
+            # produce much smaller alpha changes near the edge.
+            t = np.clip(dist / fade_width, 0.0, 1.0)
+            edge_alpha = t * t * (3.0 - 2.0 * t)  # smoothstep: t^2*(3-2t)
+            # Combine: inside the mask, use distance-based alpha
+            mask_f32 = np.where(binary, edge_alpha, 0.0)
+        
+        # Apply additional smoothing specifically for the upper face region
+        # to reduce jitter in eyes and eyebrows
+        if len(coords_y) > 0:
+            # Create a vertical weighting that emphasizes smoothing in the upper face
+            # where jitter is most noticeable
+            y_grid = np.arange(swapped.shape[0]).reshape(swapped.shape[0], 1)
+            
+            # Calculate vertical extent of the face
+            mask_height = coords_y.max() - coords_y.min()
+            mask_center_y = (coords_y.min() + coords_y.max()) / 2.0
+            
+            # Create vertical Gaussian weighting that peaks at the face center
+            # and decreases toward the top (forehead) and bottom (chin)
+            # This helps reduce jitter in the upper face region where eyes/eyebrows are
+            vert_sigma = max(20, mask_height * 0.3)
+            vert_weight = np.exp(-0.5 * ((y_grid - mask_center_y) / vert_sigma) ** 2)
+            
+            # Boost upper region smoothing for eyes/eyebrows
+            vert_weight = np.clip(vert_weight, 0.0, 1.0)
+            # Make upper region even more sensitive to smoothing
+            vert_weight = 0.4 + 0.6 * vert_weight
+            
+            # Apply the vertical weighting to the mask
+            mask_f32 = mask_f32 * vert_weight
+            
+        # Apply additional Gaussian blur for ultra-smooth transitions
+        # Increased kernel size for more smoothing in upper face region
+        mask_f32 = cv2.GaussianBlur(mask_f32, (11, 11), 0)
+        mask_f32 = np.clip(mask_f32, 0, 1)
+        
+        # Set the inner region (Poisson result) to full alpha
+        mask_f32[inner_binary > 0] = 1.0
+        mask_alpha = mask_f32[:, :, np.newaxis]
+
+        result = (
+            poisson_result.astype(np.float32) * mask_alpha
+            + original.astype(np.float32) * (1.0 - mask_alpha)
+        )
+        return np.clip(result, 0, 255).astype(np.uint8)
 
     @staticmethod
     def _alpha_blend(

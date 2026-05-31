@@ -338,12 +338,21 @@ class FaceSwapper:
     def _warp_face(
         self, frame: np.ndarray, kps: np.ndarray, size: int,
         template_name: str = "arcface_112_v1",
+        use_landmark_filter: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Align and crop a face to *size*×*size* using 5-point landmarks.
 
         The alignment template is selected by *template_name*, which must be
         a key in :data:`_WARP_TEMPLATES`.  The default ``"arcface_112_v1"``
         preserves the previous behaviour for simswap models.
+
+        Args:
+            frame: Source image to crop.
+            kps: 5×2 array of detected facial landmarks.
+            size: Output crop size.
+            template_name: Template key from :data:`_WARP_TEMPLATES`.
+            use_landmark_filter: If True, normalize landmark point ordering
+                for stable affine estimation.
 
         Returns the cropped face and the 2×3 affine matrix used, so that the
         result can be pasted back with :meth:`_paste_back`.
@@ -359,15 +368,111 @@ class FaceSwapper:
             )
             norm_template = _WARP_TEMPLATES["arcface_112_v1"]
         template = norm_template * size
-        M, _ = cv2.estimateAffinePartial2D(kps, template, method=cv2.RANSAC)
+
+        # Normalize the landmark layout before estimating the affine transform.
+        if use_landmark_filter and kps is not None:
+            kps = self._filter_landmarks(kps)
+
+        kps = np.array(kps, dtype=np.float32, copy=False)
+        if kps.shape == (2, 5):
+            kps = kps.T
+        if kps.shape != (5, 2) or not np.isfinite(kps).all():
+            raise RuntimeError(
+                "Face alignment failed: invalid landmark geometry "
+                f"(expected (5, 2), got {kps.shape})."
+            )
+
+        M = self._estimate_similarity_transform(kps, template)
         if M is None:
             raise RuntimeError(
-                "Face alignment failed: could not estimate affine transform "
-                "from the detected landmarks. The face may be too small, "
+                "Face alignment failed: could not estimate a stable similarity "
+                "transform from the detected landmarks. The face may be too small, "
                 "occluded, or at an extreme angle."
             )
         crop = cv2.warpAffine(frame, M, (size, size), flags=cv2.INTER_LINEAR)
         return crop, M
+
+    @staticmethod
+    def _estimate_similarity_transform(
+        src: np.ndarray,
+        dst: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """Return a stable 2D similarity transform mapping *src* to *dst*."""
+        src_pts = np.asarray(src, dtype=np.float32)
+        dst_pts = np.asarray(dst, dtype=np.float32)
+        if (
+            src_pts.shape != dst_pts.shape
+            or src_pts.ndim != 2
+            or src_pts.shape[1] != 2
+            or src_pts.shape[0] < 2
+            or not np.isfinite(src_pts).all()
+            or not np.isfinite(dst_pts).all()
+        ):
+            return None
+
+        src_mean = src_pts.mean(axis=0)
+        dst_mean = dst_pts.mean(axis=0)
+        src_centered = src_pts - src_mean
+        dst_centered = dst_pts - dst_mean
+        src_var = float(np.mean(np.sum(src_centered * src_centered, axis=1)))
+        if src_var < 1e-6 or np.linalg.matrix_rank(src_centered) < 2:
+            return None
+
+        cov = (dst_centered.T @ src_centered) / float(src_pts.shape[0])
+        try:
+            U, singular_values, Vt = np.linalg.svd(cov)
+        except np.linalg.LinAlgError:
+            return None
+
+        rotation = U @ Vt
+        if np.linalg.det(rotation) < 0:
+            U[:, -1] *= -1.0
+            rotation = U @ Vt
+
+        scale = float(np.sum(singular_values) / src_var)
+        if not np.isfinite(scale) or scale < 1e-6:
+            return None
+
+        translation = dst_mean - scale * (rotation @ src_mean)
+        M = np.zeros((2, 3), dtype=np.float32)
+        M[:, :2] = (scale * rotation).astype(np.float32)
+        M[:, 2] = translation.astype(np.float32)
+        if not np.isfinite(M).all():
+            return None
+        return M
+
+    def _filter_landmarks(
+        self, kps: np.ndarray, sigma: float = 3.5,
+        min_valid_points: int = 4,
+    ) -> np.ndarray:
+        """Normalize landmark layout and preserve semantic point ordering.
+
+        Args:
+            kps: Facial landmarks as either ``(5, 2)`` or legacy ``(2, 5)``.
+            sigma: Unused legacy parameter retained for compatibility.
+            min_valid_points: Unused legacy parameter retained for compatibility.
+
+        Returns:
+            Normalized landmark array in ``(5, 2)`` layout.
+        """
+        _ = sigma, min_valid_points
+
+        if kps is None:
+            return np.zeros((5, 2), dtype=np.float32)
+
+        pts = np.array(kps, dtype=np.float32, copy=True)
+        if pts.shape == (2, 5):
+            pts = pts.T
+        if pts.shape != (5, 2) or not np.isfinite(pts).all():
+            return pts
+
+        if pts[0, 0] > pts[1, 0]:
+            pts[[0, 1]] = pts[[1, 0]]
+        if pts[3, 0] > pts[4, 0]:
+            pts[[3, 4]] = pts[[4, 3]]
+        return pts
+
+    # ── Model loading ────────────────────────────────────────────────────────
 
     def _prepare_crop_frame(self, crop: np.ndarray) -> np.ndarray:
         """Convert a BGR crop to a normalised ONNX input tensor ``[1,C,H,W]``."""
@@ -554,13 +659,176 @@ class FaceSwapper:
         x = x[:, :, ::-1] * 255  # RGB → BGR
         return x.astype(np.uint8)
 
+    @staticmethod
+    def _align_feature_landmarks(face, affine_M: np.ndarray) -> Optional[np.ndarray]:
+        """Return dense face landmarks transformed into crop space."""
+        if face is None:
+            return None
+
+        for attr in ("landmark_2d_106", "landmark_3d_68"):
+            points = getattr(face, attr, None)
+            if points is None:
+                continue
+
+            pts = np.asarray(points, dtype=np.float32)
+            if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 2:
+                continue
+
+            pts = pts[:, :2]
+            valid = np.isfinite(pts).all(axis=1)
+            if not np.any(valid):
+                continue
+
+            pts = pts[valid]
+            return cv2.transform(pts.reshape(1, -1, 2), affine_M)[0]
+
+        return None
+
+    @staticmethod
+    def _build_feature_core_mask(
+        crop_size: int,
+        template_name: str,
+        aligned_landmarks: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Return an aligned eye-and-brow core mask in crop space."""
+        norm_template = _WARP_TEMPLATES.get(template_name)
+        if norm_template is None:
+            norm_template = _WARP_TEMPLATES["arcface_112_v1"]
+        template = norm_template * float(crop_size)
+
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.85)
+
+        mask = np.zeros((crop_size, crop_size), dtype=np.float32)
+        eye_axes = (
+            max(4, int(round(eye_dist * 0.34))),
+            max(4, int(round(mid_height * 0.38))),
+        )
+        brow_axes = (
+            max(6, int(round(eye_dist * 0.52))),
+            max(4, int(round(mid_height * 0.24))),
+        )
+
+        live_landmarks: Optional[np.ndarray] = None
+        if aligned_landmarks is not None:
+            live_landmarks = np.asarray(aligned_landmarks, dtype=np.float32)
+            if live_landmarks.ndim == 2 and live_landmarks.shape[1] >= 2:
+                live_landmarks = live_landmarks[:, :2]
+                live_landmarks = live_landmarks[np.isfinite(live_landmarks).all(axis=1)]
+                if live_landmarks.shape[0] == 0:
+                    live_landmarks = None
+            else:
+                live_landmarks = None
+
+        def _draw_eye_core(center: np.ndarray) -> None:
+            if live_landmarks is not None:
+                x_radius = eye_dist * 0.28
+                eye_top = center[1] - mid_height * 0.24
+                eye_bottom = center[1] + mid_height * 0.22
+                eye_points = live_landmarks[
+                    (np.abs(live_landmarks[:, 0] - center[0]) <= x_radius)
+                    & (live_landmarks[:, 1] >= eye_top)
+                    & (live_landmarks[:, 1] <= eye_bottom)
+                ]
+                if eye_points.shape[0] >= 4:
+                    hull = cv2.convexHull(eye_points.astype(np.float32))
+                    span = np.maximum(eye_points.max(axis=0) - eye_points.min(axis=0), 1.0)
+                    eye_layer = np.zeros_like(mask)
+                    cv2.fillConvexPoly(eye_layer, np.round(hull).astype(np.int32), 1.0)
+
+                    pad_x = max(2, int(round(span[0] * 0.14)))
+                    pad_y = max(1, int(round(span[1] * 0.30)))
+                    kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
+                    eye_layer = cv2.dilate(
+                        (eye_layer * 255).astype(np.uint8),
+                        kernel,
+                        iterations=1,
+                    ).astype(np.float32) / 255.0
+                    np.maximum(mask, eye_layer, out=mask)
+                    return
+
+            cv2.ellipse(
+                mask,
+                tuple(np.round(center).astype(int)),
+                eye_axes,
+                0,
+                0,
+                360,
+                1.0,
+                -1,
+            )
+
+        _draw_eye_core(left_eye)
+        _draw_eye_core(right_eye)
+
+        left_brow_center = left_eye + np.array([0.0, -mid_height * 0.50], dtype=np.float32)
+        right_brow_center = right_eye + np.array([0.0, -mid_height * 0.50], dtype=np.float32)
+        cv2.ellipse(
+            mask,
+            tuple(np.round(left_brow_center).astype(int)),
+            brow_axes,
+            -8,
+            0,
+            360,
+            0.9,
+            -1,
+        )
+        cv2.ellipse(
+            mask,
+            tuple(np.round(right_brow_center).astype(int)),
+            brow_axes,
+            8,
+            0,
+            360,
+            0.9,
+            -1,
+        )
+
+        bridge_pts = np.array(
+            [
+                left_eye + np.array([-eye_dist * 0.18, -mid_height * 0.10], dtype=np.float32),
+                right_eye + np.array([eye_dist * 0.18, -mid_height * 0.10], dtype=np.float32),
+                right_eye + np.array([eye_dist * 0.10, mid_height * 0.20], dtype=np.float32),
+                left_eye + np.array([-eye_dist * 0.10, mid_height * 0.20], dtype=np.float32),
+            ],
+            dtype=np.float32,
+        )
+        cv2.fillConvexPoly(mask, np.round(bridge_pts).astype(np.int32), 0.98)
+
+        blur_k = max(9, int(crop_size * 0.05)) | 1
+        mask = cv2.GaussianBlur(mask, (blur_k, blur_k), 0)
+        y_grid = np.arange(crop_size, dtype=np.float32).reshape(crop_size, 1)
+        top_start = eye_mid[1] - mid_height * 0.92
+        top_end = eye_mid[1] - mid_height * 0.28
+        top_span = max(top_end - top_start, 1.0)
+        top_ramp = np.clip((y_grid - top_start) / top_span, 0.0, 1.0)
+        top_ramp = top_ramp * top_ramp * (3.0 - 2.0 * top_ramp)
+        top_weight = 0.45 + 0.55 * top_ramp
+        mask *= top_weight
+        return np.clip(mask, 0.0, 1.0)
+
     def _paste_back(
-        self, frame: np.ndarray, crop: np.ndarray, affine_M: np.ndarray
+        self,
+        frame: np.ndarray,
+        crop: np.ndarray,
+        affine_M: np.ndarray,
+        template_name: str = "arcface_112_v1",
+        aligned_landmarks: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Composite *crop* back into *frame* using the inverse of *affine_M*.
 
-        A soft alpha mask derived from the valid region of the warped crop is
-        used so that the face_blender stage can later refine the seams.
+        A soft alpha mask is built from the full crop extent, then dilated
+        to expand the swapped region beyond the original crop boundaries so
+        that cheeks, chin, forehead and eyebrows are included rather than
+        leaving visible seams at the crop edge.
+
+        To avoid black-border artefacts when the dilated mask extends past
+        the warped crop, ``cv2.BORDER_REPLICATE`` is used so that pixels
+        outside the crop are filled with edge pixels from the swapped face
+        instead of black.
 
         Returns the original *frame* unchanged if the affine matrix is
         degenerate (determinant near zero).
@@ -573,16 +841,114 @@ class FaceSwapper:
             return frame
         M_inv = cv2.invertAffineTransform(affine_M)
         warped_back = cv2.warpAffine(
-            crop, M_inv, (w, h), flags=cv2.INTER_LINEAR
+            crop, M_inv, (w, h), flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
         )
-        # Build a soft mask covering the face region
+        # Build a soft mask covering the face region, then dilate to
+        # expand the composite area so edges (cheeks, chin, forehead)
+        # are fully replaced instead of leaving seams at crop boundary.
         crop_mask = np.ones(
             (crop.shape[0], crop.shape[1]), dtype=np.float32
         )
         mask = cv2.warpAffine(
             crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR
         )
-        mask = cv2.GaussianBlur(mask, (5, 5), 0)
+        feature_core = self._build_feature_core_mask(
+            crop.shape[0],
+            template_name,
+            aligned_landmarks=aligned_landmarks,
+        )
+        feature_core = cv2.warpAffine(
+            feature_core,
+            M_inv,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+        # Dilate the mask in frame space to expand the swap region beyond
+        # the exact crop boundary. Use a kernel proportional to crop size.
+        crop_size = crop.shape[0]
+        # Increased dilation for smoother blending in upper face region
+        dilate_k = max(9, int(crop_size * 0.18) | 1)  # ~18% of crop size (increased for smoother edges)
+        mask_uint8 = (mask * 255).astype(np.uint8)
+        mask_uint8 = cv2.dilate(mask_uint8, np.ones((dilate_k, dilate_k), np.uint8))
+
+        # Apply distance transform for smooth edge fading
+        # This reduces jitter by creating a smooth gradient from center to edge
+        mask_f32 = mask_uint8.astype(np.float32) / 255.0
+        binary = (mask_f32 > 0.1).astype(np.uint8)
+        coords_y = np.array([], dtype=np.int64)
+        if binary.any():
+            # Distance transform: each pixel gets its distance to the mask boundary
+            dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            # Fade width proportional to face size for consistent smoothing
+            fade_width = max(14, int(crop_size * 0.22))  # Increased for smoother upper face blending
+
+            # Create smooth alpha ramp: 1.0 at center, fading to 0 at edges
+            alpha = np.clip(dist / fade_width, 0.0, 1.0)
+
+            # Apply smoothstep curve for ultra-smooth falloff near edges.
+            # smoothstep(t) = 3t^2 - 2t^3  (zero derivative at endpoints)
+            # This creates a much gentler slope at the boundary than a linear
+            # ramp, which significantly reduces high-frequency jitter at the
+            # composite edge -- especially noticeable around eyes/eyebrows.
+            alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+
+            # Apply vertical position weighting: extra smoothing in upper face
+            # The eyes/eyebrows region (upper 50% of the mask) gets an
+            # additional gaussian-weighted mask so alpha drops off faster
+            # near the forehead/temple boundary, further reducing jitter.
+            coords_y, coords_x = np.where(binary > 0)
+            if len(coords_y) > 0:
+                mask_top = coords_y.min()
+                mask_mid_y = (coords_y.min() + coords_y.max()) / 2.0
+                # Build a vertical Gaussian that peaks at mask center and
+                # drops toward the top (forehead) edge where jitter is worst.
+                y_grid = np.arange(h).reshape(h, 1)
+                # sigma proportional to mask height for consistent behavior
+                mask_height = coords_y.max() - coords_y.min()
+                vert_sigma = max(20, mask_height * 0.3)
+                # Shift center slightly downward so the upper half gets
+                # stronger attenuation.
+                vert_center = mask_mid_y + mask_height * 0.15
+                vert_weight = np.exp(-0.5 * ((y_grid - vert_center) / vert_sigma) ** 2)
+                # Only attenuate (reduce alpha), never boost it.
+                vert_weight = np.clip(vert_weight, 0.0, 1.0)
+                # Scale the vertical weight so it has moderate effect (~0.6 to 1.0)
+                vert_weight = 0.4 + 0.6 * vert_weight
+                alpha = alpha * vert_weight
+
+            mask = alpha
+        else:
+            mask = mask_f32
+
+        # Apply additional smoothing to reduce jitter in all regions
+        # Use a more controlled smoothing approach to reduce overall edge vibration
+        if len(coords_y) > 0:
+            # Apply a two-pass Gaussian blur with controlled kernel sizes
+            # First pass - moderate blur
+            mask = cv2.GaussianBlur(mask, (15, 15), 0)
+            # Second pass - slightly more blur for smoother transitions
+            mask = cv2.GaussianBlur(mask, (13, 13), 0)
+            
+            # Apply extra smoothing specifically to the upper face region where jitter is most noticeable
+            # This helps reduce flickering in eyes and eyebrows
+            upper_y_start = int(mask_mid_y - mask_height * 0.15)
+            upper_y_end = int(mask_mid_y + mask_height * 0.15)
+            
+            if upper_y_start >= 0 and upper_y_end <= h:
+                # Extract upper region and apply stronger blur
+                upper_region = mask[upper_y_start:upper_y_end, :]
+                # Apply even stronger blur to upper region for better smoothing
+                upper_smoothed = cv2.GaussianBlur(upper_region, (19, 19), 0)
+                mask[upper_y_start:upper_y_end, :] = upper_smoothed
+        else:
+            # Apply standard smoothing for cases where coordinates are not available
+            mask = cv2.GaussianBlur(mask, (15, 15), 0)
+            mask = cv2.GaussianBlur(mask, (13, 13), 0)
+
+        mask = np.maximum(mask, feature_core * 0.96)
+            
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
         result = (
             frame.astype(np.float32) * (1.0 - mask)
@@ -841,14 +1207,19 @@ class FaceSwapper:
             return frame
 
         # 2. Align and crop the target face from the frame
+        # Normalize landmark point ordering for stable affine estimation.
         try:
-            crop, affine_M = self._warp_face(frame, kps, size, template_name)
+            crop, affine_M = self._warp_face(
+                frame, kps, size, template_name,
+                use_landmark_filter=True,
+            )
         except RuntimeError as exc:
             logger.warning(
                 "%s alignment failed: %s — skipping this face.",
                 self._model_type, exc,
             )
             return frame
+        aligned_landmarks = self._align_feature_landmarks(frame_face, affine_M)
 
         # 3. Prepare source identity and build the ONNX feed dict
         target_tensor = self._prepare_crop_frame(crop)
@@ -899,7 +1270,13 @@ class FaceSwapper:
 
         # 5. Post-process and paste back
         result_crop = self._normalize_crop_frame(outputs[0][0])
-        return self._paste_back(frame, result_crop, affine_M)
+        return self._paste_back(
+            frame,
+            result_crop,
+            affine_M,
+            template_name=template_name,
+            aligned_landmarks=aligned_landmarks,
+        )
 
     # ── Public interface ─────────────────────────────────────────────────────
 

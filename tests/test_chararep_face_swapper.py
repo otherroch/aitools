@@ -12,6 +12,7 @@ from chararep.config import PipelineConfig
 from chararep.face_swapper import (
     FaceSwapper,
     _ARCFACE_112_V1,
+    _WARP_TEMPLATES,
     _detect_model_type,
     _get_simswap_params,
 )
@@ -38,6 +39,41 @@ def _make_cfg(tmp_path, model_name="inswapper_128.onnx", **kw):
     model_file = tmp_path / model_name
     model_file.write_bytes(b"")
     return PipelineConfig(swap_model_path=str(model_file), **kw)
+
+
+def _make_aligned_eye_landmarks(
+    crop_size=256,
+    template_name="arcface_128",
+    left_aperture=10.0,
+    right_aperture=3.5,
+):
+    """Build synthetic aligned landmarks with per-eye aperture differences."""
+    template = _WARP_TEMPLATES[template_name] * float(crop_size)
+    left_eye, right_eye = template[:2]
+    eye_dist = float(np.linalg.norm(right_eye - left_eye))
+    horiz = eye_dist * 0.16
+
+    def _eye_ring(center, aperture):
+        return np.array(
+            [
+                center + [-horiz, 0.0],
+                center + [-horiz * 0.55, -aperture * 0.85],
+                center + [0.0, -aperture],
+                center + [horiz * 0.55, -aperture * 0.85],
+                center + [horiz, 0.0],
+                center + [horiz * 0.55, aperture * 0.85],
+                center + [0.0, aperture],
+                center + [-horiz * 0.55, aperture * 0.85],
+            ],
+            dtype=np.float32,
+        )
+
+    points = np.zeros((106, 2), dtype=np.float32)
+    left_ring = _eye_ring(left_eye, left_aperture)
+    right_ring = _eye_ring(right_eye, right_aperture)
+    points[: len(left_ring)] = left_ring
+    points[16 : 16 + len(right_ring)] = right_ring
+    return points
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +312,26 @@ class TestWarpFace:
         # Matrix should have finite values
         assert np.all(np.isfinite(M))
 
+    def test_similarity_transform_is_stable_under_small_landmark_perturbation(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        template = (_WARP_TEMPLATES["arcface_128"] * 256.0).astype(np.float32)
+        base_kps = np.array(
+            [[100, 120], [180, 120], [140, 170], [105, 220], [175, 220]],
+            dtype=np.float32,
+        )
+        perturbed_kps = base_kps.copy()
+        perturbed_kps[3] += np.array([2.0, -1.0], dtype=np.float32)
+        perturbed_kps[4] += np.array([-2.0, 1.0], dtype=np.float32)
+
+        M1 = swapper._estimate_similarity_transform(base_kps, template)
+        M2 = swapper._estimate_similarity_transform(perturbed_kps, template)
+
+        assert M1 is not None
+        assert M2 is not None
+        scale1 = float(np.sqrt(abs(np.linalg.det(M1[:, :2]))))
+        scale2 = float(np.sqrt(abs(np.linalg.det(M2[:, :2]))))
+        assert abs(scale1 - scale2) < 0.015
+
     def test_warp_raises_on_degenerate_landmarks(self, tmp_path):
         """All-identical landmarks make RANSAC return None → RuntimeError."""
         swapper = self._make_swapper(tmp_path)
@@ -284,6 +340,32 @@ class TestWarpFace:
         kps = np.zeros((5, 2), dtype=np.float32)
         with pytest.raises(RuntimeError, match="Face alignment failed"):
             swapper._warp_face(frame, kps, size=256)
+
+
+class TestFilterLandmarks:
+    def _make_swapper(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")
+        return FaceSwapper(cfg)
+
+    def test_accepts_row_major_landmarks(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        filtered = swapper._filter_landmarks(kps)
+        assert filtered.shape == (5, 2)
+        np.testing.assert_array_equal(filtered, kps)
+
+    def test_transposes_legacy_column_major_landmarks(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        filtered = swapper._filter_landmarks(kps.T)
+        assert filtered.shape == (5, 2)
+        np.testing.assert_array_equal(filtered, kps)
 
 
 class TestPrepareCropFrame:
@@ -337,6 +419,46 @@ class TestNormalizeCropFrame:
 
 
 class TestPasteBack:
+    def test_feature_core_mask_is_stronger_on_eyes_than_forehead(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+
+        mask = swapper._build_feature_core_mask(256, "arcface_128")
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+
+        eye_y = int(round(float(left_eye[1])))
+        eye_x = int(round(float(left_eye[0])))
+        forehead_y = int(round(float(eye_mid[1] - mid_height * 0.60)))
+        forehead_x = int(round(float(eye_mid[0])))
+
+        assert mask[eye_y, eye_x] > mask[forehead_y, forehead_x] + 0.2
+
+    def test_feature_core_mask_tracks_live_eye_aperture(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+
+        aligned_landmarks = _make_aligned_eye_landmarks()
+        mask = swapper._build_feature_core_mask(
+            256,
+            "arcface_128",
+            aligned_landmarks=aligned_landmarks,
+        )
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye = template[:2]
+
+        def _eye_energy(center):
+            cx = int(round(float(center[0])))
+            cy = int(round(float(center[1])))
+            roi = mask[cy - 14 : cy + 15, cx - 18 : cx + 19]
+            return float(roi.sum())
+
+        assert _eye_energy(left_eye) > _eye_energy(right_eye) * 1.18
+
     def test_output_shape_preserved(self, tmp_path):
         cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")
         swapper = FaceSwapper(cfg)
@@ -356,6 +478,53 @@ class TestPasteBack:
         M_zero = np.zeros((2, 3), dtype=np.float32)
         result = swapper._paste_back(frame, crop, M_zero)
         np.testing.assert_array_equal(result, frame)
+
+    def test_paste_back_keeps_eye_core_stronger_than_forehead(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+        frame = np.zeros((300, 300, 3), dtype=np.uint8)
+        crop = np.full((256, 256, 3), 200, dtype=np.uint8)
+        M = np.eye(2, 3, dtype=np.float32)
+
+        result = swapper._paste_back(frame, crop, M, template_name="arcface_128")
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+
+        eye_y = int(round(float(left_eye[1])))
+        eye_x = int(round(float(left_eye[0])))
+        forehead_y = int(round(float(eye_mid[1] - mid_height * 0.60)))
+        forehead_x = int(round(float(eye_mid[0])))
+
+        assert int(result[eye_y, eye_x, 0]) > int(result[forehead_y, forehead_x, 0]) + 20
+
+    def test_paste_back_tracks_live_eye_aperture(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+        frame = np.zeros((300, 300, 3), dtype=np.uint8)
+        crop = np.full((256, 256, 3), 200, dtype=np.uint8)
+        aligned_landmarks = _make_aligned_eye_landmarks(left_aperture=10.0, right_aperture=3.0)
+
+        result = swapper._paste_back(
+            frame,
+            crop,
+            np.eye(2, 3, dtype=np.float32),
+            template_name="arcface_128",
+            aligned_landmarks=aligned_landmarks,
+        )
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye = template[:2]
+
+        def _eye_mean(center):
+            cx = int(round(float(center[0])))
+            cy = int(round(float(center[1])))
+            roi = result[cy - 14 : cy + 15, cx - 18 : cx + 19, 0]
+            return float(roi.mean())
+
+        assert _eye_mean(left_eye) > _eye_mean(right_eye) + 6.0
 
 
 class TestPrepareSourceEmbedding:

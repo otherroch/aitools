@@ -29,6 +29,19 @@ def _positive_int(value: str) -> int:
     return n
 
 
+def _unit_interval(value: str) -> float:
+    """Argparse type for floats in the closed interval [0, 1]."""
+    try:
+        x = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {value!r}")
+    if x < 0.0 or x > 1.0:
+        raise argparse.ArgumentTypeError(
+            f"expected a value in [0, 1], got {x}"
+        )
+    return x
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="chararep",
@@ -262,7 +275,16 @@ Config JSON format
         type=int,
         default=2,
         dest="mask_erode_pixels",
-        help="Pixels to erode from mask to avoid boundary artifacts (default: 2).",
+        help="Pixels to erode from mask to avoid boundary artifacts (default: 1).",
+    )
+    p.add_argument(
+        "--temporal-smooth-alpha",
+        type=_unit_interval,
+        default=0.0,
+        help=(
+            "Previous-frame weight for overlap-only temporal smoothing. "
+            "0 disables it; small values like 0.1-0.2 can reduce residual shimmer."
+        ),
     )
 
     # ── Logging ──────────────────────────────────────────────────────────
@@ -319,6 +341,17 @@ def _scan_image_dir(folder: str, kind: str) -> list[str]:
 def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
     """Construct a PipelineConfig from CLI arguments."""
 
+    temporal_smooth_alpha = getattr(
+        args,
+        "temporal_smooth_alpha",
+        PipelineConfig.temporal_smooth_alpha,
+    )
+    if (
+        not isinstance(temporal_smooth_alpha, (int, float))
+        or isinstance(temporal_smooth_alpha, bool)
+    ):
+        temporal_smooth_alpha = PipelineConfig.temporal_smooth_alpha
+
     characters: list[CharacterMapping] = []
     for find_folder, replace_folder in args.characters:
         label = Path(find_folder).name
@@ -354,6 +387,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         blend_mode=args.blend_mode,
         mask_blur_kernel=args.mask_blur_kernel,
         mask_erode_pixels=args.mask_erode_pixels,
+        temporal_smooth_alpha=float(temporal_smooth_alpha),
         log_level="DEBUG" if args.verbose else "INFO",
         log_file=args.log_file,
         enable_timers=args.timers,

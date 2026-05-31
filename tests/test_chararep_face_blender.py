@@ -1,5 +1,7 @@
 """Tests for face_blender.py."""
 
+import types
+
 import numpy as np
 import pytest
 
@@ -28,7 +30,30 @@ def _solid(h, w, color=(128, 0, 0)) -> np.ndarray:
     return frame
 
 
-def _make_tracked(bbox, identity_label="hero", landmarks=None) -> TrackedFace:
+def _make_dense_brow_face(landmarks: np.ndarray):
+    left_eye, right_eye = landmarks[0], landmarks[1]
+    mouth_mid = (landmarks[3] + landmarks[4]) * 0.5
+    eye_mid = (left_eye + right_eye) * 0.5
+    eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+    face_h = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+    def _brow_arc(center: np.ndarray) -> np.ndarray:
+        xs = np.linspace(-1.0, 1.0, 8, dtype=np.float32)
+        ys = -face_h * (0.14 + 0.05 * (1.0 - xs * xs))
+        return np.column_stack(
+            [
+                center[0] + xs * eye_dist * 0.24,
+                center[1] + ys,
+            ]
+        ).astype(np.float32)
+
+    dense = np.full((106, 2), np.nan, dtype=np.float32)
+    dense[0:8] = _brow_arc(left_eye)
+    dense[16:24] = _brow_arc(right_eye)
+    return types.SimpleNamespace(landmark_2d_106=dense)
+
+
+def _make_tracked(bbox, identity_label="hero", landmarks=None, face_obj=None) -> TrackedFace:
     if landmarks is None:
         x1, y1, x2, y2 = bbox
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
@@ -47,6 +72,7 @@ def _make_tracked(bbox, identity_label="hero", landmarks=None) -> TrackedFace:
         bbox=np.array(bbox, dtype=np.float32),
         landmarks=landmarks,
         identity_label=identity_label,
+        face_obj=face_obj,
     )
 
 
@@ -101,7 +127,7 @@ class TestBlendAllNoOp:
             landmarks=np.zeros((5, 2)),
             identity_label=None,
         )
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         np.testing.assert_array_equal(result, swapped)
 
     def test_empty_faces_returns_swapped(self):
@@ -109,7 +135,7 @@ class TestBlendAllNoOp:
         blender = FaceBlender(cfg)
         original = _solid(100, 100, (255, 0, 0))
         swapped = _solid(100, 100, (0, 255, 0))
-        result = blender.blend_all(original, swapped, [], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [], frame_idx=0)
         np.testing.assert_array_equal(result, swapped)
 
 
@@ -118,6 +144,24 @@ class TestBlendAllNoOp:
 # ---------------------------------------------------------------------------
 
 class TestBuildMask:
+    def test_canonical_mask_preserves_brow_core_more_than_forehead(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+
+        template = blender._blend_template(256)
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.9)
+        brow_row = int(round(float(eye_mid[1] - mid_height * 0.02)))
+        forehead_row = int(round(float(eye_mid[1] - mid_height * 0.55)))
+        mid_col = int(round(float(eye_mid[0])))
+
+        mask = blender._canonical_face_mask(256)
+
+        assert mask[brow_row, mid_col] > mask[forehead_row, mid_col] + 0.08
+
     def test_mask_nonzero_inside_bbox(self):
         cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
         blender = FaceBlender(cfg)
@@ -149,6 +193,75 @@ class TestBuildMask:
         mask = blender._build_mask((100, 100), bbox, lm)
         assert mask is not None
 
+    def test_mask_covers_eyebrow_region(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+
+        mask = blender._build_mask((220, 220), bbox, lm)
+
+        assert mask[62, 75] > 0
+        assert mask[62, 125] > 0
+
+    def test_mask_is_stable_under_small_landmark_shift(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm1 = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+        lm2 = np.array(
+            [[77, 84], [123, 86], [101, 111], [83, 146], [117, 144]],
+            dtype=np.float32,
+        )
+
+        mask1 = blender._build_mask((220, 220), bbox, lm1)
+        mask2 = blender._build_mask((220, 220), bbox, lm2)
+
+        roi1 = mask1[40:170, 40:160].astype(np.int16)
+        roi2 = mask2[40:170, 40:160].astype(np.int16)
+        assert np.mean(np.abs(roi1 - roi2)) < 16.0
+
+    def test_aligned_mask_keeps_brow_line_stronger_than_forehead(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+
+        mask = blender._build_aligned_mask((220, 220), bbox, lm)
+
+        assert mask is not None
+        assert mask[78, 100] > mask[50, 100] + 12
+
+    def test_dense_brow_core_stays_stable_under_small_landmark_shift(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm1 = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+        lm2 = np.array(
+            [[77, 84], [123, 86], [101, 111], [83, 146], [117, 144]],
+            dtype=np.float32,
+        )
+        dense_face = _make_dense_brow_face(lm1)
+
+        mask1 = blender._build_mask((220, 220), bbox, lm1, dense_face)
+        mask2 = blender._build_mask((220, 220), bbox, lm2, dense_face)
+
+        brow1 = mask1[58:92, 55:145].astype(np.int16)
+        brow2 = mask2[58:92, 55:145].astype(np.int16)
+        assert np.mean(np.abs(brow1 - brow2)) < 10.0
+
 
 # ---------------------------------------------------------------------------
 # FaceBlender seamless mode (single face)
@@ -162,7 +275,7 @@ class TestBlendAllSeamless:
         original = _solid(h, w, (100, 100, 100))
         swapped = _solid(h, w, (50, 50, 50))
         tf = _make_tracked([40, 40, 160, 160])
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         assert result.shape == (h, w, 3)
 
     def test_two_faces_seamless(self):
@@ -174,7 +287,7 @@ class TestBlendAllSeamless:
         swapped = _solid(h, w, (50, 50, 50))
         tf1 = _make_tracked([10, 50, 80, 150])
         tf2 = _make_tracked([300, 50, 390, 150])
-        result = blender.blend_all(original, swapped, [tf1, tf2], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf1, tf2], frame_idx=0)
         assert result.shape == (h, w, 3)
 
 
@@ -190,6 +303,6 @@ class TestBlendAllAlpha:
         original = _solid(h, w, (255, 0, 0))
         swapped = _solid(h, w, (0, 0, 255))
         tf = _make_tracked([40, 40, 160, 160])
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         assert result.shape == (h, w, 3)
         assert result.dtype == np.uint8
