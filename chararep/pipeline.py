@@ -124,6 +124,26 @@ class CharacterReplacementPipeline:
             history[track_id] = (frame_idx, current)
             return current
 
+        # Dampen coherent similarity-scale pulses before pointwise smoothing.
+        # The detector occasionally moves the whole 5-point constellation
+        # inward/outward together for a frame, which makes the aligned swap
+        # crop briefly "breathe" even when the head is otherwise stable.
+        anchor_prev = prev_landmarks[[0, 1, 2]]
+        anchor_current = current[[0, 1, 2]]
+        prev_eye_mid = (anchor_prev[0] + anchor_prev[1]) * 0.5
+        current_eye_mid = (anchor_current[0] + anchor_current[1]) * 0.5
+        prev_anchor_center = (prev_eye_mid + anchor_prev[2]) * 0.5
+        current_anchor_center = (current_eye_mid + anchor_current[2]) * 0.5
+
+        prev_anchor_offsets = anchor_prev - prev_anchor_center
+        current_anchor_offsets = anchor_current - current_anchor_center
+        prev_anchor_scale = float(
+            np.sqrt(np.mean(np.sum(prev_anchor_offsets * prev_anchor_offsets, axis=1)))
+        )
+        current_anchor_scale = float(
+            np.sqrt(np.mean(np.sum(current_anchor_offsets * current_anchor_offsets, axis=1)))
+        )
+
         bbox_f = np.array(bbox, dtype=np.float32, copy=False)
         face_size = max(
             float(bbox_f[2] - bbox_f[0]),
@@ -131,6 +151,22 @@ class CharacterReplacementPipeline:
             float(np.linalg.norm(current[1] - current[0]) * 2.5),
             1.0,
         )
+
+        if prev_anchor_scale > 1e-6 and current_anchor_scale > 1e-6:
+            max_scale_step = float(np.clip(3.0 / face_size, 0.010, 0.028))
+            clipped_anchor_scale = float(
+                np.clip(
+                    current_anchor_scale,
+                    prev_anchor_scale * (1.0 - max_scale_step),
+                    prev_anchor_scale * (1.0 + max_scale_step),
+                )
+            )
+            stabilized_anchor_scale = prev_anchor_scale + (
+                clipped_anchor_scale - prev_anchor_scale
+            ) * 0.35
+            scale_ratio = stabilized_anchor_scale / current_anchor_scale
+            current = current_anchor_center + (current - current_anchor_center) * scale_ratio
+
         max_step = max(1.5, face_size * 0.08)
 
         delta = current - prev_landmarks

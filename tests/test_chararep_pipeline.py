@@ -171,6 +171,50 @@ class TestPrepareFrame:
         assert np.all(smoothed[:, 0] < jumped_kps[:, 0])
         np.testing.assert_allclose(result[2][0].face_obj.kps, smoothed)
 
+    def test_coherent_landmark_scale_shrink_is_strongly_damped(self):
+        pipe = _stub_pipeline()
+
+        base_kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        anchor_center = ((base_kps[0] + base_kps[1]) * 0.5 + base_kps[2]) * 0.5
+        shrunk_kps = anchor_center + (base_kps - anchor_center) * 0.90
+
+        first_face = types.SimpleNamespace(
+            age_since_seen=0,
+            identity_label=None,
+            track_id=4,
+            bbox=np.array([20, 30, 100, 120], dtype=np.float32),
+            landmarks=base_kps.copy(),
+            face_obj=types.SimpleNamespace(kps=base_kps.copy()),
+        )
+        second_face = types.SimpleNamespace(
+            age_since_seen=0,
+            identity_label=None,
+            track_id=4,
+            bbox=np.array([20, 30, 100, 120], dtype=np.float32),
+            landmarks=shrunk_kps.copy(),
+            face_obj=types.SimpleNamespace(kps=shrunk_kps.copy()),
+        )
+
+        pipe._detector.detect.side_effect = [[first_face], [second_face]]
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        pipe._prepare_frame(frame, 0, stats)
+        result = pipe._prepare_frame(frame, 1, stats)
+
+        smoothed = result[2][0].landmarks
+        base_eye_dist = np.linalg.norm(base_kps[1] - base_kps[0])
+        shrunk_eye_dist = np.linalg.norm(shrunk_kps[1] - shrunk_kps[0])
+        smoothed_eye_dist = np.linalg.norm(smoothed[1] - smoothed[0])
+
+        assert shrunk_eye_dist < base_eye_dist * 0.91
+        assert smoothed_eye_dist > base_eye_dist * 0.97
+        assert smoothed_eye_dist < base_eye_dist * 1.01
+
     def test_timers_updated(self):
         pipe = _stub_pipeline(enable_timers=True)
         pipe._detector.detect.return_value = []
