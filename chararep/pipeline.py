@@ -52,7 +52,7 @@ class CharacterReplacementPipeline:
         log_gpu_info()
         warmup_cuda(cfg.device_id)
 
-        logger.info("Initialising pipeline components. ..")
+        logger.info("Initialising pipeline components...")
 
         # Detector owns the shared FaceBackend instance
         self._detector = FaceDetector(cfg)
