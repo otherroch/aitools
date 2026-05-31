@@ -339,7 +339,6 @@ class FaceSwapper:
         self, frame: np.ndarray, kps: np.ndarray, size: int,
         template_name: str = "arcface_112_v1",
         use_landmark_filter: bool = True,
-        landmark_sigma: float = 1.5,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Align and crop a face to *size*×*size* using 5-point landmarks.
 
@@ -352,11 +351,8 @@ class FaceSwapper:
             kps: 5×2 array of detected facial landmarks.
             size: Output crop size.
             template_name: Template key from :data:`_WARP_TEMPLATES`.
-            use_landmark_filter: If True, apply outlier filtering and smoothing
-                to reduce jitter from noisy landmarks (especially helpful for
-                eyes/eyebrows region).
-            landmark_sigma: Standard deviation for 2D Gaussian smoothing of
-                smoothed landmarks (applied when use_landmark_filter=True).
+            use_landmark_filter: If True, normalize landmark point ordering
+                for stable affine estimation.
 
         Returns the cropped face and the 2×3 affine matrix used, so that the
         result can be pasted back with :meth:`_paste_back`.
@@ -375,7 +371,7 @@ class FaceSwapper:
 
         # Normalize the landmark layout before estimating the affine transform.
         if use_landmark_filter and kps is not None:
-            kps = self._filter_landmarks(kps, landmark_sigma)
+            kps = self._filter_landmarks(kps)
 
         kps = np.array(kps, dtype=np.float32, copy=False)
         if kps.shape == (2, 5):
@@ -1211,13 +1207,11 @@ class FaceSwapper:
             return frame
 
         # 2. Align and crop the target face from the frame
-        # Enable landmark filtering to reduce jitter from noisy detections
-        # This is especially helpful for the upper face (eyes/eyebrows)
+        # Normalize landmark point ordering for stable affine estimation.
         try:
             crop, affine_M = self._warp_face(
                 frame, kps, size, template_name,
-                use_landmark_filter=True,  # Enable jitter reduction
-                landmark_sigma=2.5,        # Increased from 1.5 to reduce eyebrow jitter
+                use_landmark_filter=True,
             )
         except RuntimeError as exc:
             logger.warning(
