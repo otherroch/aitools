@@ -18,6 +18,85 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+def _append_error_text(parts: List[str], value: object) -> None:
+    """Collect string fragments from an exception payload."""
+    if value is None:
+        return
+    if isinstance(value, str):
+        parts.append(value)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _append_error_text(parts, item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _append_error_text(parts, item)
+
+
+def _extract_error_text(exc: Exception) -> str:
+    """Flatten common exception fields into one searchable string."""
+    parts: List[str] = []
+    _append_error_text(parts, str(exc))
+    _append_error_text(parts, getattr(exc, "message", None))
+    _append_error_text(parts, getattr(exc, "body", None))
+
+    unique_parts: List[str] = []
+    for part in parts:
+        if part and part not in unique_parts:
+            unique_parts.append(part)
+    return "\n".join(unique_parts).lower()
+
+
+def _should_retry_with_fewer_frames(exc: Exception) -> bool:
+    """Return True when the server rejected the request due to multimodal truncation."""
+    message = _extract_error_text(exc)
+    return (
+        "token count" in message
+        and ("truncation='max_length'" in message or 'truncation="max_length"' in message)
+        and ("image" in message or "video" in message)
+    ) or (
+        "failed to apply qwen" in message
+        and "processor" in message
+        and "image" in message
+    )
+
+
+def _downsample_frames(frames: List[Image.Image], target_count: int) -> List[Image.Image]:
+    """Keep an even spread of frames while reducing the request size."""
+    if target_count >= len(frames):
+        return list(frames)
+    if target_count <= 0 or not frames:
+        return []
+    if target_count == 1:
+        return [frames[len(frames) // 2]]
+
+    last_index = len(frames) - 1
+    step = last_index / float(target_count - 1)
+    indices = []
+    seen = set()
+
+    for position in range(target_count):
+        idx = int(round(position * step))
+        idx = max(0, min(last_index, idx))
+        if idx in seen:
+            continue
+        indices.append(idx)
+        seen.add(idx)
+
+    if len(indices) < target_count:
+        for idx in range(len(frames)):
+            if idx in seen:
+                continue
+            indices.append(idx)
+            seen.add(idx)
+            if len(indices) == target_count:
+                break
+
+    indices.sort()
+    return [frames[idx] for idx in indices]
+
+
 class VLLMClient:
     """Client for communicating with a vLLM server via its OpenAI-compatible API."""
 
@@ -156,15 +235,30 @@ class VLLMClient:
         Returns:
             Generated description text.
         """
-        content = self.build_content(frames, prompt, max_size=max_size)
+        current_frames = list(frames)
 
-        messages: List[Dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": content})
+        while True:
+            content = self.build_content(current_frames, prompt, max_size=max_size)
 
-        return self.generate(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+            messages: List[Dict[str, Any]] = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": content})
+
+            try:
+                return self.generate(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            except Exception as exc:
+                if not _should_retry_with_fewer_frames(exc) or len(current_frames) <= 1:
+                    raise
+
+                next_count = max(1, len(current_frames) // 2)
+                logger.warning(
+                    "VLLMClient.describe_frames: retrying with %d frame(s) after multimodal truncation at %d frame(s)",
+                    next_count,
+                    len(current_frames),
+                )
+                current_frames = _downsample_frames(current_frames, next_count)
