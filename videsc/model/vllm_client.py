@@ -18,6 +18,51 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+def _should_retry_with_fewer_frames(exc: Exception) -> bool:
+    """Return True when the server rejected the request due to multimodal truncation."""
+    message = str(exc).lower()
+    return (
+        "token count" in message
+        and ("truncation='max_length'" in message or 'truncation="max_length"' in message)
+        and ("image" in message or "video" in message)
+    )
+
+
+def _downsample_frames(frames: List[Image.Image], target_count: int) -> List[Image.Image]:
+    """Keep an even spread of frames while reducing the request size."""
+    if target_count >= len(frames):
+        return list(frames)
+    if target_count <= 0 or not frames:
+        return []
+    if target_count == 1:
+        return [frames[len(frames) // 2]]
+
+    last_index = len(frames) - 1
+    step = last_index / float(target_count - 1)
+    indices = []
+    seen = set()
+
+    for position in range(target_count):
+        idx = int(round(position * step))
+        idx = max(0, min(last_index, idx))
+        if idx in seen:
+            continue
+        indices.append(idx)
+        seen.add(idx)
+
+    if len(indices) < target_count:
+        for idx in range(len(frames)):
+            if idx in seen:
+                continue
+            indices.append(idx)
+            seen.add(idx)
+            if len(indices) == target_count:
+                break
+
+    indices.sort()
+    return [frames[idx] for idx in indices]
+
+
 class VLLMClient:
     """Client for communicating with a vLLM server via its OpenAI-compatible API."""
 
@@ -156,15 +201,30 @@ class VLLMClient:
         Returns:
             Generated description text.
         """
-        content = self.build_content(frames, prompt, max_size=max_size)
+        current_frames = list(frames)
 
-        messages: List[Dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": content})
+        while True:
+            content = self.build_content(current_frames, prompt, max_size=max_size)
 
-        return self.generate(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+            messages: List[Dict[str, Any]] = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": content})
+
+            try:
+                return self.generate(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            except Exception as exc:
+                if not _should_retry_with_fewer_frames(exc) or len(current_frames) <= 1:
+                    raise
+
+                next_count = max(1, len(current_frames) // 2)
+                logger.warning(
+                    "VLLMClient.describe_frames: retrying with %d frame(s) after multimodal truncation at %d frame(s)",
+                    next_count,
+                    len(current_frames),
+                )
+                current_frames = _downsample_frames(current_frames, next_count)

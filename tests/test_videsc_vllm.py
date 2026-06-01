@@ -199,6 +199,43 @@ class TestVLLMClient:
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
 
+    @patch("videsc.model.vllm_client._requests.get")
+    @patch("openai.OpenAI")
+    def test_describe_frames_retries_after_mm_truncation(self, mock_openai_cls, mock_requests_get):
+        from videsc.model.vllm_client import VLLMClient
+
+        mock_requests_get.return_value = MagicMock(status_code=200)
+        mock_client_instance = MagicMock()
+        mock_openai_cls.return_value = mock_client_instance
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Recovered description."
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client_instance.chat.completions.create.side_effect = [
+            Exception(
+                "Mismatch in `image` token count between text and `input_ids`. "
+                "Likely due to `truncation='max_length'`."
+            ),
+            mock_response,
+        ]
+
+        client = VLLMClient(model="test-model")
+        frames = [_dummy_frame() for _ in range(6)]
+        result = client.describe_frames(frames, prompt="Describe this.", system="Be helpful.")
+
+        assert result == "Recovered description."
+        assert mock_client_instance.chat.completions.create.call_count == 2
+
+        first_messages = mock_client_instance.chat.completions.create.call_args_list[0].kwargs["messages"]
+        second_messages = mock_client_instance.chat.completions.create.call_args_list[1].kwargs["messages"]
+
+        first_images = [part for part in first_messages[1]["content"] if part["type"] == "image_url"]
+        second_images = [part for part in second_messages[1]["content"] if part["type"] == "image_url"]
+
+        assert len(first_images) == 6
+        assert len(second_images) == 3
+
 
 # ---------------------------------------------------------------------------
 # vLLM runner tests
