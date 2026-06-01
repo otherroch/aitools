@@ -18,13 +18,47 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+def _append_error_text(parts: List[str], value: object) -> None:
+    """Collect string fragments from an exception payload."""
+    if value is None:
+        return
+    if isinstance(value, str):
+        parts.append(value)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _append_error_text(parts, item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _append_error_text(parts, item)
+
+
+def _extract_error_text(exc: Exception) -> str:
+    """Flatten common exception fields into one searchable string."""
+    parts: List[str] = []
+    _append_error_text(parts, str(exc))
+    _append_error_text(parts, getattr(exc, "message", None))
+    _append_error_text(parts, getattr(exc, "body", None))
+
+    unique_parts: List[str] = []
+    for part in parts:
+        if part and part not in unique_parts:
+            unique_parts.append(part)
+    return "\n".join(unique_parts).lower()
+
+
 def _should_retry_with_fewer_frames(exc: Exception) -> bool:
     """Return True when the server rejected the request due to multimodal truncation."""
-    message = str(exc).lower()
+    message = _extract_error_text(exc)
     return (
         "token count" in message
         and ("truncation='max_length'" in message or 'truncation="max_length"' in message)
         and ("image" in message or "video" in message)
+    ) or (
+        "failed to apply qwen" in message
+        and "processor" in message
+        and "image" in message
     )
 
 
