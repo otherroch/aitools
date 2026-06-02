@@ -935,42 +935,18 @@ class FaceSwapper:
         mask = cv2.warpAffine(
             crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR
         )
-        feature_core_crop = self._build_feature_core_mask(
+        feature_core = self._build_feature_core_mask(
             crop.shape[0],
             template_name,
             aligned_landmarks=aligned_landmarks,
         )
-        norm_template = _WARP_TEMPLATES.get(template_name)
-        if norm_template is None:
-            norm_template = _WARP_TEMPLATES["arcface_112_v1"]
-        template = norm_template * float(crop.shape[0])
-        left_eye, right_eye, _, mouth_left, mouth_right = template
-        eye_mid = (left_eye + right_eye) * 0.5
-        mouth_mid = (mouth_left + mouth_right) * 0.5
-        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
-        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.85)
-        y_grid_crop = np.arange(crop.shape[0], dtype=np.float32).reshape(crop.shape[0], 1)
-        brow_center_y = eye_mid[1] - mid_height * 0.54
-        brow_sigma = max(4.0, mid_height * 0.14)
-        brow_band = np.exp(-0.5 * ((y_grid_crop - brow_center_y) / brow_sigma) ** 2)
-        brow_band = np.clip(brow_band * 1.35, 0.0, 1.0)
-        brow_only_crop = cv2.GaussianBlur(feature_core_crop * brow_band, (7, 7), 0)
-
         feature_core = cv2.warpAffine(
-            feature_core_crop,
+            feature_core,
             M_inv,
             (w, h),
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
         )
-        brow_only = cv2.warpAffine(
-            brow_only_crop,
-            M_inv,
-            (w, h),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-        )
-        brow_only = cv2.GaussianBlur(brow_only, (9, 9), 0)
         # Dilate the mask in frame space to expand the swap region beyond
         # the exact crop boundary. Use a kernel proportional to crop size.
         crop_size = crop.shape[0]
@@ -1060,23 +1036,6 @@ class FaceSwapper:
             frame.astype(np.float32) * (1.0 - mask)
             + warped_back.astype(np.float32) * mask
         )
-
-        # When the swap model returns a pale eyebrow ridge, reuse only the
-        # source brow's dark high-frequency detail inside the swapped brow band.
-        # This restores fuller eyebrow texture without widening the full-face blend.
-        if float(brow_only.max()) > 1e-4:
-            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
-            result_gray = cv2.cvtColor(
-                np.clip(result, 0, 255).astype(np.uint8),
-                cv2.COLOR_BGR2GRAY,
-            ).astype(np.float32)
-            detail_k = max(5, int(crop_size * 0.04)) | 1
-            frame_base = cv2.GaussianBlur(frame_gray, (detail_k, detail_k), 0)
-            brow_texture = np.clip(frame_base - frame_gray, 0.0, 36.0) / 36.0
-            tone_gap = np.clip(result_gray - frame_base, 0.0, 64.0) / 64.0
-            brow_darken = brow_only * brow_texture * (0.35 + 0.65 * tone_gap) * 42.0
-            result = np.clip(result - brow_darken[:, :, np.newaxis], 0, 255)
-
         return result.astype(np.uint8)
 
     def _read_model_crop_size(self) -> Optional[int]:
