@@ -703,13 +703,14 @@ class FaceSwapper:
         mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.85)
 
         mask = np.zeros((crop_size, crop_size), dtype=np.float32)
+        brow_support = np.zeros((crop_size, crop_size), dtype=np.float32)
         eye_axes = (
             max(4, int(round(eye_dist * 0.34))),
             max(4, int(round(mid_height * 0.38))),
         )
         brow_axes = (
-            max(6, int(round(eye_dist * 0.52))),
-            max(4, int(round(mid_height * 0.24))),
+            max(7, int(round(eye_dist * 0.60))),
+            max(5, int(round(mid_height * 0.30))),
         )
 
         live_landmarks: Optional[np.ndarray] = None
@@ -764,28 +765,78 @@ class FaceSwapper:
         _draw_eye_core(left_eye)
         _draw_eye_core(right_eye)
 
-        left_brow_center = left_eye + np.array([0.0, -mid_height * 0.50], dtype=np.float32)
-        right_brow_center = right_eye + np.array([0.0, -mid_height * 0.50], dtype=np.float32)
-        cv2.ellipse(
-            mask,
-            tuple(np.round(left_brow_center).astype(int)),
-            brow_axes,
-            -8,
-            0,
-            360,
-            0.9,
-            -1,
-        )
-        cv2.ellipse(
-            mask,
-            tuple(np.round(right_brow_center).astype(int)),
-            brow_axes,
-            8,
-            0,
-            360,
-            0.9,
-            -1,
-        )
+        def _draw_brow_core(center: np.ndarray, angle: float) -> None:
+            if live_landmarks is not None:
+                x_radius = eye_dist * 0.38
+                brow_top = center[1] - mid_height * 0.78
+                brow_bottom = center[1] - mid_height * 0.06
+                brow_points = live_landmarks[
+                    (np.abs(live_landmarks[:, 0] - center[0]) <= x_radius)
+                    & (live_landmarks[:, 1] >= brow_top)
+                    & (live_landmarks[:, 1] <= brow_bottom)
+                ]
+                if brow_points.shape[0] >= 4:
+                    brow_curve = brow_points[np.argsort(brow_points[:, 0])].astype(np.float32)
+                    brow_layer = np.zeros_like(brow_support)
+
+                    upper = brow_curve.copy()
+                    upper[:, 1] -= max(2.0, mid_height * 0.12)
+                    lower = brow_curve.copy()
+                    lower[:, 1] += max(1.0, mid_height * 0.05)
+
+                    end_pad = max(1.0, eye_dist * 0.05)
+                    upper[0, 0] -= end_pad
+                    upper[-1, 0] += end_pad
+                    lower[0, 0] -= end_pad * 0.7
+                    lower[-1, 0] += end_pad * 0.7
+
+                    brow_band = np.vstack([upper, lower[::-1]])
+                    brow_band[:, 0] = np.clip(brow_band[:, 0], 0.0, float(crop_size - 1))
+                    brow_band[:, 1] = np.clip(brow_band[:, 1], 0.0, float(crop_size - 1))
+                    cv2.fillPoly(
+                        brow_layer,
+                        [np.round(brow_band).astype(np.int32)],
+                        0.98,
+                    )
+
+                    centerline = brow_curve.copy()
+                    centerline[:, 1] -= mid_height * 0.03
+                    centerline[:, 0] = np.clip(centerline[:, 0], 0.0, float(crop_size - 1))
+                    centerline[:, 1] = np.clip(centerline[:, 1], 0.0, float(crop_size - 1))
+                    cv2.polylines(
+                        brow_layer,
+                        [np.round(centerline).astype(np.int32)],
+                        False,
+                        1.0,
+                        max(2, int(round(mid_height * 0.10))),
+                        lineType=cv2.LINE_AA,
+                    )
+
+                    pad_x = max(1, int(round(eye_dist * 0.06)))
+                    pad_y = max(1, int(round(mid_height * 0.04)))
+                    kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
+                    brow_layer = cv2.dilate(
+                        (brow_layer * 255).astype(np.uint8),
+                        kernel,
+                        iterations=1,
+                    ).astype(np.float32) / 255.0
+                    np.maximum(brow_support, brow_layer, out=brow_support)
+                    return
+
+            brow_center = center + np.array([0.0, -mid_height * 0.56], dtype=np.float32)
+            cv2.ellipse(
+                brow_support,
+                tuple(np.round(brow_center).astype(int)),
+                brow_axes,
+                angle,
+                0,
+                360,
+                0.94,
+                -1,
+            )
+
+        _draw_brow_core(left_eye, -8)
+        _draw_brow_core(right_eye, 8)
 
         bridge_pts = np.array(
             [
@@ -798,8 +849,21 @@ class FaceSwapper:
         )
         cv2.fillConvexPoly(mask, np.round(bridge_pts).astype(np.int32), 0.98)
 
+        brow_gap_pts = np.array(
+            [
+                eye_mid + np.array([-eye_dist * 0.14, -mid_height * 0.72], dtype=np.float32),
+                eye_mid + np.array([eye_dist * 0.14, -mid_height * 0.72], dtype=np.float32),
+                eye_mid + np.array([eye_dist * 0.06, -mid_height * 0.12], dtype=np.float32),
+                eye_mid + np.array([-eye_dist * 0.06, -mid_height * 0.12], dtype=np.float32),
+            ],
+            dtype=np.float32,
+        )
+        cv2.fillConvexPoly(brow_support, np.round(brow_gap_pts).astype(np.int32), 0.0)
+
         blur_k = max(9, int(crop_size * 0.05)) | 1
         mask = cv2.GaussianBlur(mask, (blur_k, blur_k), 0)
+        brow_blur_k = max(7, int(crop_size * 0.035)) | 1
+        brow_support = cv2.GaussianBlur(brow_support, (brow_blur_k, brow_blur_k), 0)
         y_grid = np.arange(crop_size, dtype=np.float32).reshape(crop_size, 1)
         top_start = eye_mid[1] - mid_height * 0.92
         top_end = eye_mid[1] - mid_height * 0.28
@@ -808,6 +872,12 @@ class FaceSwapper:
         top_ramp = top_ramp * top_ramp * (3.0 - 2.0 * top_ramp)
         top_weight = 0.45 + 0.55 * top_ramp
         mask *= top_weight
+        brow_weight = 0.80 + 0.20 * top_ramp
+        brow_center = eye_mid[1] - mid_height * 0.52
+        brow_sigma = max(4.0, mid_height * 0.16)
+        brow_peak = np.exp(-0.5 * ((y_grid - brow_center) / brow_sigma) ** 2)
+        brow_support *= np.clip(brow_weight + 0.14 * brow_peak, 0.0, 1.0)
+        mask = np.maximum(mask, brow_support)
         return np.clip(mask, 0.0, 1.0)
 
     def _paste_back(
@@ -947,7 +1017,7 @@ class FaceSwapper:
             mask = cv2.GaussianBlur(mask, (15, 15), 0)
             mask = cv2.GaussianBlur(mask, (13, 13), 0)
 
-        mask = np.maximum(mask, feature_core * 0.96)
+        mask = np.maximum(mask, feature_core * 0.99)
             
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
         result = (

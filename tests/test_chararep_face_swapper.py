@@ -76,6 +76,43 @@ def _make_aligned_eye_landmarks(
     return points
 
 
+def _make_aligned_eye_brow_landmarks(
+    crop_size=256,
+    template_name="arcface_128",
+    left_aperture=10.0,
+    right_aperture=3.5,
+):
+    """Build synthetic aligned landmarks with brows above each eye."""
+    points = _make_aligned_eye_landmarks(
+        crop_size=crop_size,
+        template_name=template_name,
+        left_aperture=left_aperture,
+        right_aperture=right_aperture,
+    )
+    template = _WARP_TEMPLATES[template_name] * float(crop_size)
+    left_eye, right_eye, _, mouth_left, mouth_right = template
+    eye_mid = (left_eye + right_eye) * 0.5
+    mouth_mid = (mouth_left + mouth_right) * 0.5
+    eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+    mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.85)
+
+    brow_x = np.linspace(-1.0, 1.0, 8, dtype=np.float32)
+    brow_y = -mid_height * (0.48 + 0.10 * (1.0 - brow_x * brow_x))
+    points[24:32] = np.column_stack(
+        [
+            left_eye[0] + brow_x * eye_dist * 0.28,
+            left_eye[1] + brow_y,
+        ]
+    ).astype(np.float32)
+    points[32:40] = np.column_stack(
+        [
+            right_eye[0] + brow_x * eye_dist * 0.28,
+            right_eye[1] + brow_y,
+        ]
+    ).astype(np.float32)
+    return points
+
+
 # ---------------------------------------------------------------------------
 # _detect_model_type
 # ---------------------------------------------------------------------------
@@ -459,6 +496,31 @@ class TestPasteBack:
 
         assert _eye_energy(left_eye) > _eye_energy(right_eye) * 1.18
 
+    def test_feature_core_mask_tracks_live_brow_height(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+
+        plain_mask = swapper._build_feature_core_mask(256, "arcface_128")
+        aligned_landmarks = _make_aligned_eye_brow_landmarks()
+        mask = swapper._build_feature_core_mask(
+            256,
+            "arcface_128",
+            aligned_landmarks=aligned_landmarks,
+        )
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+
+        brow_y = int(round(float(left_eye[1] - mid_height * 0.56)))
+        brow_x = int(round(float(left_eye[0])))
+        plain_roi = plain_mask[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15]
+        live_roi = mask[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15]
+
+        assert float(live_roi.mean()) > float(plain_roi.mean()) + 0.03
+
     def test_output_shape_preserved(self, tmp_path):
         cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")
         swapper = FaceSwapper(cfg)
@@ -525,6 +587,40 @@ class TestPasteBack:
             return float(roi.mean())
 
         assert _eye_mean(left_eye) > _eye_mean(right_eye) + 6.0
+
+    def test_paste_back_tracks_live_brow_height(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+        frame = np.zeros((300, 300, 3), dtype=np.uint8)
+        crop = np.full((256, 256, 3), 200, dtype=np.uint8)
+
+        plain = swapper._paste_back(
+            frame,
+            crop,
+            np.eye(2, 3, dtype=np.float32),
+            template_name="arcface_128",
+        )
+        aligned_landmarks = _make_aligned_eye_brow_landmarks()
+        result = swapper._paste_back(
+            frame,
+            crop,
+            np.eye(2, 3, dtype=np.float32),
+            template_name="arcface_128",
+            aligned_landmarks=aligned_landmarks,
+        )
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+
+        brow_y = int(round(float(left_eye[1] - mid_height * 0.56)))
+        brow_x = int(round(float(left_eye[0])))
+        plain_roi = plain[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15, 0]
+        live_roi = result[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15, 0]
+
+        assert float(live_roi.mean()) > float(plain_roi.mean()) + 8.0
 
 
 class TestPrepareSourceEmbedding:
