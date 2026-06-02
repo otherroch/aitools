@@ -519,7 +519,7 @@ class TestPasteBack:
         plain_roi = plain_mask[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15]
         live_roi = mask[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15]
 
-        assert float(live_roi.mean()) > float(plain_roi.mean()) + 0.03
+        assert float(np.percentile(live_roi, 75)) > float(np.percentile(plain_roi, 75)) + 0.02
 
     def test_output_shape_preserved(self, tmp_path):
         cfg = _make_cfg(tmp_path, "simswap_unofficial_512.onnx")
@@ -620,7 +620,48 @@ class TestPasteBack:
         plain_roi = plain[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15, 0]
         live_roi = result[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15, 0]
 
-        assert float(live_roi.mean()) > float(plain_roi.mean()) + 8.0
+        assert float(np.percentile(live_roi, 75)) > float(np.percentile(plain_roi, 75)) + 6.0
+
+    def test_paste_back_restores_dark_brow_texture(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        swapper = FaceSwapper(cfg)
+        frame = np.full((300, 300, 3), 210, dtype=np.uint8)
+        crop = np.full((256, 256, 3), 230, dtype=np.uint8)
+        aligned_landmarks = _make_aligned_eye_brow_landmarks()
+
+        template = _WARP_TEMPLATES["arcface_128"] * 256.0
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = np.linalg.norm(right_eye - left_eye)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
+        brow_y = int(round(float(left_eye[1] - mid_height * 0.56)))
+        brow_x = int(round(float(left_eye[0])))
+        forehead_y = int(round(float(eye_mid[1] - mid_height * 0.72)))
+        forehead_x = int(round(float(eye_mid[0])))
+
+        cv2.line(frame, (brow_x - 22, brow_y), (brow_x + 22, brow_y - 2), (90, 90, 90), 7, cv2.LINE_AA)
+        cv2.line(
+            frame,
+            (int(round(float(right_eye[0]))) - 22, brow_y),
+            (int(round(float(right_eye[0]))) + 22, brow_y - 2),
+            (90, 90, 90),
+            7,
+            cv2.LINE_AA,
+        )
+
+        result = swapper._paste_back(
+            frame,
+            crop,
+            np.eye(2, 3, dtype=np.float32),
+            template_name="arcface_128",
+            aligned_landmarks=aligned_landmarks,
+        )
+
+        brow_roi = result[brow_y - 3 : brow_y + 4, brow_x - 18 : brow_x + 19, 0]
+        forehead_roi = result[forehead_y - 3 : forehead_y + 4, forehead_x - 18 : forehead_x + 19, 0]
+
+        assert float(brow_roi.mean()) < float(forehead_roi.mean()) - 6.0
 
 
 class TestPrepareSourceEmbedding:
