@@ -294,6 +294,32 @@ class TestEnhancementStabilizationHelpers:
         assert first.mean() == pytest.approx(40.0)
         assert 0.0 < second.mean() < 40.0
 
+    def test_stabilize_enhancement_box_ignores_out_of_order_frames(self):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+
+        first = enhancer._stabilize_enhancement_box(1, 10, (20, 20, 60, 80), 200, 200)
+        older = enhancer._stabilize_enhancement_box(1, 9, (40, 20, 80, 80), 200, 200)
+
+        assert older == (40, 20, 80, 80)
+        state_frame, state_box = enhancer._track_boxes[1]
+        assert state_frame == 10
+        np.testing.assert_array_equal(state_box, np.array(first, dtype=np.float32))
+
+    def test_stabilize_enhancement_residual_ignores_out_of_order_frames(self):
+        cfg = _make_cfg(enable=True)
+        enhancer = FaceEnhancer(cfg)
+        first = np.full((16, 16, 3), 10, dtype=np.float32)
+        older = np.full((16, 16, 3), 5, dtype=np.float32)
+
+        enhancer._stabilize_enhancement_residual(2, 10, first)
+        returned = enhancer._stabilize_enhancement_residual(2, 9, older)
+
+        np.testing.assert_array_equal(returned, older)
+        state_frame, state_residual = enhancer._track_residuals[2]
+        assert state_frame == 10
+        np.testing.assert_array_equal(state_residual, first)
+
 
 # ---------------------------------------------------------------------------
 # FaceEnhancer._padded_box

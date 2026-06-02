@@ -2,6 +2,7 @@
 
 import types
 
+import cv2
 import numpy as np
 import pytest
 
@@ -109,6 +110,24 @@ class TestAlphaBlend:
         mask = np.full((50, 50), 128, dtype=np.uint8)
         result = FaceBlender._alpha_blend(orig, swap, mask)
         assert result.dtype == np.uint8
+
+
+class TestHybridBlendOne:
+    def test_tiny_inner_mask_falls_back_to_alpha(self, monkeypatch):
+        original = _solid(64, 64, (10, 20, 30))
+        swapped = _solid(64, 64, (220, 210, 200))
+        soft_mask = np.zeros((64, 64), dtype=np.uint8)
+        soft_mask[32, 32] = 255
+
+        monkeypatch.setattr(
+            cv2,
+            "seamlessClone",
+            lambda *a, **kw: pytest.fail("seamlessClone should not be called"),
+        )
+
+        result = FaceBlender._hybrid_blend_one(original, swapped, soft_mask)
+        expected = FaceBlender._alpha_blend(original, swapped, soft_mask)
+        np.testing.assert_array_equal(result, expected)
 
 
 # ---------------------------------------------------------------------------

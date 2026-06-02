@@ -460,7 +460,7 @@ class FaceBlender:
         inner_binary = (soft_mask > inner_thresh).astype(np.uint8) * 255
 
         # Check inner mask has enough pixels for seamlessClone
-        if inner_binary.sum() < 200:
+        if cv2.countNonZero(inner_binary) < 200:
             # Mask too small — fall back to plain alpha blend
             return FaceBlender._alpha_blend(original, swapped, soft_mask)
 

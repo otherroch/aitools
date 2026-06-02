@@ -9,6 +9,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -35,6 +36,10 @@ def _unit_interval(value: str) -> float:
         x = float(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"invalid float value: {value!r}")
+    if math.isnan(x):
+        raise argparse.ArgumentTypeError(
+            f"expected a value in [0, 1], got {x}"
+        )
     if x < 0.0 or x > 1.0:
         raise argparse.ArgumentTypeError(
             f"expected a value in [0, 1], got {x}"
@@ -248,9 +253,9 @@ Config JSON format
     p.add_argument(
         "--blend-mode",
         choices=["seamless", "alpha"],
-        default="alpha",
+        default=PipelineConfig.blend_mode,
         help=(
-            "Blending strategy (default: alpha). "
+            f"Blending strategy (default: {PipelineConfig.blend_mode}). "
             "'alpha' uses a soft mask and is faster and more predictable, "
             "often good when colors/lighting already match reasonably well. "
             "'seamless' uses Poisson cloning to better match lighting and color "
@@ -261,21 +266,24 @@ Config JSON format
     p.add_argument(
         "--blender-blur",
         type=int,
-        default=15,
+        default=PipelineConfig.mask_blur_kernel,
         dest="mask_blur_kernel",
         help=(
             "Gaussian blur kernel size for softening mask edges before blending. "
             "Higher values produce smoother transitions but may lose detail; "
             "lower values keep sharper edges but may leave visible seams. "
-            "0 disables blurring (default: 15)."
+            f"0 disables blurring (default: {PipelineConfig.mask_blur_kernel})."
         ),
     )
     p.add_argument(
         "--blender-erode",
         type=int,
-        default=2,
+        default=PipelineConfig.mask_erode_pixels,
         dest="mask_erode_pixels",
-        help="Pixels to erode from mask to avoid boundary artifacts (default: 1).",
+        help=(
+            "Pixels to erode from mask to avoid boundary artifacts "
+            f"(default: {PipelineConfig.mask_erode_pixels})."
+        ),
     )
     p.add_argument(
         "--temporal-smooth-alpha",

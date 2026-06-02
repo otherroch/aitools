@@ -39,13 +39,17 @@ class TestParseArgs:
         assert args.codec == "libx264"
         assert args.crf == 18
         assert args.no_audio is False
-        assert args.blend_mode == "alpha"
-        assert args.mask_blur_kernel == 15
-        assert args.mask_erode_pixels == 2
+        assert args.blend_mode == "seamless"
+        assert args.mask_blur_kernel == 41
+        assert args.mask_erode_pixels == 1
         assert args.verbose is False
         assert args.log_file is None
         assert args.timers is False
         assert args.dump_config is False
+
+    def test_temporal_smooth_alpha_nan_rejected(self):
+        with pytest.raises(SystemExit):
+            self._parse(["--temporal-smooth-alpha", "nan"])
 
     def test_input_output(self):
         args = self._parse(["-i", "in.mp4", "-o", "out.mp4"])

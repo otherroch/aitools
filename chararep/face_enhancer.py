@@ -15,6 +15,7 @@ Two enhancement backends are available:
 
 import logging
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 import cv2
@@ -272,6 +273,7 @@ class FaceEnhancer:
         self._track_boxes: dict[int, tuple[int, np.ndarray]] = {}
         self._track_residuals: dict[int, tuple[int, np.ndarray]] = {}
         self._aligned_mask_cache: dict[int, np.ndarray] = {}
+        self._state_lock = Lock()
 
         if not cfg.enable_face_enhancement:
             logger.info("Face enhancement disabled.")
@@ -499,54 +501,57 @@ class FaceEnhancer:
     ) -> tuple[int, int, int, int]:
         """Reduce frame-to-frame ROI jitter for the enhancer crop."""
         current = np.array(box, dtype=np.float32)
-        prev_state = self._track_boxes.get(track_id)
-        if prev_state is None:
-            self._track_boxes[track_id] = (frame_idx, current)
-            return box
+        with self._state_lock:
+            prev_state = self._track_boxes.get(track_id)
+            if prev_state is None:
+                self._track_boxes[track_id] = (frame_idx, current)
+                return box
 
-        prev_frame_idx, prev_box = prev_state
-        if frame_idx != prev_frame_idx + 1:
-            self._track_boxes[track_id] = (frame_idx, current)
-            return box
+            prev_frame_idx, prev_box = prev_state
+            if frame_idx <= prev_frame_idx:
+                return box
+            if frame_idx != prev_frame_idx + 1:
+                self._track_boxes[track_id] = (frame_idx, current)
+                return box
 
-        prev_center = np.array(
-            [(prev_box[0] + prev_box[2]) * 0.5, (prev_box[1] + prev_box[3]) * 0.5],
-            dtype=np.float32,
-        )
-        current_center = np.array(
-            [(current[0] + current[2]) * 0.5, (current[1] + current[3]) * 0.5],
-            dtype=np.float32,
-        )
+            prev_center = np.array(
+                [(prev_box[0] + prev_box[2]) * 0.5, (prev_box[1] + prev_box[3]) * 0.5],
+                dtype=np.float32,
+            )
+            current_center = np.array(
+                [(current[0] + current[2]) * 0.5, (current[1] + current[3]) * 0.5],
+                dtype=np.float32,
+            )
 
-        prev_size = np.array(
-            [prev_box[2] - prev_box[0], prev_box[3] - prev_box[1]],
-            dtype=np.float32,
-        )
-        current_size = np.array(
-            [current[2] - current[0], current[3] - current[1]],
-            dtype=np.float32,
-        )
+            prev_size = np.array(
+                [prev_box[2] - prev_box[0], prev_box[3] - prev_box[1]],
+                dtype=np.float32,
+            )
+            current_size = np.array(
+                [current[2] - current[0], current[3] - current[1]],
+                dtype=np.float32,
+            )
 
-        max_shift = np.maximum(prev_size * _BOX_MAX_SHIFT_RATIO, 2.0)
-        center_delta = np.clip(current_center - prev_center, -max_shift, max_shift)
-        stabilized_center = prev_center + center_delta
-        stabilized_size = (
-            prev_size * _BOX_HISTORY_WEIGHT
-            + current_size * (1.0 - _BOX_HISTORY_WEIGHT)
-        )
+            max_shift = np.maximum(prev_size * _BOX_MAX_SHIFT_RATIO, 2.0)
+            center_delta = np.clip(current_center - prev_center, -max_shift, max_shift)
+            stabilized_center = prev_center + center_delta
+            stabilized_size = (
+                prev_size * _BOX_HISTORY_WEIGHT
+                + current_size * (1.0 - _BOX_HISTORY_WEIGHT)
+            )
 
-        stabilized = np.array(
-            [
-                stabilized_center[0] - stabilized_size[0] * 0.5,
-                stabilized_center[1] - stabilized_size[1] * 0.5,
-                stabilized_center[0] + stabilized_size[0] * 0.5,
-                stabilized_center[1] + stabilized_size[1] * 0.5,
-            ],
-            dtype=np.float32,
-        )
-        clipped = self._clip_box(stabilized, frame_h, frame_w)
-        self._track_boxes[track_id] = (frame_idx, np.array(clipped, dtype=np.float32))
-        return clipped
+            stabilized = np.array(
+                [
+                    stabilized_center[0] - stabilized_size[0] * 0.5,
+                    stabilized_center[1] - stabilized_size[1] * 0.5,
+                    stabilized_center[0] + stabilized_size[0] * 0.5,
+                    stabilized_center[1] + stabilized_size[1] * 0.5,
+                ],
+                dtype=np.float32,
+            )
+            clipped = self._clip_box(stabilized, frame_h, frame_w)
+            self._track_boxes[track_id] = (frame_idx, np.array(clipped, dtype=np.float32))
+            return clipped
 
     def _build_enhancement_mask(
         self,
@@ -605,21 +610,22 @@ class FaceEnhancer:
     ) -> None:
         """Drop stale per-track enhancement state."""
         max_age = max(1, int(self._cfg.tracker_max_age))
-        stale_ids = [
-            track_id
-            for track_id, (last_frame_idx, _) in self._track_boxes.items()
-            if track_id not in active_track_ids and frame_idx - last_frame_idx > max_age
-        ]
-        for track_id in stale_ids:
-            self._track_boxes.pop(track_id, None)
+        with self._state_lock:
+            stale_ids = [
+                track_id
+                for track_id, (last_frame_idx, _) in self._track_boxes.items()
+                if track_id not in active_track_ids and frame_idx - last_frame_idx > max_age
+            ]
+            for track_id in stale_ids:
+                self._track_boxes.pop(track_id, None)
 
-        stale_residual_ids = [
-            track_id
-            for track_id, (last_frame_idx, _) in self._track_residuals.items()
-            if track_id not in active_track_ids and frame_idx - last_frame_idx > max_age
-        ]
-        for track_id in stale_residual_ids:
-            self._track_residuals.pop(track_id, None)
+            stale_residual_ids = [
+                track_id
+                for track_id, (last_frame_idx, _) in self._track_residuals.items()
+                if track_id not in active_track_ids and frame_idx - last_frame_idx > max_age
+            ]
+            for track_id in stale_residual_ids:
+                self._track_residuals.pop(track_id, None)
 
     def _stabilize_enhancement_residual(
         self,
@@ -629,29 +635,32 @@ class FaceEnhancer:
     ) -> np.ndarray:
         """Damp low-frequency CodeFormer shimmer across consecutive frames."""
         current = residual.astype(np.float32, copy=True)
-        prev_state = self._track_residuals.get(track_id)
-        if prev_state is None:
-            self._track_residuals[track_id] = (frame_idx, current)
-            return current
+        with self._state_lock:
+            prev_state = self._track_residuals.get(track_id)
+            if prev_state is None:
+                self._track_residuals[track_id] = (frame_idx, current)
+                return current
 
-        prev_frame_idx, prev_residual = prev_state
-        if frame_idx != prev_frame_idx + 1:
-            self._track_residuals[track_id] = (frame_idx, current)
-            return current
+            prev_frame_idx, prev_residual = prev_state
+            if frame_idx <= prev_frame_idx:
+                return current
+            if frame_idx != prev_frame_idx + 1:
+                self._track_residuals[track_id] = (frame_idx, current)
+                return current
 
-        if prev_residual.shape != current.shape:
-            prev_residual = cv2.resize(
-                prev_residual,
-                (current.shape[1], current.shape[0]),
-                interpolation=cv2.INTER_LINEAR,
-            )
+            if prev_residual.shape != current.shape:
+                prev_residual = cv2.resize(
+                    prev_residual,
+                    (current.shape[1], current.shape[0]),
+                    interpolation=cv2.INTER_LINEAR,
+                )
 
-        k = max(5, int(min(current.shape[:2]) * 0.06)) | 1
-        current_low = cv2.GaussianBlur(current, (k, k), 0)
-        prev_low = cv2.GaussianBlur(prev_residual, (k, k), 0)
-        stabilized = current + (prev_low - current_low) * _RESIDUAL_HISTORY_WEIGHT
-        self._track_residuals[track_id] = (frame_idx, stabilized)
-        return stabilized
+            k = max(5, int(min(current.shape[:2]) * 0.06)) | 1
+            current_low = cv2.GaussianBlur(current, (k, k), 0)
+            prev_low = cv2.GaussianBlur(prev_residual, (k, k), 0)
+            stabilized = current + (prev_low - current_low) * _RESIDUAL_HISTORY_WEIGHT
+            self._track_residuals[track_id] = (frame_idx, stabilized)
+            return stabilized
 
     # -- public methods ----------------------------------------------------
 
