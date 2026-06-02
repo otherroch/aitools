@@ -39,9 +39,9 @@ class TestParseArgs:
         assert args.codec == "libx264"
         assert args.crf == 18
         assert args.no_audio is False
-        assert args.blend_mode == "seamless"
-        assert args.mask_blur_kernel == 41
-        assert args.mask_erode_pixels == 1
+        assert args.blend_mode == "alpha"
+        assert args.mask_blur_kernel == 15
+        assert args.mask_erode_pixels == 2
         assert args.verbose is False
         assert args.log_file is None
         assert args.timers is False
