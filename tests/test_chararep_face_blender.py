@@ -281,6 +281,26 @@ class TestBuildMask:
         brow2 = mask2[58:92, 55:145].astype(np.int16)
         assert np.mean(np.abs(brow1 - brow2)) < 10.0
 
+    def test_dense_brow_core_strengthens_high_brow_strip(self):
+        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+        blender = FaceBlender(cfg)
+        bbox = np.array([40, 40, 160, 180], dtype=np.float32)
+        lm = np.array(
+            [[75, 85], [125, 85], [100, 110], [82, 145], [118, 145]],
+            dtype=np.float32,
+        )
+        dense_face = _make_dense_brow_face(lm)
+
+        brow_core = blender._build_brow_core_mask((220, 220), lm, dense_face)
+        plain_mask = blender._build_mask((220, 220), bbox, lm)
+        dense_mask = blender._build_mask((220, 220), bbox, lm, dense_face)
+
+        assert brow_core is not None
+        assert brow_core[62, 75] > 40
+        assert brow_core[62, 125] > 40
+        assert dense_mask[62, 75] > plain_mask[62, 75] + 10
+        assert dense_mask[62, 125] > plain_mask[62, 125] + 20
+
 
 # ---------------------------------------------------------------------------
 # FaceBlender seamless mode (single face)

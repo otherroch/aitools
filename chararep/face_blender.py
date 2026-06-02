@@ -107,19 +107,51 @@ class FaceBlender:
         brow_mask = np.zeros((h, w), dtype=np.float32)
         for eye_center in (left_eye, right_eye):
             candidates = dense[
-                (np.abs(dense[:, 0] - eye_center[0]) <= eye_dist * 0.42)
-                & (dense[:, 1] >= eye_center[1] - face_h * 0.42)
-                & (dense[:, 1] <= eye_center[1] - face_h * 0.02)
+                (np.abs(dense[:, 0] - eye_center[0]) <= eye_dist * 0.46)
+                & (dense[:, 1] >= eye_center[1] - face_h * 0.62)
+                & (dense[:, 1] <= eye_center[1] + face_h * 0.04)
             ]
             if candidates.shape[0] < 4:
                 continue
 
+            brow_curve = candidates[np.argsort(candidates[:, 0])].astype(np.float32)
             eye_mask = np.zeros((h, w), dtype=np.uint8)
-            hull = cv2.convexHull(candidates.astype(np.float32))
-            cv2.fillConvexPoly(eye_mask, np.round(hull).astype(np.int32), 255)
 
-            pad_x = max(3, int(round(eye_dist * 0.12)))
-            pad_y = max(2, int(round(face_h * 0.05)))
+            # The dense landmark brow arc sits above the eye. Filling its convex
+            # hull pulls the support downward toward the eyelid, which leaves the
+            # original eyebrow visible as a second strip above the swap. Build an
+            # upward-biased band around the brow curve instead.
+            upper = brow_curve.copy()
+            upper[:, 1] -= max(4.0, face_h * 0.20)
+            lower = brow_curve.copy()
+            lower[:, 1] += max(2.0, face_h * 0.06)
+
+            end_pad = max(2.0, eye_dist * 0.06)
+            upper[0, 0] -= end_pad
+            upper[-1, 0] += end_pad
+            lower[0, 0] -= end_pad * 0.8
+            lower[-1, 0] += end_pad * 0.8
+
+            brow_band = np.vstack([upper, lower[::-1]])
+            brow_band[:, 0] = np.clip(brow_band[:, 0], 0.0, float(w - 1))
+            brow_band[:, 1] = np.clip(brow_band[:, 1], 0.0, float(h - 1))
+            cv2.fillPoly(eye_mask, [np.round(brow_band).astype(np.int32)], 255)
+
+            centerline = brow_curve.copy()
+            centerline[:, 1] -= face_h * 0.05
+            centerline[:, 0] = np.clip(centerline[:, 0], 0.0, float(w - 1))
+            centerline[:, 1] = np.clip(centerline[:, 1], 0.0, float(h - 1))
+            cv2.polylines(
+                eye_mask,
+                [np.round(centerline).astype(np.int32)],
+                False,
+                255,
+                max(3, int(round(face_h * 0.10))),
+                lineType=cv2.LINE_AA,
+            )
+
+            pad_x = max(3, int(round(eye_dist * 0.10)))
+            pad_y = max(2, int(round(face_h * 0.04)))
             kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
             eye_mask = cv2.dilate(eye_mask, kernel, iterations=1)
             brow_mask = np.maximum(brow_mask, eye_mask.astype(np.float32) / 255.0)
@@ -129,14 +161,6 @@ class FaceBlender:
 
         blur_k = max(7, int(max(face_h, eye_dist) * 0.10)) | 1
         brow_mask = cv2.GaussianBlur(brow_mask, (blur_k, blur_k), 0)
-        y_grid = np.arange(h, dtype=np.float32).reshape(h, 1)
-        eye_line = float(eye_mid[1])
-        top_start = eye_line - face_h * 0.38
-        top_end = eye_line - face_h * 0.02
-        top_span = max(top_end - top_start, 1.0)
-        top_t = np.clip((y_grid - top_start) / top_span, 0.0, 1.0)
-        top_t = top_t * top_t * (3.0 - 2.0 * top_t)
-        brow_mask *= 0.18 + 0.82 * top_t
         return np.clip(brow_mask * 255.0, 0, 255).astype(np.uint8)
 
     def _canonical_face_mask(self, size: int) -> np.ndarray:
