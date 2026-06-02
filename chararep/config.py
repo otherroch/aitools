@@ -61,9 +61,9 @@ class PipelineConfig:
     copy_audio: bool = True  # mux original audio into output
 
     # ── Blending ─────────────────────────────────────────────────────────
-    blend_mode: str = "seamless"  # "seamless" (hybrid Poisson+alpha) or "alpha"
-    mask_blur_kernel: int = 41  # Gaussian blur for mask edges (very wide for ultra-smooth transitions)
-    mask_erode_pixels: int = 1  # minimal erosion to maximize swap area while preventing hard edges
+    blend_mode: str = "alpha"  # "seamless" (hybrid Poisson+alpha) or "alpha"
+    mask_blur_kernel: int = 15  # Gaussian blur kernel size for softening mask edges
+    mask_erode_pixels: int = 2  # erosion pixels to avoid boundary artifacts
 
     # ── Temporal smoothing ────────────────────────────────────────────────
     # Previous-frame weight for overlap-only temporal smoothing.
