@@ -16,5 +16,4 @@ dist/
 *.png
 *.jpg
 *.jpeg
-!*-before.mp4
-!*-after.mp4
+
