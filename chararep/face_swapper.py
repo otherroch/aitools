@@ -205,6 +205,7 @@ class FaceSwapper:
         self._cfg = cfg
         self._model_path = self._resolve_model_path(cfg.swap_model_path)
         self._model_type = _detect_model_type(self._model_path)
+        self._crop_mask_cache: dict[tuple[int, str], np.ndarray] = {}
 
         providers = get_onnx_providers(cfg.device_id)
 
@@ -596,6 +597,64 @@ class FaceSwapper:
         x = x.transpose(2, 0, 1)                          # HWC → CHW
         return np.expand_dims(x, 0)
 
+    def _canonical_paste_mask(
+        self,
+        size: int,
+        template_name: str,
+    ) -> np.ndarray:
+        """Return a cached crop-space soft mask for paste-back blending."""
+        cache_key = (size, template_name)
+        cached = self._crop_mask_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        template = _WARP_TEMPLATES.get(template_name)
+        if template is None:
+            logger.warning(
+                "_canonical_paste_mask: unknown template '%s' — falling back to 'arcface_112_v1'.",
+                template_name,
+            )
+            template = _WARP_TEMPLATES["arcface_112_v1"]
+        template = template * float(size)
+
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+        hull_pts = np.vstack(
+            [
+                template,
+                np.array(
+                    [
+                        [eye_mid[0], eye_mid[1] - mid_height * 1.36],
+                        [left_eye[0] - eye_dist * 1.02, left_eye[1] - mid_height * 0.74],
+                        [right_eye[0] + eye_dist * 1.02, right_eye[1] - mid_height * 0.74],
+                        [left_eye[0] - eye_dist * 1.16, eye_mid[1] + mid_height * 0.02],
+                        [right_eye[0] + eye_dist * 1.16, eye_mid[1] + mid_height * 0.02],
+                        [mouth_left[0] - eye_dist * 0.98, mouth_left[1] + mid_height * 0.76],
+                        [mouth_right[0] + eye_dist * 0.98, mouth_right[1] + mid_height * 0.76],
+                        [mouth_mid[0], mouth_mid[1] + mid_height * 1.22],
+                    ],
+                    dtype=np.float32,
+                ),
+            ]
+        )
+        hull_pts[:, 0] = np.clip(hull_pts[:, 0], 0.0, float(size - 1))
+        hull_pts[:, 1] = np.clip(hull_pts[:, 1], 0.0, float(size - 1))
+
+        mask = np.zeros((size, size), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, cv2.convexHull(hull_pts.astype(np.int32)), 1)
+
+        dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+        fade_width = max(1, int(size * 0.12))
+        alpha = np.clip(dist / fade_width, 0.0, 1.0)
+        mask_f32 = alpha * alpha * (3.0 - 2.0 * alpha)
+
+        self._crop_mask_cache[cache_key] = mask_f32
+        return mask_f32
+
     def _normalize_crop_frame(self, output: np.ndarray) -> np.ndarray:
         """Convert the model output tensor ``[C,H,W]`` to a BGR ``uint8`` image.
 
@@ -631,15 +690,7 @@ class FaceSwapper:
             borderMode=cv2.BORDER_CONSTANT,
         )
 
-        crop_size = crop.shape[0]
-        crop_mask = np.zeros((crop_size, crop_size), dtype=np.float32)
-        pad = max(1, int(crop_size * 0.05))
-        crop_mask[pad:crop_size-pad, pad:crop_size-pad] = 1.0
-
-        dist = cv2.distanceTransform(crop_mask.astype(np.uint8), cv2.DIST_L2, 5)
-        fade_width = max(1, int(crop_size * 0.15))
-        alpha = np.clip(dist / fade_width, 0.0, 1.0)
-        crop_mask = alpha * alpha * (3.0 - 2.0 * alpha)
+        crop_mask = self._canonical_paste_mask(crop.shape[0], template_name)
 
         mask = cv2.warpAffine(
             crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR,

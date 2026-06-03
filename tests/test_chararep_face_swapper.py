@@ -456,4 +456,34 @@ class TestNormalizeCropFrame:
 
 
 class TestPasteBack:
-    pass
+    def _make_swapper(self, tmp_path):
+        cfg = _make_cfg(tmp_path, "hyperswap_1a_256.onnx")
+        return FaceSwapper(cfg)
+
+    def test_degenerate_affine_returns_original_frame(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        crop = np.full((64, 64, 3), 255, dtype=np.uint8)
+        degenerate = np.zeros((2, 3), dtype=np.float32)
+
+        result = swapper._paste_back(frame, crop, degenerate, template_name="arcface_128")
+
+        np.testing.assert_array_equal(result, frame)
+
+    def test_paste_back_returns_uint8_frame_shape(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        frame = np.zeros((128, 128, 3), dtype=np.uint8)
+        crop = np.full((128, 128, 3), 200, dtype=np.uint8)
+        affine = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+
+        result = swapper._paste_back(frame, crop, affine, template_name="arcface_128")
+
+        assert result.shape == frame.shape
+        assert result.dtype == np.uint8
+        assert result[52, 64, 0] > 0
+
+    def test_canonical_paste_mask_is_cached_per_template(self, tmp_path):
+        swapper = self._make_swapper(tmp_path)
+        mask1 = swapper._canonical_paste_mask(256, "arcface_128")
+        mask2 = swapper._canonical_paste_mask(256, "arcface_128")
+        assert mask1 is mask2

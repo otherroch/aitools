@@ -163,4 +163,28 @@ class TestBlendAllNoOp:
 # ---------------------------------------------------------------------------
 
 class TestBuildMask:
-    pass
+    def test_aligned_mask_keeps_brow_region_inside_soft_mask(self):
+        cfg = _make_cfg(mask_blur_kernel=0, mask_erode_pixels=0)
+        blender = FaceBlender(cfg)
+        landmarks = np.array(
+            [
+                [74, 88],
+                [182, 88],
+                [128, 144],
+                [88, 206],
+                [168, 206],
+            ],
+            dtype=np.float32,
+        )
+
+        mask = blender._build_mask((256, 256), np.array([48, 48, 208, 232], dtype=np.float32), landmarks)
+
+        brow_probe = (64, 128)
+        assert mask[brow_probe] > 0
+        assert mask[brow_probe] > mask[8, 8]
+
+    def test_canonical_mask_is_cached_per_size(self):
+        blender = FaceBlender(_make_cfg())
+        mask1 = blender._canonical_face_mask(256)
+        mask2 = blender._canonical_face_mask(256)
+        assert mask1 is mask2

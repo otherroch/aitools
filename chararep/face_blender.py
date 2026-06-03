@@ -76,14 +76,14 @@ class FaceBlender:
 
         extra_pts = np.vstack(
             [
-                np.array([eye_mid[0], eye_mid[1] - mid_height * 1.18]),
-                np.array([left_eye[0] - eye_dist * 0.96, left_eye[1] - mid_height * 0.55]),
-                np.array([right_eye[0] + eye_dist * 0.96, right_eye[1] - mid_height * 0.55]),
-                np.array([left_eye[0] - eye_dist * 1.1, eye_mid[1] + mid_height * 0.1]),
-                np.array([right_eye[0] + eye_dist * 1.1, eye_mid[1] + mid_height * 0.1]),
-                np.array([mouth_left[0] - eye_dist * 0.95, mouth_left[1] + mid_height * 0.7]),
-                np.array([mouth_right[0] + eye_dist * 0.95, mouth_right[1] + mid_height * 0.7]),
-                np.array([mouth_mid[0], mouth_mid[1] + mid_height * 1.2]),
+                np.array([eye_mid[0], eye_mid[1] - mid_height * 1.32]),
+                np.array([left_eye[0] - eye_dist * 1.04, left_eye[1] - mid_height * 0.72]),
+                np.array([right_eye[0] + eye_dist * 1.04, right_eye[1] - mid_height * 0.72]),
+                np.array([left_eye[0] - eye_dist * 1.18, eye_mid[1] + mid_height * 0.02]),
+                np.array([right_eye[0] + eye_dist * 1.18, eye_mid[1] + mid_height * 0.02]),
+                np.array([mouth_left[0] - eye_dist * 0.98, mouth_left[1] + mid_height * 0.78]),
+                np.array([mouth_right[0] + eye_dist * 0.98, mouth_right[1] + mid_height * 0.78]),
+                np.array([mouth_mid[0], mouth_mid[1] + mid_height * 1.24]),
             ],
             dtype=np.float32,
         )
@@ -98,7 +98,7 @@ class FaceBlender:
 
         # Distance transform for smooth O(1) feathering in crop space
         dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-        fade_width = max(1, int(size * 0.15))
+        fade_width = max(1, int(size * 0.12))
         alpha = np.clip(dist / fade_width, 0.0, 1.0)
         mask_f32 = alpha * alpha * (3.0 - 2.0 * alpha)
 
