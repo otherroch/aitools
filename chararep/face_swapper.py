@@ -767,8 +767,8 @@ class FaceSwapper:
 
         def _draw_brow_core(center: np.ndarray, angle: float) -> None:
             if live_landmarks is not None:
-                x_radius = eye_dist * 0.38
-                brow_top = center[1] - mid_height * 0.84
+                x_radius = eye_dist * 0.42
+                brow_top = center[1] - mid_height * 0.92
                 brow_bottom = center[1] - mid_height * 0.02
                 brow_points = live_landmarks[
                     (np.abs(live_landmarks[:, 0] - center[0]) <= x_radius)
@@ -792,7 +792,7 @@ class FaceSwapper:
                         if len(sampled) >= 4:
                             brow_curve = np.asarray(sampled, dtype=np.float32)
                         else:
-                            y_cut = np.percentile(brow_points[:, 1], 40)
+                            y_cut = np.percentile(brow_points[:, 1], 32)
                             upper_points = brow_points[brow_points[:, 1] <= y_cut]
                             brow_curve = (
                                 upper_points
@@ -805,11 +805,11 @@ class FaceSwapper:
                     brow_layer = np.zeros_like(brow_support)
 
                     upper = brow_curve.copy()
-                    upper[:, 1] -= max(3.0, mid_height * 0.20)
+                    upper[:, 1] -= max(4.0, mid_height * 0.26)
                     lower = brow_curve.copy()
-                    lower[:, 1] += max(1.0, mid_height * 0.03)
+                    lower[:, 1] += max(1.0, mid_height * 0.02)
 
-                    end_pad = max(2.0, eye_dist * 0.07)
+                    end_pad = max(2.0, eye_dist * 0.08)
                     upper[0, 0] -= end_pad
                     upper[-1, 0] += end_pad
                     lower[0, 0] -= end_pad * 0.7
@@ -825,7 +825,7 @@ class FaceSwapper:
                     )
 
                     pad_x = max(1, int(round(eye_dist * 0.06)))
-                    pad_y = max(1, int(round(mid_height * 0.03)))
+                    pad_y = max(1, int(round(mid_height * 0.025)))
                     kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
                     brow_layer = cv2.dilate(
                         (brow_layer * 255).astype(np.uint8),
@@ -835,7 +835,7 @@ class FaceSwapper:
                     np.maximum(brow_support, brow_layer, out=brow_support)
                     return
 
-            brow_center = center + np.array([0.0, -mid_height * 0.62], dtype=np.float32)
+            brow_center = center + np.array([0.0, -mid_height * 0.68], dtype=np.float32)
             cv2.ellipse(
                 brow_support,
                 tuple(np.round(brow_center).astype(int)),
@@ -884,11 +884,11 @@ class FaceSwapper:
         top_ramp = top_ramp * top_ramp * (3.0 - 2.0 * top_ramp)
         top_weight = 0.45 + 0.55 * top_ramp
         mask *= top_weight
-        brow_weight = 0.80 + 0.20 * top_ramp
-        brow_center = eye_mid[1] - mid_height * 0.52
-        brow_sigma = max(4.0, mid_height * 0.16)
+        brow_weight = 0.90 + 0.10 * top_ramp
+        brow_center = eye_mid[1] - mid_height * 0.60
+        brow_sigma = max(4.0, mid_height * 0.18)
         brow_peak = np.exp(-0.5 * ((y_grid - brow_center) / brow_sigma) ** 2)
-        brow_support *= np.clip(brow_weight + 0.14 * brow_peak, 0.0, 1.0)
+        brow_support *= np.clip(brow_weight + 0.10 * brow_peak, 0.0, 1.0)
         mask = np.maximum(mask, brow_support)
         return np.clip(mask, 0.0, 1.0)
 

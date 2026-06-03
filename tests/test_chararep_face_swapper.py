@@ -514,7 +514,7 @@ class TestPasteBack:
         eye_dist = np.linalg.norm(right_eye - left_eye)
         mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
 
-        brow_y = int(round(float(left_eye[1] - mid_height * 0.56)))
+        brow_y = int(round(float(left_eye[1] - mid_height * 0.68)))
         brow_x = int(round(float(left_eye[0])))
         plain_roi = plain_mask[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15]
         live_roi = mask[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15]
@@ -615,7 +615,7 @@ class TestPasteBack:
         eye_dist = np.linalg.norm(right_eye - left_eye)
         mid_height = max(float(mouth_mid[1] - eye_mid[1]), float(eye_dist) * 0.85)
 
-        brow_y = int(round(float(left_eye[1] - mid_height * 0.56)))
+        brow_y = int(round(float(left_eye[1] - mid_height * 0.68)))
         brow_x = int(round(float(left_eye[0])))
         plain_roi = plain[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15, 0]
         live_roi = result[brow_y - 3 : brow_y + 4, brow_x - 14 : brow_x + 15, 0]
