@@ -9,6 +9,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -27,6 +28,23 @@ def _positive_int(value: str) -> int:
             f"--batch must be a positive integer (>= 1), got {n}"
         )
     return n
+
+
+def _unit_interval(value: str) -> float:
+    """Argparse type for floats in the closed interval [0, 1]."""
+    try:
+        x = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {value!r}")
+    if math.isnan(x):
+        raise argparse.ArgumentTypeError(
+            f"expected a value in [0, 1], got {x}"
+        )
+    if x < 0.0 or x > 1.0:
+        raise argparse.ArgumentTypeError(
+            f"expected a value in [0, 1], got {x}"
+        )
+    return x
 
 
 def _parse_args() -> argparse.Namespace:
@@ -235,9 +253,9 @@ Config JSON format
     p.add_argument(
         "--blend-mode",
         choices=["seamless", "alpha"],
-        default="alpha",
+        default=PipelineConfig.blend_mode,
         help=(
-            "Blending strategy (default: alpha). "
+            f"Blending strategy (default: {PipelineConfig.blend_mode}). "
             "'alpha' uses a soft mask and is faster and more predictable, "
             "often good when colors/lighting already match reasonably well. "
             "'seamless' uses Poisson cloning to better match lighting and color "
@@ -248,21 +266,33 @@ Config JSON format
     p.add_argument(
         "--blender-blur",
         type=int,
-        default=15,
+        default=PipelineConfig.mask_blur_kernel,
         dest="mask_blur_kernel",
         help=(
             "Gaussian blur kernel size for softening mask edges before blending. "
             "Higher values produce smoother transitions but may lose detail; "
             "lower values keep sharper edges but may leave visible seams. "
-            "0 disables blurring (default: 15)."
+            f"0 disables blurring (default: {PipelineConfig.mask_blur_kernel})."
         ),
     )
     p.add_argument(
         "--blender-erode",
         type=int,
-        default=2,
+        default=PipelineConfig.mask_erode_pixels,
         dest="mask_erode_pixels",
-        help="Pixels to erode from mask to avoid boundary artifacts (default: 2).",
+        help=(
+            "Pixels to erode from mask to avoid boundary artifacts "
+            f"(default: {PipelineConfig.mask_erode_pixels})."
+        ),
+    )
+    p.add_argument(
+        "--temporal-smooth-alpha",
+        type=_unit_interval,
+        default=0.0,
+        help=(
+            "Previous-frame weight for overlap-only temporal smoothing. "
+            "0 disables it; small values like 0.1-0.2 can reduce residual shimmer."
+        ),
     )
 
     # ── Logging ──────────────────────────────────────────────────────────
@@ -319,6 +349,17 @@ def _scan_image_dir(folder: str, kind: str) -> list[str]:
 def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
     """Construct a PipelineConfig from CLI arguments."""
 
+    temporal_smooth_alpha = getattr(
+        args,
+        "temporal_smooth_alpha",
+        PipelineConfig.temporal_smooth_alpha,
+    )
+    if (
+        not isinstance(temporal_smooth_alpha, (int, float))
+        or isinstance(temporal_smooth_alpha, bool)
+    ):
+        temporal_smooth_alpha = PipelineConfig.temporal_smooth_alpha
+
     characters: list[CharacterMapping] = []
     for find_folder, replace_folder in args.characters:
         label = Path(find_folder).name
@@ -354,6 +395,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         blend_mode=args.blend_mode,
         mask_blur_kernel=args.mask_blur_kernel,
         mask_erode_pixels=args.mask_erode_pixels,
+        temporal_smooth_alpha=float(temporal_smooth_alpha),
         log_level="DEBUG" if args.verbose else "INFO",
         log_file=args.log_file,
         enable_timers=args.timers,

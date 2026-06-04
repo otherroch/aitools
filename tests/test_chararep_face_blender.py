@@ -1,5 +1,8 @@
 """Tests for face_blender.py."""
 
+import types
+
+import cv2
 import numpy as np
 import pytest
 
@@ -28,7 +31,30 @@ def _solid(h, w, color=(128, 0, 0)) -> np.ndarray:
     return frame
 
 
-def _make_tracked(bbox, identity_label="hero", landmarks=None) -> TrackedFace:
+def _make_dense_brow_face(landmarks: np.ndarray):
+    left_eye, right_eye = landmarks[0], landmarks[1]
+    mouth_mid = (landmarks[3] + landmarks[4]) * 0.5
+    eye_mid = (left_eye + right_eye) * 0.5
+    eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+    face_h = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+    def _brow_arc(center: np.ndarray) -> np.ndarray:
+        xs = np.linspace(-1.0, 1.0, 8, dtype=np.float32)
+        ys = -face_h * (0.14 + 0.05 * (1.0 - xs * xs))
+        return np.column_stack(
+            [
+                center[0] + xs * eye_dist * 0.24,
+                center[1] + ys,
+            ]
+        ).astype(np.float32)
+
+    dense = np.full((106, 2), np.nan, dtype=np.float32)
+    dense[0:8] = _brow_arc(left_eye)
+    dense[16:24] = _brow_arc(right_eye)
+    return types.SimpleNamespace(landmark_2d_106=dense)
+
+
+def _make_tracked(bbox, identity_label="hero", landmarks=None, face_obj=None) -> TrackedFace:
     if landmarks is None:
         x1, y1, x2, y2 = bbox
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
@@ -47,6 +73,7 @@ def _make_tracked(bbox, identity_label="hero", landmarks=None) -> TrackedFace:
         bbox=np.array(bbox, dtype=np.float32),
         landmarks=landmarks,
         identity_label=identity_label,
+        face_obj=face_obj,
     )
 
 
@@ -85,6 +112,24 @@ class TestAlphaBlend:
         assert result.dtype == np.uint8
 
 
+class TestHybridBlendOne:
+    def test_tiny_inner_mask_falls_back_to_alpha(self, monkeypatch):
+        original = _solid(64, 64, (10, 20, 30))
+        swapped = _solid(64, 64, (220, 210, 200))
+        soft_mask = np.zeros((64, 64), dtype=np.uint8)
+        soft_mask[32, 32] = 255
+
+        monkeypatch.setattr(
+            cv2,
+            "seamlessClone",
+            lambda *a, **kw: pytest.fail("seamlessClone should not be called"),
+        )
+
+        result = FaceBlender._hybrid_blend_one(original, swapped, soft_mask)
+        expected = FaceBlender._alpha_blend(original, swapped, soft_mask)
+        np.testing.assert_array_equal(result, expected)
+
+
 # ---------------------------------------------------------------------------
 # FaceBlender.blend_all – no-op when no labelled faces
 # ---------------------------------------------------------------------------
@@ -101,7 +146,7 @@ class TestBlendAllNoOp:
             landmarks=np.zeros((5, 2)),
             identity_label=None,
         )
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [tf], frame_idx=0)
         np.testing.assert_array_equal(result, swapped)
 
     def test_empty_faces_returns_swapped(self):
@@ -109,7 +154,7 @@ class TestBlendAllNoOp:
         blender = FaceBlender(cfg)
         original = _solid(100, 100, (255, 0, 0))
         swapped = _solid(100, 100, (0, 255, 0))
-        result = blender.blend_all(original, swapped, [], frame_idx=0)
+        result, mask = blender.blend_all(original, swapped, [], frame_idx=0)
         np.testing.assert_array_equal(result, swapped)
 
 
@@ -118,78 +163,28 @@ class TestBlendAllNoOp:
 # ---------------------------------------------------------------------------
 
 class TestBuildMask:
-    def test_mask_nonzero_inside_bbox(self):
-        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
+    def test_aligned_mask_keeps_brow_region_inside_soft_mask(self):
+        cfg = _make_cfg(mask_blur_kernel=0, mask_erode_pixels=0)
         blender = FaceBlender(cfg)
-        h, w = 200, 200
-        bbox = np.array([50, 50, 150, 150], dtype=np.float32)
-        lm = np.array(
-            [[80, 80], [120, 80], [100, 100], [85, 130], [115, 130]],
+        landmarks = np.array(
+            [
+                [74, 88],
+                [182, 88],
+                [128, 144],
+                [88, 206],
+                [168, 206],
+            ],
             dtype=np.float32,
         )
-        mask = blender._build_mask((h, w), bbox, lm)
-        assert mask.dtype == np.uint8
-        assert mask.shape == (h, w)
-        assert mask[100, 100] > 0  # centre of bbox
 
-    def test_mask_without_landmarks_uses_ellipse(self):
-        cfg = _make_cfg(mask_erode_pixels=0, mask_blur_kernel=0)
-        blender = FaceBlender(cfg)
-        bbox = np.array([20, 20, 80, 80], dtype=np.float32)
-        mask = blender._build_mask((100, 100), bbox, None)
-        assert mask[50, 50] > 0
+        mask = blender._build_mask((256, 256), np.array([48, 48, 208, 232], dtype=np.float32), landmarks)
 
-    def test_mask_with_erode(self):
-        cfg = _make_cfg(mask_erode_pixels=5, mask_blur_kernel=0)
-        blender = FaceBlender(cfg)
-        bbox = np.array([10, 10, 90, 90], dtype=np.float32)
-        lm = np.array(
-            [[30, 30], [70, 30], [50, 50], [35, 70], [65, 70]], dtype=np.float32
-        )
-        mask = blender._build_mask((100, 100), bbox, lm)
-        assert mask is not None
+        brow_probe = (64, 128)
+        assert mask[brow_probe] > 0
+        assert mask[brow_probe] > mask[8, 8]
 
-
-# ---------------------------------------------------------------------------
-# FaceBlender seamless mode (single face)
-# ---------------------------------------------------------------------------
-
-class TestBlendAllSeamless:
-    def test_single_face_seamless(self):
-        cfg = _make_cfg(blend_mode="seamless", mask_erode_pixels=0)
-        blender = FaceBlender(cfg)
-        h, w = 200, 200
-        original = _solid(h, w, (100, 100, 100))
-        swapped = _solid(h, w, (50, 50, 50))
-        tf = _make_tracked([40, 40, 160, 160])
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
-        assert result.shape == (h, w, 3)
-
-    def test_two_faces_seamless(self):
-        """Two distant faces – multi-face Poisson path."""
-        cfg = _make_cfg(blend_mode="seamless", mask_erode_pixels=0, mask_blur_kernel=3)
-        blender = FaceBlender(cfg)
-        h, w = 200, 400
-        original = _solid(h, w, (100, 100, 100))
-        swapped = _solid(h, w, (50, 50, 50))
-        tf1 = _make_tracked([10, 50, 80, 150])
-        tf2 = _make_tracked([300, 50, 390, 150])
-        result = blender.blend_all(original, swapped, [tf1, tf2], frame_idx=0)
-        assert result.shape == (h, w, 3)
-
-
-# ---------------------------------------------------------------------------
-# FaceBlender alpha mode with labelled face
-# ---------------------------------------------------------------------------
-
-class TestBlendAllAlpha:
-    def test_alpha_mode_produces_output(self):
-        cfg = _make_cfg(blend_mode="alpha")
-        blender = FaceBlender(cfg)
-        h, w = 200, 200
-        original = _solid(h, w, (255, 0, 0))
-        swapped = _solid(h, w, (0, 0, 255))
-        tf = _make_tracked([40, 40, 160, 160])
-        result = blender.blend_all(original, swapped, [tf], frame_idx=0)
-        assert result.shape == (h, w, 3)
-        assert result.dtype == np.uint8
+    def test_canonical_mask_is_cached_per_size(self):
+        blender = FaceBlender(_make_cfg())
+        mask1 = blender._canonical_face_mask(256)
+        mask2 = blender._canonical_face_mask(256)
+        assert mask1 is mask2

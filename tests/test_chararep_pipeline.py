@@ -95,6 +95,126 @@ class TestPrepareFrame:
         assert result[3][0] == ("face_obj_sentinel", "ref_face")
         assert stats["faces_identified"] == 1
 
+    def test_stale_tracks_are_skipped_for_swapping(self):
+        pipe = _stub_pipeline()
+
+        stale = MagicMock()
+        stale.age_since_seen = 2
+        stale.identity_label = "hero"
+        stale.track_id = 7
+        stale.face_obj = "stale_face"
+        stale.landmarks = np.zeros((5, 2), dtype=np.float32)
+        stale.bbox = np.array([0, 0, 20, 20], dtype=np.float32)
+
+        active = MagicMock()
+        active.age_since_seen = 0
+        active.identity_label = "hero"
+        active.track_id = 1
+        active.face_obj = "active_face"
+        active.landmarks = np.array(
+            [[10, 10], [20, 10], [15, 15], [11, 20], [19, 20]],
+            dtype=np.float32,
+        )
+        active.bbox = np.array([0, 0, 30, 30], dtype=np.float32)
+
+        target = MagicMock()
+        target.label = "hero"
+        target.reference_faces = ["ref_face"]
+
+        pipe._detector.detect.return_value = [stale, active]
+        pipe._recognizer.get_target.return_value = target
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        result = pipe._prepare_frame(frame, 0, stats)
+        assert result[2] == [active]
+        assert result[3] == [("active_face", "ref_face")]
+        pipe._recognizer.identify_faces.assert_called_once_with([active])
+
+    def test_landmarks_are_stabilized_per_track(self):
+        pipe = _stub_pipeline()
+
+        base_kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        jumped_kps = base_kps + np.array([18, 0], dtype=np.float32)
+
+        first_face = types.SimpleNamespace(
+            age_since_seen=0,
+            identity_label=None,
+            track_id=3,
+            bbox=np.array([20, 30, 100, 120], dtype=np.float32),
+            landmarks=base_kps.copy(),
+            face_obj=types.SimpleNamespace(kps=base_kps.copy()),
+        )
+        second_face = types.SimpleNamespace(
+            age_since_seen=0,
+            identity_label=None,
+            track_id=3,
+            bbox=np.array([20, 30, 100, 120], dtype=np.float32),
+            landmarks=jumped_kps.copy(),
+            face_obj=types.SimpleNamespace(kps=jumped_kps.copy()),
+        )
+
+        pipe._detector.detect.side_effect = [[first_face], [second_face]]
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        pipe._prepare_frame(frame, 0, stats)
+        result = pipe._prepare_frame(frame, 1, stats)
+
+        smoothed = result[2][0].landmarks
+        assert np.all(smoothed[:, 0] > base_kps[:, 0])
+        assert np.all(smoothed[:, 0] < jumped_kps[:, 0])
+        np.testing.assert_allclose(result[2][0].face_obj.kps, smoothed)
+
+    def test_coherent_landmark_scale_shrink_is_strongly_damped(self):
+        pipe = _stub_pipeline()
+
+        base_kps = np.array(
+            [[40, 50], [74, 50], [57, 70], [42, 90], [72, 90]],
+            dtype=np.float32,
+        )
+        anchor_center = ((base_kps[0] + base_kps[1]) * 0.5 + base_kps[2]) * 0.5
+        shrunk_kps = anchor_center + (base_kps - anchor_center) * 0.90
+
+        first_face = types.SimpleNamespace(
+            age_since_seen=0,
+            identity_label=None,
+            track_id=4,
+            bbox=np.array([20, 30, 100, 120], dtype=np.float32),
+            landmarks=base_kps.copy(),
+            face_obj=types.SimpleNamespace(kps=base_kps.copy()),
+        )
+        second_face = types.SimpleNamespace(
+            age_since_seen=0,
+            identity_label=None,
+            track_id=4,
+            bbox=np.array([20, 30, 100, 120], dtype=np.float32),
+            landmarks=shrunk_kps.copy(),
+            face_obj=types.SimpleNamespace(kps=shrunk_kps.copy()),
+        )
+
+        pipe._detector.detect.side_effect = [[first_face], [second_face]]
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        pipe._prepare_frame(frame, 0, stats)
+        result = pipe._prepare_frame(frame, 1, stats)
+
+        smoothed = result[2][0].landmarks
+        base_eye_dist = np.linalg.norm(base_kps[1] - base_kps[0])
+        shrunk_eye_dist = np.linalg.norm(shrunk_kps[1] - shrunk_kps[0])
+        smoothed_eye_dist = np.linalg.norm(smoothed[1] - smoothed[0])
+
+        assert shrunk_eye_dist < base_eye_dist * 0.91
+        assert smoothed_eye_dist > base_eye_dist * 0.97
+        assert smoothed_eye_dist < base_eye_dist * 1.01
+
     def test_timers_updated(self):
         pipe = _stub_pipeline(enable_timers=True)
         pipe._detector.detect.return_value = []
@@ -120,7 +240,7 @@ class TestFinishFrame:
     def test_no_swap_pairs_returns_original(self):
         pipe = _stub_pipeline()
         frame = np.ones((4, 4, 3), dtype=np.uint8) * 42
-        result, local = pipe._finish_frame(frame, 0, [], [])
+        result, local, mask = pipe._finish_frame(frame, 0, [], [])
         assert np.array_equal(result, frame)
         assert local["frames_swapped"] == 0
 
@@ -129,15 +249,13 @@ class TestFinishFrame:
         pipe._swapper.swap_multiple.return_value = np.zeros(
             (4, 4, 3), dtype=np.uint8
         )
-        pipe._blender.blend_all.return_value = np.zeros(
-            (4, 4, 3), dtype=np.uint8
-        )
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
         tracked = [MagicMock()]
         pairs = [("src", "tgt")]
 
-        result, local = pipe._finish_frame(frame, 0, tracked, pairs)
+        result, local, mask = pipe._finish_frame(frame, 0, tracked, pairs)
         assert local["frames_swapped"] == 1
         assert local["faces_swapped"] == 1
         pipe._swapper.swap_multiple.assert_called_once()
@@ -152,12 +270,10 @@ class TestFinishFrame:
         pipe._swapper.swap_multiple.return_value = np.zeros(
             (4, 4, 3), dtype=np.uint8
         )
-        pipe._blender.blend_all.return_value = np.zeros(
-            (4, 4, 3), dtype=np.uint8
-        )
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
-        result, local = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
+        result, local, mask = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
         pipe._enhancer.enhance_faces.assert_called_once()
         assert local["enhance"] >= 0.0
 
@@ -166,12 +282,10 @@ class TestFinishFrame:
         pipe._swapper.swap_multiple.return_value = np.zeros(
             (4, 4, 3), dtype=np.uint8
         )
-        pipe._blender.blend_all.return_value = np.zeros(
-            (4, 4, 3), dtype=np.uint8
-        )
+        pipe._blender.blend_all.return_value = (np.zeros((4, 4, 3), dtype=np.uint8), np.zeros((4, 4), dtype=np.uint8))
 
         frame = np.ones((4, 4, 3), dtype=np.uint8)
-        _, local = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
+        _, local, mask = pipe._finish_frame(frame, 0, [MagicMock()], [("s", "t")])
         assert local["swap"] >= 0.0
         assert local["blend"] >= 0.0
 
@@ -236,6 +350,44 @@ class TestProcessFrame:
         assert stats["frames_swapped"] == 0
 
 
+class TestTemporalFaceBlend:
+    def test_no_overlap_skips_blending(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.temporal_smooth_alpha = 0.5
+
+        first = np.zeros((4, 4, 3), dtype=np.uint8)
+        first[:2, :2] = 100
+        first_mask = np.zeros((4, 4), dtype=np.uint8)
+        first_mask[:2, :2] = 255
+        pipe._apply_temporal_face_blend(first, first_mask)
+
+        second = np.zeros((4, 4, 3), dtype=np.uint8)
+        second[2:, 2:] = 200
+        second_mask = np.zeros((4, 4), dtype=np.uint8)
+        second_mask[2:, 2:] = 255
+
+        result = pipe._apply_temporal_face_blend(second, second_mask)
+        np.testing.assert_array_equal(result, second)
+
+    def test_overlap_blends_only_shared_face_region(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.temporal_smooth_alpha = 0.5
+
+        mask = np.zeros((4, 4), dtype=np.uint8)
+        mask[:2, :2] = 255
+
+        first = np.zeros((4, 4, 3), dtype=np.uint8)
+        first[:2, :2] = 100
+        pipe._apply_temporal_face_blend(first, mask)
+
+        second = np.zeros((4, 4, 3), dtype=np.uint8)
+        second[:2, :2] = 200
+        result = pipe._apply_temporal_face_blend(second, mask)
+
+        assert result[0, 0, 0] == 150
+        assert result[3, 3, 0] == 0
+
+
 # ---------------------------------------------------------------------------
 # _drain_one
 # ---------------------------------------------------------------------------
@@ -255,8 +407,8 @@ class TestDrainOne:
         }
 
         future = Future()
-        future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local))
-        pending = deque([future])
+        future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local, np.zeros((2, 2), dtype=np.uint8)))
+        pending = deque([(np.zeros((2, 2, 3), dtype=np.uint8), future)])
 
         count = pipe._drain_one(pending, writer, stats, 0, 0.0, 100)
         assert count == 1
@@ -296,6 +448,7 @@ class TestRunParallel:
                     "blend": 0.0,
                     "enhance": 0.0,
                 },
+                np.zeros((4, 4), dtype=np.uint8)
             )
         )
 
@@ -429,6 +582,46 @@ class TestBatchCliArg:
         with pytest.raises(SystemExit):
             _parse_args()
 
+    def test_default_temporal_smooth_alpha(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["chararep", "-i", "in.mp4", "-o", "out.mp4"])
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.temporal_smooth_alpha == 0.0
+
+    def test_custom_temporal_smooth_alpha(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "chararep",
+                "-i",
+                "in.mp4",
+                "-o",
+                "out.mp4",
+                "--temporal-smooth-alpha",
+                "0.2",
+            ],
+        )
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.temporal_smooth_alpha == pytest.approx(0.2)
+
+    def test_temporal_smooth_alpha_out_of_range_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "chararep",
+                "-i",
+                "in.mp4",
+                "-o",
+                "out.mp4",
+                "--temporal-smooth-alpha",
+                "1.5",
+            ],
+        )
+        from chararep.main import _parse_args
+        with pytest.raises(SystemExit):
+            _parse_args()
+
 
 # ---------------------------------------------------------------------------
 # TrackedFace snapshot in parallel mode
@@ -465,7 +658,7 @@ class TestTrackedFaceSnapshot:
                 "swap": 0.0,
                 "blend": 0.0,
                 "enhance": 0.0,
-            }
+            }, np.zeros((4, 4), dtype=np.uint8)
 
         pipe._finish_frame = MagicMock(side_effect=capture_finish)
 

@@ -205,6 +205,7 @@ class FaceSwapper:
         self._cfg = cfg
         self._model_path = self._resolve_model_path(cfg.swap_model_path)
         self._model_type = _detect_model_type(self._model_path)
+        self._crop_mask_cache: dict[tuple[int, str], np.ndarray] = {}
 
         providers = get_onnx_providers(cfg.device_id)
 
@@ -338,12 +339,21 @@ class FaceSwapper:
     def _warp_face(
         self, frame: np.ndarray, kps: np.ndarray, size: int,
         template_name: str = "arcface_112_v1",
+        use_landmark_filter: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Align and crop a face to *size*×*size* using 5-point landmarks.
 
         The alignment template is selected by *template_name*, which must be
         a key in :data:`_WARP_TEMPLATES`.  The default ``"arcface_112_v1"``
         preserves the previous behaviour for simswap models.
+
+        Args:
+            frame: Source image to crop.
+            kps: 5×2 array of detected facial landmarks.
+            size: Output crop size.
+            template_name: Template key from :data:`_WARP_TEMPLATES`.
+            use_landmark_filter: If True, normalize landmark point ordering
+                for stable affine estimation.
 
         Returns the cropped face and the 2×3 affine matrix used, so that the
         result can be pasted back with :meth:`_paste_back`.
@@ -359,15 +369,64 @@ class FaceSwapper:
             )
             norm_template = _WARP_TEMPLATES["arcface_112_v1"]
         template = norm_template * size
-        M, _ = cv2.estimateAffinePartial2D(kps, template, method=cv2.RANSAC)
+
+        # Normalize the landmark layout before estimating the affine transform.
+        if use_landmark_filter and kps is not None:
+            kps = self._filter_landmarks(kps)
+
+        kps = np.array(kps, dtype=np.float32, copy=False)
+        if kps.shape == (2, 5):
+            kps = kps.T
+        if kps.shape != (5, 2) or not np.isfinite(kps).all():
+            raise RuntimeError(
+                "Face alignment failed: invalid landmark geometry "
+                f"(expected (5, 2), got {kps.shape})."
+            )
+
+        M = self._estimate_similarity_transform(kps, template)
         if M is None:
             raise RuntimeError(
-                "Face alignment failed: could not estimate affine transform "
-                "from the detected landmarks. The face may be too small, "
+                "Face alignment failed: could not estimate a stable similarity "
+                "transform from the detected landmarks. The face may be too small, "
                 "occluded, or at an extreme angle."
             )
         crop = cv2.warpAffine(frame, M, (size, size), flags=cv2.INTER_LINEAR)
         return crop, M
+
+    @staticmethod
+    def _estimate_similarity_transform(
+        src: np.ndarray,
+        dst: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """Return a stable 2D similarity transform mapping *src* to *dst*."""
+        src_pts = np.asarray(src, dtype=np.float32)
+        dst_pts = np.asarray(dst, dtype=np.float32)
+        if src_pts.shape != (5, 2) or dst_pts.shape != (5, 2):
+            return None
+        M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts, method=cv2.LMEDS)
+        if M is None or not np.isfinite(M).all():
+            return None
+        return M.astype(np.float32)
+
+    def _filter_landmarks(
+        self, kps: np.ndarray, sigma: float = 3.5,
+        min_valid_points: int = 4,
+    ) -> np.ndarray:
+        """Normalize landmark layout and preserve semantic point ordering."""
+        _ = sigma, min_valid_points
+
+        if kps is None:
+            return np.zeros((5, 2), dtype=np.float32)
+
+        pts = np.array(kps, dtype=np.float32, copy=True)
+        if pts.shape == (2, 5):
+            pts = pts.T
+        if pts.shape != (5, 2) or not np.isfinite(pts).all():
+            return pts
+
+        return pts
+
+    # ── Model loading ────────────────────────────────────────────────────────
 
     def _prepare_crop_frame(self, crop: np.ndarray) -> np.ndarray:
         """Convert a BGR crop to a normalised ONNX input tensor ``[1,C,H,W]``."""
@@ -538,6 +597,64 @@ class FaceSwapper:
         x = x.transpose(2, 0, 1)                          # HWC → CHW
         return np.expand_dims(x, 0)
 
+    def _canonical_paste_mask(
+        self,
+        size: int,
+        template_name: str,
+    ) -> np.ndarray:
+        """Return a cached crop-space soft mask for paste-back blending."""
+        cache_key = (size, template_name)
+        cached = self._crop_mask_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        template = _WARP_TEMPLATES.get(template_name)
+        if template is None:
+            logger.warning(
+                "_canonical_paste_mask: unknown template '%s' — falling back to 'arcface_112_v1'.",
+                template_name,
+            )
+            template = _WARP_TEMPLATES["arcface_112_v1"]
+        template = template * float(size)
+
+        left_eye, right_eye, _, mouth_left, mouth_right = template
+        eye_mid = (left_eye + right_eye) * 0.5
+        mouth_mid = (mouth_left + mouth_right) * 0.5
+        eye_dist = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        mid_height = max(float(mouth_mid[1] - eye_mid[1]), eye_dist * 0.9)
+
+        hull_pts = np.vstack(
+            [
+                template,
+                np.array(
+                    [
+                        [eye_mid[0], eye_mid[1] - mid_height * 1.36],
+                        [left_eye[0] - eye_dist * 1.02, left_eye[1] - mid_height * 0.74],
+                        [right_eye[0] + eye_dist * 1.02, right_eye[1] - mid_height * 0.74],
+                        [left_eye[0] - eye_dist * 1.16, eye_mid[1] + mid_height * 0.02],
+                        [right_eye[0] + eye_dist * 1.16, eye_mid[1] + mid_height * 0.02],
+                        [mouth_left[0] - eye_dist * 0.98, mouth_left[1] + mid_height * 0.76],
+                        [mouth_right[0] + eye_dist * 0.98, mouth_right[1] + mid_height * 0.76],
+                        [mouth_mid[0], mouth_mid[1] + mid_height * 1.22],
+                    ],
+                    dtype=np.float32,
+                ),
+            ]
+        )
+        hull_pts[:, 0] = np.clip(hull_pts[:, 0], 0.0, float(size - 1))
+        hull_pts[:, 1] = np.clip(hull_pts[:, 1], 0.0, float(size - 1))
+
+        mask = np.zeros((size, size), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, cv2.convexHull(hull_pts.astype(np.int32)), 1)
+
+        dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+        fade_width = max(1, int(size * 0.12))
+        alpha = np.clip(dist / fade_width, 0.0, 1.0)
+        mask_f32 = alpha * alpha * (3.0 - 2.0 * alpha)
+
+        self._crop_mask_cache[cache_key] = mask_f32
+        return mask_f32
+
     def _normalize_crop_frame(self, output: np.ndarray) -> np.ndarray:
         """Convert the model output tensor ``[C,H,W]`` to a BGR ``uint8`` image.
 
@@ -555,35 +672,32 @@ class FaceSwapper:
         return x.astype(np.uint8)
 
     def _paste_back(
-        self, frame: np.ndarray, crop: np.ndarray, affine_M: np.ndarray
+        self,
+        frame: np.ndarray,
+        crop: np.ndarray,
+        affine_M: np.ndarray,
+        template_name: str = "arcface_112_v1",
     ) -> np.ndarray:
-        """Composite *crop* back into *frame* using the inverse of *affine_M*.
-
-        A soft alpha mask derived from the valid region of the warped crop is
-        used so that the face_blender stage can later refine the seams.
-
-        Returns the original *frame* unchanged if the affine matrix is
-        degenerate (determinant near zero).
-        """
+        """Composite *crop* back into *frame* using the inverse of *affine_M*."""
         h, w = frame.shape[:2]
-        # Guard against a degenerate (singular) affine matrix
         det = affine_M[0, 0] * affine_M[1, 1] - affine_M[0, 1] * affine_M[1, 0]
         if abs(det) < 1e-6:
             logger.warning("_paste_back: degenerate affine matrix — skipping paste.")
             return frame
         M_inv = cv2.invertAffineTransform(affine_M)
         warped_back = cv2.warpAffine(
-            crop, M_inv, (w, h), flags=cv2.INTER_LINEAR
+            crop, M_inv, (w, h), flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
         )
-        # Build a soft mask covering the face region
-        crop_mask = np.ones(
-            (crop.shape[0], crop.shape[1]), dtype=np.float32
-        )
+
+        crop_mask = self._canonical_paste_mask(crop.shape[0], template_name)
+
         mask = cv2.warpAffine(
-            crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR
+            crop_mask, M_inv, (w, h), flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0.0
         )
-        mask = cv2.GaussianBlur(mask, (5, 5), 0)
         mask = np.clip(mask, 0, 1)[:, :, np.newaxis]
+
         result = (
             frame.astype(np.float32) * (1.0 - mask)
             + warped_back.astype(np.float32) * mask
@@ -841,8 +955,12 @@ class FaceSwapper:
             return frame
 
         # 2. Align and crop the target face from the frame
+        # Normalize landmark point ordering for stable affine estimation.
         try:
-            crop, affine_M = self._warp_face(frame, kps, size, template_name)
+            crop, affine_M = self._warp_face(
+                frame, kps, size, template_name,
+                use_landmark_filter=True,
+            )
         except RuntimeError as exc:
             logger.warning(
                 "%s alignment failed: %s — skipping this face.",
@@ -899,7 +1017,12 @@ class FaceSwapper:
 
         # 5. Post-process and paste back
         result_crop = self._normalize_crop_frame(outputs[0][0])
-        return self._paste_back(frame, result_crop, affine_M)
+        return self._paste_back(
+            frame,
+            result_crop,
+            affine_M,
+            template_name=template_name,
+        )
 
     # ── Public interface ─────────────────────────────────────────────────────
 

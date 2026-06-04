@@ -47,6 +47,10 @@ class TestParseArgs:
         assert args.timers is False
         assert args.dump_config is False
 
+    def test_temporal_smooth_alpha_nan_rejected(self):
+        with pytest.raises(SystemExit):
+            self._parse(["--temporal-smooth-alpha", "nan"])
+
     def test_input_output(self):
         args = self._parse(["-i", "in.mp4", "-o", "out.mp4"])
         assert args.input_video == "in.mp4"

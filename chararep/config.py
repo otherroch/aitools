@@ -61,9 +61,14 @@ class PipelineConfig:
     copy_audio: bool = True  # mux original audio into output
 
     # ── Blending ─────────────────────────────────────────────────────────
-    blend_mode: str = "alpha"  # "seamless" (Poisson) or "alpha"
-    mask_blur_kernel: int = 15  # Gaussian blur for mask edges
-    mask_erode_pixels: int = 2  # erode mask to avoid boundary artifacts
+    blend_mode: str = "alpha"  # "seamless" (hybrid Poisson+alpha) or "alpha"
+    mask_blur_kernel: int = 15  # Gaussian blur kernel size for softening mask edges
+    mask_erode_pixels: int = 2  # erosion pixels to avoid boundary artifacts
+
+    # ── Temporal smoothing ────────────────────────────────────────────────
+    # Previous-frame weight for overlap-only temporal smoothing.
+    # 0.0 disables it; small values such as 0.1-0.2 can damp residual shimmer.
+    temporal_smooth_alpha: float = 0.0
 
     # ── Logging ──────────────────────────────────────────────────────────
     log_level: str = "INFO"
