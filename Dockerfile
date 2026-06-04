@@ -52,7 +52,7 @@ RUN if [[ "$TARGETARCH" = "amd64" ]]; then \
 COPY scripts /app/scripts
 RUN python scripts/install_basicsr.py
 
-RUN pip install --group base --group youtube --group vl --group chararep
+RUN pip install --group base --group youtube --group vl --group chararep --group vllm
 
 # we have to do this in case the CPU version was installed
 # make sure to ignore the unintall in case onnxruntime is not installed
