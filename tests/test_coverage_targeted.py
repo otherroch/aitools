@@ -118,6 +118,8 @@ class TestVicropCli:
         args = types.SimpleNamespace(
             input=in_dir,
             output_dir=tmp_path / "out",
+            output_type="photo",
+            segment_length=30.0,
             every_n=10,
             margin_ratio=0.5,
             crop_size=256,
@@ -158,6 +160,8 @@ class TestVicropCli:
         args = types.SimpleNamespace(
             input=video_file,
             output_dir=tmp_path / "out",
+            output_type="photo",
+            segment_length=30.0,
             every_n=10,
             margin_ratio=0.5,
             crop_size=256,
@@ -198,6 +202,8 @@ class TestVicropCli:
         args = types.SimpleNamespace(
             input=bad_file,
             output_dir=tmp_path / "out",
+            output_type="photo",
+            segment_length=30.0,
             every_n=30,
             margin_ratio=0.4,
             crop_size=1024,
