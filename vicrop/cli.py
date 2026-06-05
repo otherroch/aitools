@@ -37,7 +37,10 @@ logger = logging.getLogger("vicrop")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="vicrop",
-        description="Extract face-cropped PNG frames from video files.",
+        description=(
+            "Extract face-cropped PNG frames from video files, or generate\n"
+            "video segments containing a single person per segment."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
@@ -128,6 +131,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--output-type",
+        choices=["photo", "video"],
+        default="photo",
+        help=(
+            "Type of output to generate.  Use 'photo' for cropped face PNG\n"
+            "frames (default) or 'video' to generate video segments containing\n"
+            "only a single person (one face) per segment."
+        ),
+    )
+    parser.add_argument(
+        "--segment-length",
+        type=float,
+        default=30,
+        help=(
+            "Maximum length of an output video segment in seconds (only when\n"
+            "--output-type video).  Minimum value is 2 seconds.  Default: 30."
+        ),
+    )
+    parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
@@ -176,6 +198,8 @@ def main(argv: list[str] | None = None) -> None:
             classified_path=args.classified_path,
             classified_max=args.classified_max,
             backend=backend,
+            output_type=args.output_type,
+            segment_length=args.segment_length,
         )
         stats = {**video_stats, "videos_processed": 1}
     else:
@@ -193,16 +217,27 @@ def main(argv: list[str] | None = None) -> None:
             classified_path=args.classified_path,
             classified_max=args.classified_max,
             backend=backend,
+            output_type=args.output_type,
+            segment_length=args.segment_length,
         )
-    logger.info(
-        "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
-        "%d persons identified, %d reference photos selected",
-        stats["videos_processed"],
-        stats["frames_processed"],
-        stats["faces"],
-        stats["persons"],
-        stats["ref_photos"],
-    )
+    segs = stats.get("segments", 0)
+    if args.output_type == "video":
+        logger.info(
+            "vicrop: %d videos processed, %d segments written, %d persons identified",
+            stats["videos_processed"],
+            segs,
+            stats["persons"],
+        )
+    else:
+        logger.info(
+            "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
+            "%d persons identified, %d reference photos selected",
+            stats["videos_processed"],
+            stats["frames_processed"],
+            stats["faces"],
+            stats["persons"],
+            stats["ref_photos"],
+        )
 
 
 if __name__ == "__main__":

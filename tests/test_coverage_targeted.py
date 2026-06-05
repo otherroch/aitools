@@ -128,6 +128,8 @@ class TestVicropCli:
             ref_thresh=0.8,
             classified_path=None,
             classified_max=10,
+            output_type="photo",
+            segment_length=30,
         )
         called = {}
 
@@ -168,6 +170,8 @@ class TestVicropCli:
             ref_thresh=0.8,
             classified_path=None,
             classified_max=10,
+            output_type="photo",
+            segment_length=30,
         )
         called = {}
 
