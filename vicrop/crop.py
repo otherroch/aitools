@@ -51,6 +51,232 @@ def _default_backend():
     return backend_for_model("dlib")
 
 
+MIN_SEGMENT_LENGTH: float = 2.0  # seconds
+
+
+def _crop_video_segments(
+    video_path: Path,
+    output_dir: Path,
+    backend: FaceBackend,
+    segment_length: float = 30.0,
+    classify: bool = True,
+    tolerance: float = 0.6,
+    skip_existing: bool = True,
+) -> dict[str, int]:
+    """Generate video segments where each segment contains a single unique person.
+
+    The approach reads the input video frame-by-frame, detects faces, assigns each
+    face to a person identity (via clustering), and groups consecutive frames
+    belonging to the same person into segments.  When the dominant person changes
+    or the maximum *segment_length* (in seconds) is exceeded, the current segment
+    is written as an MP4 file and a new segment begins.
+
+    Args:
+        video_path:      Path to the input video file.
+        output_dir:      Directory where segment MP4s are saved.
+        backend:         FaceBackend instance for detection & encoding.
+        segment_length:  Maximum segment duration in seconds (default: 30).
+        classify:        When True, cluster faces to resolve identities.
+        tolerance:       Face-distance threshold for identity clustering.
+        skip_existing:   Skip if the output directory already contains .mp4 files.
+
+    Returns:
+        Summary dict with keys ``frames_processed``, ``faces``, ``persons``,
+        ``ref_photos``, ``segments``.
+    """
+    segment_length = max(segment_length, MIN_SEGMENT_LENGTH)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if skip_existing and any(output_dir.rglob("*.mp4")):
+        logger.info("Skipping (already processed): %s", video_path.name)
+        return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0, "segments": 0}
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        logger.error("Could not open video: %s", video_path)
+        return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0, "segments": 0}
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if fps <= 0:
+        logger.warning("Unable to determine FPS for %s; assuming 30 fps", video_path.name)
+        fps = 30.0
+
+    max_frames_per_segment = int(segment_length * fps)
+    logger.info(
+        "Video %s: %s fps, %d×%d, %d total frames → max %d frames/segment (%.1fs)",
+        video_path.name, fps, w, h, total_frames, max_frames_per_segment, segment_length,
+    )
+
+    # ---- Phase 1: collect per-frame face info (frame_idx → list of encodings) ----
+    logger.info("Phase 1: detecting faces in %s …", video_path.name)
+    frame_faces: list[list[np.ndarray]] = []  # frame_idx → [encoding, …]
+
+    frame_idx = 0
+    frames_processed = 0
+    total_faces = 0
+
+    while True:
+        ret, frame_bgr = cap.read()
+        if not ret:
+            break
+
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        face_locations = backend.detect_faces(frame_rgb)
+        face_encodings = backend.encode_faces(frame_rgb, face_locations)
+
+        if face_encodings:
+            frame_faces.append(face_encodings)
+            total_faces += len(face_encodings)
+        else:
+            frame_faces.append([])  # no faces
+
+        if frame_idx % every_n_opt == 0:
+            frames_processed += 1
+
+        if frame_idx % 1000 == 0:
+            pct = frame_idx * 100.0 / total_frames if total_frames else 0
+            logger.info("[%5.1f%%] frame %d  faces so far: %d", pct, frame_idx, total_faces)
+
+        frame_idx += 1
+
+    cap.release()
+    logger.info(
+        "Phase 1 done: %d frames read, %d faces total",
+        len(frame_faces), total_faces,
+    )
+
+    if not total_faces:
+        logger.info("No faces found in %s — no segments to write.", video_path.name)
+        return {"frames_processed": frames_processed, "faces": 0, "persons": 0, "ref_photos": 0, "segments": 0}
+
+    # ---- Phase 2: assign identities via greedy clustering ----
+    logger.info("Phase 2: assigning identities (tolerance=%.2f) …", tolerance)
+    # Build a flat list of (frame_idx, face_idx, encoding)
+    flat: list[tuple[int, int, np.ndarray]] = []
+    for fi, encs in enumerate(frame_faces):
+        for j, enc in enumerate(encs):
+            flat.append((fi, j, enc))
+
+    # Map: person_id → sorted list of (frame_idx, face_idx)
+    person_assignment: dict[int, list[tuple[int, int]]] = {}
+    # Also per-frame dominant person
+    frame_person: list[int | None] = [None] * len(frame_faces)
+    next_person_id = 0
+    person_enc_seeds: list[np.ndarray] = []  # person_id → seed encoding
+
+    for fi, j, enc in flat:
+        assigned = False
+        for pid in range(next_person_id):
+            if np.linalg.norm(enc - person_enc_seeds[pid]) <= tolerance:
+                person_assignment.setdefault(pid, []).append((fi, j))
+                if frame_person[fi] is None:
+                    frame_person[fi] = pid
+                assigned = True
+                break
+        if not assigned:
+            person_assignment[next_person_id] = [(fi, j)]
+            person_enc_seeds.append(enc)
+            frame_person[fi] = next_person_id
+            next_person_id += 1
+
+    # For frames with multiple faces, pick the one whose person appears most in that frame
+    for fi, encs in enumerate(frame_faces):
+        if len(encs) == 0:
+            continue
+        # count person occurrences in this frame
+        person_counts: dict[int, int] = {}
+        for j, enc in enumerate(encs):
+            pid = frame_person[fi] if frame_person[fi] is not None else _find_person(enc, person_enc_seeds, person_assignment, tolerance)
+            if pid is not None:
+                person_counts[pid] = person_counts.get(pid, 0) + 1
+        if person_counts:
+            frame_person[fi] = max(person_counts, key=person_counts.get)
+
+    num_persons = next_person_id
+    logger.info("Phase 2 done: %d unique persons identified", num_persons)
+
+    # ---- Phase 3: split into segments & write MP4 ----
+    logger.info("Phase 3: writing video segments …")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    segments_written = 0
+    segment_start = 0
+    segment_person = frame_person[0]
+    segment_frame_count = 0
+
+    def _flush_segment(end_exclusive: int) -> None:
+        nonlocal segments_written
+        seg_frames = end_exclusive - segment_start
+        if seg_frames < int(MIN_SEGMENT_LENGTH * fps):
+            return  # too short
+        seg_person_id = segment_person
+        seg_label = f"person_{seg_person_id:02d}" if seg_person_id is not None else "no_face"
+        out_name = f"{seg_label}_{segments_written:04d}.mp4"
+        out_path = output_dir / out_name
+        writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
+        cap2 = cv2.VideoCapture(str(video_path))
+        for _ in range(segment_start):
+            cap2.read()
+        for _ in range(seg_frames):
+            ret, frame = cap2.read()
+            if not ret:
+                break
+            writer.write(frame)
+        writer.release()
+        cap2.release()
+        segments_written += 1
+        logger.debug("Segment %s written (%d frames, %.1fs)", out_name, seg_frames, seg_frames / fps)
+
+    for fi in range(1, len(frame_person)):
+        segment_frame_count = fi - segment_start
+        if (
+            frame_person[fi] != segment_person
+            or segment_frame_count >= max_frames_per_segment
+        ):
+            _flush_segment(fi)
+            segment_start = fi
+            segment_person = frame_person[fi]
+            segment_frame_count = 0
+
+    # flush last segment
+    _flush_segment(len(frame_person))
+
+    logger.info("Phase 3 done: %d segments written to %s", segments_written, output_dir)
+
+    return {
+        "frames_processed": frames_processed,
+        "faces": total_faces,
+        "persons": num_persons,
+        "ref_photos": 0,
+        "segments": segments_written,
+    }
+
+
+def _find_person(
+    enc: np.ndarray,
+    seeds: list[np.ndarray],
+    assignment: dict[int, list[tuple[int, int]]],
+    tolerance: float,
+) -> int | None:
+    """Return the person id whose seed encoding is closest to *enc* within *tolerance*."""
+    best_pid = None
+    best_dist = tolerance + 1
+    for pid, seed in enumerate(seeds):
+        d = np.linalg.norm(enc - seed)
+        if d < best_dist:
+            best_dist = d
+            best_pid = pid
+    return best_pid
+
+
+# every_n for segment mode: read every frame (every_n=1)
+every_n_opt = 1
+
+
 def crop_video(
     video_path: Path,
     output_dir: Path,
@@ -64,6 +290,8 @@ def crop_video(
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
+    output_type: str = "photo",
+    segment_length: float = 30.0,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -104,9 +332,21 @@ def crop_video(
     video_stem_dir = output_dir / video_path.stem
 
     logger.debug(
-        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d classify=%s",
-        video_path.name, every_n, margin_ratio, crop_size, classify,
+        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d classify=%s output_type=%s",
+        video_path.name, every_n, margin_ratio, crop_size, classify, output_type,
     )
+
+    # Video output mode – delegate to the segment generator
+    if output_type == "video":
+        return _crop_video_segments(
+            video_path=video_path,
+            output_dir=video_stem_dir,
+            backend=backend,
+            segment_length=segment_length,
+            classify=classify,
+            tolerance=tolerance,
+            skip_existing=skip_existing,
+        )
 
     if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.png")):
         logger.info("Skipping (already processed): %s", video_path.name)

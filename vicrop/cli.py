@@ -12,6 +12,9 @@ vicrop --input ./videos --output-dir ./frames
 # Process a single video file
 vicrop --input ./video.mp4 --output-dir ./frames
 
+# Generate video segments with single-person face crops
+vicrop --input ./video.mp4 --output-dir ./segments --output-type video --segment-length 20
+
 # Faster sampling, no identity clustering
 vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
 
@@ -37,7 +40,7 @@ logger = logging.getLogger("vicrop")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="vicrop",
-        description="Extract face-cropped PNG frames from video files.",
+        description="Extract face-cropped PNG frames or video segments from video files.",
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
@@ -54,7 +57,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output-dir",
         type=Path,
         required=True,
-        help="Destination directory for cropped face images.",
+        help="Destination directory for cropped face images or video segments.",
+    )
+
+    parser.add_argument(
+        "--output-type",
+        choices=["photo", "video"],
+        default="photo",
+        help=(
+            "Type of output to generate.\n"
+            "  photo  - Extract face-cropped PNG frames (default, current behavior)\n"
+            "  video  - Generate video segments containing a single unique person"
+        ),
+    )
+    parser.add_argument(
+        "--segment-length",
+        type=float,
+        default=30.0,
+        help=(
+            "Maximum length of an output video segment in seconds (default: 30).\n"
+            "Only used when --output-type video.  Minimum segment length is 2 seconds."
+        ),
     )
 
     parser.add_argument(
@@ -139,7 +162,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Set the logging level (default: INFO).",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    # Validate segment-length
+    if args.output_type == "video" and args.segment_length < 2.0:
+        parser.error("--segment-length must be at least 2 seconds when --output-type video.")
+
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -176,6 +205,8 @@ def main(argv: list[str] | None = None) -> None:
             classified_path=args.classified_path,
             classified_max=args.classified_max,
             backend=backend,
+            output_type=args.output_type,
+            segment_length=args.segment_length,
         )
         stats = {**video_stats, "videos_processed": 1}
     else:
@@ -193,6 +224,8 @@ def main(argv: list[str] | None = None) -> None:
             classified_path=args.classified_path,
             classified_max=args.classified_max,
             backend=backend,
+            output_type=args.output_type,
+            segment_length=args.segment_length,
         )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
