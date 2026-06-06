@@ -64,6 +64,8 @@ def crop_video(
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
+    output_type: str = "photo",
+    segment_length: int = 30,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -289,6 +291,8 @@ def crop_folder(
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
+    output_type: str = "photo",
+    segment_length: int = 30,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
@@ -343,6 +347,7 @@ def crop_folder(
         "faces": 0,
         "persons": 0,
         "ref_photos": 0,
+        "videos_saved": 0,
     }
 
     for video_path in videos:
@@ -360,11 +365,14 @@ def crop_folder(
             classified_path=classified_path,
             classified_max=classified_max,
             backend=backend,
+            output_type=output_type,
+            segment_length=segment_length,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]
         total["faces"] += stats["faces"]
         total["persons"] += stats["persons"]
         total["ref_photos"] += stats["ref_photos"]
+        total["videos_saved"] += stats.get("videos_saved", 0)
 
     return total

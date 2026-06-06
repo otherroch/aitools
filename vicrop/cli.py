@@ -133,6 +133,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Re-process videos whose output directory already contains frames.",
     )
     parser.add_argument(
+        "--output-type",
+        choices=["photo", "video"],
+        default="photo",
+        help="Type of output to generate: 'photo' (default) or 'video'.",
+    )
+    parser.add_argument(
+        "--segment-length",
+        type=int,
+        default=30,
+        help="Maximum length of an output video segment in seconds (default: 30).",
+    )
+    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
@@ -163,6 +175,11 @@ def main(argv: list[str] | None = None) -> None:
             )
             raise SystemExit(1)
         logger.info("vicrop: processing single video %s", args.input)
+
+        if args.output_type == "video" and args.segment_length < 2:
+            logger.error("--segment-length must be at least 2 seconds for video output.")
+            raise SystemExit(1)
+
         video_stats = crop_video(
             args.input,
             args.output_dir,
@@ -176,6 +193,8 @@ def main(argv: list[str] | None = None) -> None:
             classified_path=args.classified_path,
             classified_max=args.classified_max,
             backend=backend,
+            output_type=args.output_type,
+            segment_length=args.segment_length,
         )
         stats = {**video_stats, "videos_processed": 1}
     else:
@@ -193,6 +212,8 @@ def main(argv: list[str] | None = None) -> None:
             classified_path=args.classified_path,
             classified_max=args.classified_max,
             backend=backend,
+            output_type=args.output_type,
+            segment_length=args.segment_length,
         )
     logger.info(
         "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
