@@ -26,6 +26,7 @@ from vicrop.segment import (
     DEFAULT_MIN_SEGMENT_LENGTH,
     _Segment,
     _build_raw_segments,
+    _compute_crop_rect,
     _filter_and_split_segments,
     segment_video,
     segment_folder,
@@ -529,16 +530,19 @@ class TestBuildRawSegments:
 
     def test_single_single_person_frame_creates_one_segment(self):
         enc = np.zeros(128)
-        records = [(0, enc)]
+        bbox = (10, 40, 40, 10)
+        records = [(0, enc, bbox)]
         backend = self._backend([])
         result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
         assert len(result) == 1
         assert result[0].start_frame == 0
         assert result[0].end_frame == 29  # 0 + 30 - 1
+        assert result[0].sample_bboxes == [(0, bbox)]
 
     def test_none_frame_closes_segment(self):
         enc = np.zeros(128)
-        records = [(0, enc), (30, None), (60, enc)]
+        bbox = (10, 40, 40, 10)
+        records = [(0, enc, bbox), (30, None, None), (60, enc, bbox)]
         backend = self._backend([0.1])  # within tolerance when checked
         result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
         # Two separate segments
@@ -548,17 +552,21 @@ class TestBuildRawSegments:
 
     def test_consecutive_same_person_extends_segment(self):
         enc = np.zeros(128)
-        records = [(0, enc), (30, enc), (60, enc)]
+        bbox = (10, 40, 40, 10)
+        records = [(0, enc, bbox), (30, enc, bbox), (60, enc, bbox)]
         backend = self._backend([0.1])  # distance within tolerance
         result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
         assert len(result) == 1
         assert result[0].start_frame == 0
         assert result[0].end_frame == 89  # 60 + 30 - 1
+        assert len(result[0].sample_bboxes) == 3
 
     def test_different_person_starts_new_segment(self):
         enc_a = np.zeros(128)
         enc_b = np.ones(128)
-        records = [(0, enc_a), (30, enc_b)]
+        bbox_a = (10, 40, 40, 10)
+        bbox_b = (50, 80, 80, 50)
+        records = [(0, enc_a, bbox_a), (30, enc_b, bbox_b)]
         fr_mock = MagicMock()
         # First call: distance between enc_a and enc_b is large
         fr_mock.face_distance.return_value = np.array([0.9])
@@ -569,10 +577,68 @@ class TestBuildRawSegments:
         assert result[1].start_frame == 30
 
     def test_all_none_records_returns_empty(self):
-        records = [(0, None), (30, None), (60, None)]
+        records = [(0, None, None), (30, None, None), (60, None, None)]
         backend = self._backend([])
         result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _compute_crop_rect
+# ---------------------------------------------------------------------------
+
+
+class TestComputeCropRect:
+    """Unit tests for the crop rectangle helper."""
+
+    def test_empty_bboxes_returns_full_frame(self):
+        result = _compute_crop_rect([], margin_ratio=0.4, frame_width=100, frame_height=100)
+        assert result == (0, 0, 100, 100)
+
+    def test_single_bbox_with_zero_margin(self):
+        # bbox: top=10, right=40, bottom=40, left=10
+        bboxes = [(0, (10, 40, 40, 10))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.0, frame_width=100, frame_height=100
+        )
+        assert top == 10
+        assert left == 10
+        assert bottom == 40
+        assert right == 40
+
+    def test_margin_expands_rect(self):
+        # face is 30x30, margin=0.4 → expand by 12 on each side
+        bboxes = [(0, (20, 70, 50, 40))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.4, frame_width=200, frame_height=200
+        )
+        assert top == 8      # 20 - 12
+        assert left == 28    # 40 - 12
+        assert bottom == 62  # 50 + 12
+        assert right == 82   # 70 + 12
+
+    def test_margin_clamped_at_frame_boundary(self):
+        # Face near top-left corner — margin should be clamped to 0
+        bboxes = [(0, (2, 10, 10, 2))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.5, frame_width=100, frame_height=100
+        )
+        assert top >= 0
+        assert left >= 0
+        assert bottom <= 100
+        assert right <= 100
+
+    def test_union_covers_multiple_bboxes(self):
+        # Two faces on opposite sides of a 200x200 frame
+        bboxes = [(0, (10, 50, 40, 20)), (30, (100, 180, 150, 120))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.0, frame_width=200, frame_height=200
+        )
+        # union: top=10, right=180, bottom=150, left=20
+        assert top <= 10
+        assert left <= 20
+        assert bottom >= 150
+        assert right >= 180
 
 
 # ---------------------------------------------------------------------------

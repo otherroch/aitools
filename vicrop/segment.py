@@ -41,10 +41,14 @@ def _default_backend() -> "FaceBackend":
     return backend_for_model("dlib")
 
 
+# (top, right, bottom, left) — same convention as face_ops
+_BBox = tuple[int, int, int, int]
+
+
 class _Segment:
     """Internal holder for a candidate video segment."""
 
-    __slots__ = ("start_frame", "end_frame", "anchor_enc", "person_id")
+    __slots__ = ("start_frame", "end_frame", "anchor_enc", "person_id", "sample_bboxes")
 
     def __init__(
         self,
@@ -52,24 +56,26 @@ class _Segment:
         end_frame: int,
         anchor_enc: np.ndarray,
         person_id: int = 0,
+        sample_bboxes: list[tuple[int, _BBox]] | None = None,
     ) -> None:
         self.start_frame = start_frame
         self.end_frame = end_frame
         self.anchor_enc = anchor_enc
         self.person_id = person_id
+        self.sample_bboxes: list[tuple[int, _BBox]] = sample_bboxes if sample_bboxes is not None else []
 
 
 def _build_raw_segments(
-    frame_records: list[tuple[int, np.ndarray | None]],
+    frame_records: list[tuple[int, np.ndarray | None, "_BBox | None"]],
     every_n: int,
     tolerance: float,
     backend: "FaceBackend",
 ) -> list[_Segment]:
     """Convert per-sampled-frame records into contiguous single-person segments.
 
-    Each entry in *frame_records* is ``(frame_idx, encoding_or_None)`` where
-    *encoding_or_None* is ``None`` when the frame did not contain exactly one
-    face.  The function groups consecutive single-face records whose face
+    Each entry in *frame_records* is ``(frame_idx, encoding_or_None, bbox_or_None)``
+    where *encoding_or_None* is ``None`` when the frame did not contain exactly
+    one face.  The function groups consecutive single-face records whose face
     encodings match the segment's anchor within *tolerance* into a single
     :class:`_Segment`.
 
@@ -78,8 +84,9 @@ def _build_raw_segments(
     between the last good sample and the next sample are included.
 
     Args:
-        frame_records: List of ``(frame_idx, encoding)`` pairs from the
-                       analysis pass.
+        frame_records: List of ``(frame_idx, encoding, bbox)`` triples from
+                       the analysis pass.  *encoding* and *bbox* are ``None``
+                       unless exactly one face was detected.
         every_n:       Frame sampling interval used during analysis.
         tolerance:     Face-distance threshold for same-person matching.
         backend:       :class:`FaceBackend` used for distance computation.
@@ -91,32 +98,39 @@ def _build_raw_segments(
     seg_start: int | None = None
     seg_end: int | None = None
     anchor_enc: np.ndarray | None = None
+    seg_bboxes: list[tuple[int, _BBox]] = []
 
     def _close() -> None:
         if seg_start is not None and seg_end is not None and anchor_enc is not None:
-            segments.append(_Segment(seg_start, seg_end, anchor_enc.copy()))
+            segments.append(
+                _Segment(seg_start, seg_end, anchor_enc.copy(), sample_bboxes=list(seg_bboxes))
+            )
 
-    for frame_idx, enc in frame_records:
-        if enc is None:
+    for frame_idx, enc, bbox in frame_records:
+        if enc is None or bbox is None:
             # Not a single-person frame — close any open segment.
             _close()
             seg_start = seg_end = anchor_enc = None
+            seg_bboxes = []
         elif anchor_enc is None:
             # Start a new segment.
             seg_start = frame_idx
             seg_end = frame_idx + every_n - 1
             anchor_enc = enc
+            seg_bboxes = [(frame_idx, bbox)]
         else:
             dists = backend.face_distance([anchor_enc], enc)
             if dists[0] <= tolerance:
                 # Same person — extend the current segment's window.
                 seg_end = frame_idx + every_n - 1
+                seg_bboxes.append((frame_idx, bbox))
             else:
                 # Different person — close current segment, start a new one.
                 _close()
                 seg_start = frame_idx
                 seg_end = frame_idx + every_n - 1
                 anchor_enc = enc
+                seg_bboxes = [(frame_idx, bbox)]
 
     _close()
     return segments
@@ -155,14 +169,60 @@ def _filter_and_split_segments(
         start = seg.start_frame
         end = min(seg.end_frame, total_frames - 1)
         enc = seg.anchor_enc
+        bboxes = seg.sample_bboxes
 
         while start <= end:
             chunk_end = min(start + max_frames - 1, end)
             if chunk_end - start + 1 >= min_frames:
-                result.append(_Segment(start, chunk_end, enc))
+                chunk_bboxes = [(fi, b) for fi, b in bboxes if start <= fi <= chunk_end]
+                result.append(_Segment(start, chunk_end, enc, sample_bboxes=chunk_bboxes))
             start = chunk_end + 1
 
     return result
+
+
+def _compute_crop_rect(
+    sample_bboxes: list[tuple[int, "_BBox"]],
+    margin_ratio: float,
+    frame_width: int,
+    frame_height: int,
+) -> tuple[int, int, int, int]:
+    """Compute the crop rectangle that covers all face bboxes in a segment.
+
+    Takes the union of all sampled face bounding boxes, expands it by
+    *margin_ratio* on each side, and clamps to the frame dimensions.
+
+    Args:
+        sample_bboxes:  List of ``(frame_idx, (top, right, bottom, left))``
+                        pairs from the segment.
+        margin_ratio:   Fractional padding to add around the union bbox.
+        frame_width:    Source video frame width in pixels.
+        frame_height:   Source video frame height in pixels.
+
+    Returns:
+        ``(crop_top, crop_left, crop_bottom, crop_right)`` — all clamped to
+        the frame boundaries.
+    """
+    if not sample_bboxes:
+        return (0, 0, frame_height, frame_width)
+
+    bboxes = [b for _, b in sample_bboxes]
+    top = min(b[0] for b in bboxes)
+    right = max(b[1] for b in bboxes)
+    bottom = max(b[2] for b in bboxes)
+    left = min(b[3] for b in bboxes)
+
+    face_h = max(1, bottom - top)
+    face_w = max(1, right - left)
+    margin_h = int(face_h * margin_ratio)
+    margin_w = int(face_w * margin_ratio)
+
+    crop_top = max(0, top - margin_h)
+    crop_bottom = min(frame_height, bottom + margin_h)
+    crop_left = max(0, left - margin_w)
+    crop_right = min(frame_width, right + margin_w)
+
+    return (crop_top, crop_left, crop_bottom, crop_right)
 
 
 def _assign_person_ids(
@@ -205,6 +265,7 @@ def segment_video(
     video_path: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
+    margin_ratio: float = 0.4,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -218,10 +279,17 @@ def segment_video(
     run as a separate MP4 file under
     ``output_dir / video_path.stem / person_NN / seg_NNN.mp4``.
 
+    Each output frame is spatially cropped to the bounding box that covers
+    the person's detected face positions across the whole segment (with
+    *margin_ratio* padding), so the final video contains only that person.
+
     Args:
         video_path:          Path to the input video file.
         output_dir:          Root directory for output segments.
         every_n:             Frame sampling interval for face detection.
+        margin_ratio:        Fractional padding added around the union of all
+                             face bounding boxes when computing the crop rect
+                             (default: 0.4).
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds (default: 2).
         max_segment_length:  Maximum segment duration in seconds; longer
@@ -262,10 +330,10 @@ def segment_video(
 
     # ------------------------------------------------------------------ #
     # Analysis pass — sample every_n frames to build a face-presence      #
-    # timeline.  Each record is (frame_idx, encoding_or_None) where the   #
-    # encoding is None unless exactly one face was detected.               #
+    # timeline.  Each record is (frame_idx, encoding_or_None, bbox_or_None)#
+    # where both are None unless exactly one face was detected.            #
     # ------------------------------------------------------------------ #
-    frame_records: list[tuple[int, np.ndarray | None]] = []
+    frame_records: list[tuple[int, np.ndarray | None, _BBox | None]] = []
     frame_idx = 0
     try:
         while True:
@@ -278,9 +346,11 @@ def segment_video(
                 if len(locs) == 1:
                     encs = backend.encode_faces(frame_rgb, locs)
                     enc: np.ndarray | None = encs[0] if encs else None
+                    bbox: _BBox | None = locs[0]
                 else:
                     enc = None
-                frame_records.append((frame_idx, enc))
+                    bbox = None
+                frame_records.append((frame_idx, enc, bbox))
             frame_idx += 1
     finally:
         cap.release()
@@ -308,7 +378,8 @@ def segment_video(
     _assign_person_ids(segments, tolerance, backend)
 
     # ------------------------------------------------------------------ #
-    # Write pass — seek to each segment's start frame and copy frames.    #
+    # Write pass — seek to each segment's start frame, crop to the        #
+    # person's bounding region, and write as a new MP4.                   #
     # ------------------------------------------------------------------ #
     video_stem_dir.mkdir(parents=True, exist_ok=True)
     seg_count_per_person: dict[int, int] = {}
@@ -326,21 +397,30 @@ def segment_video(
             person_dir.mkdir(parents=True, exist_ok=True)
             out_path = person_dir / f"seg_{seg_num:03d}.mp4"
 
+            # Compute the crop rect that covers all detected face positions
+            # across the segment, with margin padding.
+            crop_top, crop_left, crop_bottom, crop_right = _compute_crop_rect(
+                seg.sample_bboxes, margin_ratio, width, height
+            )
+            out_w = max(1, crop_right - crop_left)
+            out_h = max(1, crop_bottom - crop_top)
+
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
-            writer = cv2.VideoWriter(str(out_path), fourcc, fps, (width, height))
+            writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w, out_h))
             try:
                 for _ in range(seg.end_frame - seg.start_frame + 1):
                     ret, frame = cap2.read()
                     if not ret:
                         break
-                    writer.write(frame)
+                    cropped = frame[crop_top:crop_bottom, crop_left:crop_right]
+                    writer.write(cropped)
             finally:
                 writer.release()
 
             duration = (seg.end_frame - seg.start_frame + 1) / fps
             logger.info(
-                "Wrote segment: %s  frames %d–%d  (%.1fs)  person %d",
-                out_path.name, seg.start_frame, seg.end_frame, duration, pid,
+                "Wrote segment: %s  frames %d–%d  (%.1fs)  person %d  crop %dx%d",
+                out_path.name, seg.start_frame, seg.end_frame, duration, pid, out_w, out_h,
             )
             written += 1
     finally:
@@ -353,6 +433,7 @@ def segment_folder(
     input_dir: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
+    margin_ratio: float = 0.4,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -365,6 +446,7 @@ def segment_folder(
         input_dir:           Source directory (searched recursively).
         output_dir:          Destination directory for segments.
         every_n:             Frame sampling interval for face detection.
+        margin_ratio:        Fractional padding around the crop bounding box.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds.
         max_segment_length:  Maximum segment duration in seconds.
@@ -401,6 +483,7 @@ def segment_folder(
             video_path,
             output_dir,
             every_n=every_n,
+            margin_ratio=margin_ratio,
             tolerance=tolerance,
             min_segment_length=min_segment_length,
             max_segment_length=max_segment_length,
