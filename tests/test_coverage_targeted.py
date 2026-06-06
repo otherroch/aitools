@@ -128,6 +128,9 @@ class TestVicropCli:
             ref_thresh=0.8,
             classified_path=None,
             classified_max=10,
+            output_type="photo",
+            max_segment_length=30.0,
+            min_segment_length=2.0,
         )
         called = {}
 
@@ -168,6 +171,9 @@ class TestVicropCli:
             ref_thresh=0.8,
             classified_path=None,
             classified_max=10,
+            output_type="photo",
+            max_segment_length=30.0,
+            min_segment_length=2.0,
         )
         called = {}
 
@@ -208,6 +214,9 @@ class TestVicropCli:
             ref_thresh=0.8,
             classified_path=None,
             classified_max=10,
+            output_type="photo",
+            max_segment_length=30.0,
+            min_segment_length=2.0,
         )
         monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
         crop_stub = types.SimpleNamespace(
