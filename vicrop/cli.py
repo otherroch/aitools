@@ -132,6 +132,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
     )
+
+    # ------------------------------------------------------------------ #
+    # Output type                                                          #
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--output-type",
+        choices=["photo", "video"],
+        default="photo",
+        help=(
+            "Type of output to generate.\n"
+            "  photo  – face-cropped PNG frames (default, existing behaviour).\n"
+            "  video  – MP4 segments that each contain exactly one unique person."
+        ),
+    )
+    parser.add_argument(
+        "--max-segment-length",
+        type=float,
+        default=30.0,
+        help=(
+            "Maximum length of each output video segment in seconds "
+            "(default: 30).  Longer segments are split at this boundary.\n"
+            "Only used when --output-type video is specified."
+        ),
+    )
+    parser.add_argument(
+        "--min-segment-length",
+        type=float,
+        default=2.0,
+        help=(
+            "Minimum length of each output video segment in seconds "
+            "(default: 2).  Shorter segments are discarded.\n"
+            "Only used when --output-type video is specified."
+        ),
+    )
+
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -149,60 +184,98 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("vicrop starting with args: %s", args)
 
     from face_ops import backend_for_model
-    from vicrop.crop import SUPPORTED_VIDEO_EXTS, crop_folder, crop_video
+    from vicrop.crop import SUPPORTED_VIDEO_EXTS
 
     backend = backend_for_model(args.detection_model)
 
-    if args.input.is_file():
-        if args.input.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
-            logger.error(
-                "Unsupported file type '%s' for file: %s. Supported extensions: %s",
-                args.input.suffix,
+    if args.input.is_file() and args.input.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
+        logger.error(
+            "Unsupported file type '%s' for file: %s. Supported extensions: %s",
+            args.input.suffix,
+            args.input,
+            ", ".join(sorted(SUPPORTED_VIDEO_EXTS)),
+        )
+        raise SystemExit(1)
+
+    if args.output_type == "video":
+        from vicrop.segment import segment_folder, segment_video
+
+        if args.input.is_file():
+            logger.info("vicrop: extracting video segments from %s", args.input)
+            video_stats = segment_video(
                 args.input,
-                ", ".join(sorted(SUPPORTED_VIDEO_EXTS)),
+                args.output_dir,
+                every_n=args.every_n,
+                tolerance=args.tolerance,
+                min_segment_length=args.min_segment_length,
+                max_segment_length=args.max_segment_length,
+                skip_existing=not args.no_skip_existing,
+                backend=backend,
             )
-            raise SystemExit(1)
-        logger.info("vicrop: processing single video %s", args.input)
-        video_stats = crop_video(
-            args.input,
-            args.output_dir,
-            every_n=args.every_n,
-            margin_ratio=args.margin_ratio,
-            crop_size=args.crop_size,
-            classify=not args.no_classify,
-            tolerance=args.tolerance,
-            skip_existing=not args.no_skip_existing,
-            ref_thresh=args.ref_thresh,
-            classified_path=args.classified_path,
-            classified_max=args.classified_max,
-            backend=backend,
+            stats = {**video_stats, "videos_processed": 1}
+        else:
+            logger.info("vicrop: extracting video segments from %s", args.input)
+            stats = segment_folder(
+                args.input,
+                args.output_dir,
+                every_n=args.every_n,
+                tolerance=args.tolerance,
+                min_segment_length=args.min_segment_length,
+                max_segment_length=args.max_segment_length,
+                skip_existing=not args.no_skip_existing,
+                backend=backend,
+            )
+        logger.info(
+            "vicrop: %d videos processed, %d segments written, %d persons identified",
+            stats["videos_processed"],
+            stats["segments"],
+            stats["persons"],
         )
-        stats = {**video_stats, "videos_processed": 1}
     else:
-        logger.info("vicrop: processing videos in %s", args.input)
-        stats = crop_folder(
-            args.input,
-            args.output_dir,
-            every_n=args.every_n,
-            margin_ratio=args.margin_ratio,
-            crop_size=args.crop_size,
-            classify=not args.no_classify,
-            tolerance=args.tolerance,
-            skip_existing=not args.no_skip_existing,
-            ref_thresh=args.ref_thresh,
-            classified_path=args.classified_path,
-            classified_max=args.classified_max,
-            backend=backend,
+        from vicrop.crop import crop_folder, crop_video
+
+        if args.input.is_file():
+            logger.info("vicrop: processing single video %s", args.input)
+            video_stats = crop_video(
+                args.input,
+                args.output_dir,
+                every_n=args.every_n,
+                margin_ratio=args.margin_ratio,
+                crop_size=args.crop_size,
+                classify=not args.no_classify,
+                tolerance=args.tolerance,
+                skip_existing=not args.no_skip_existing,
+                ref_thresh=args.ref_thresh,
+                classified_path=args.classified_path,
+                classified_max=args.classified_max,
+                backend=backend,
+            )
+            stats = {**video_stats, "videos_processed": 1}
+        else:
+            logger.info("vicrop: processing videos in %s", args.input)
+            stats = crop_folder(
+                args.input,
+                args.output_dir,
+                every_n=args.every_n,
+                margin_ratio=args.margin_ratio,
+                crop_size=args.crop_size,
+                classify=not args.no_classify,
+                tolerance=args.tolerance,
+                skip_existing=not args.no_skip_existing,
+                ref_thresh=args.ref_thresh,
+                classified_path=args.classified_path,
+                classified_max=args.classified_max,
+                backend=backend,
+            )
+        logger.info(
+            "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
+            "%d persons identified, %d reference photos selected",
+            stats["videos_processed"],
+            stats["frames_processed"],
+            stats["faces"],
+            stats["persons"],
+            stats["ref_photos"],
         )
-    logger.info(
-        "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
-        "%d persons identified, %d reference photos selected",
-        stats["videos_processed"],
-        stats["frames_processed"],
-        stats["faces"],
-        stats["persons"],
-        stats["ref_photos"],
-    )
 
 
 if __name__ == "__main__":
