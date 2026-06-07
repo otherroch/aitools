@@ -266,6 +266,7 @@ def segment_video(
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
+    crop_size: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -282,6 +283,8 @@ def segment_video(
     Each output frame is spatially cropped to the bounding box that covers
     the person's detected face positions across the whole segment (with
     *margin_ratio* padding), so the final video contains only that person.
+    When *crop_size* is given the cropped region is resized to a square
+    ``crop_size × crop_size`` frame.
 
     Args:
         video_path:          Path to the input video file.
@@ -290,6 +293,9 @@ def segment_video(
         margin_ratio:        Fractional padding added around the union of all
                              face bounding boxes when computing the crop rect
                              (default: 0.4).
+        crop_size:           If given, each output frame is resized to this
+                             square resolution in pixels (default: None, keep
+                             the cropped rect dimensions).
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds (default: 2).
         max_segment_length:  Maximum segment duration in seconds; longer
@@ -402,8 +408,8 @@ def segment_video(
             crop_top, crop_left, crop_bottom, crop_right = _compute_crop_rect(
                 seg.sample_bboxes, margin_ratio, width, height
             )
-            out_w = max(1, crop_right - crop_left)
-            out_h = max(1, crop_bottom - crop_top)
+            out_w = crop_size if crop_size else max(1, crop_right - crop_left)
+            out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
 
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
             writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w, out_h))
@@ -413,13 +419,15 @@ def segment_video(
                     if not ret:
                         break
                     cropped = frame[crop_top:crop_bottom, crop_left:crop_right]
+                    if crop_size:
+                        cropped = cv2.resize(cropped, (crop_size, crop_size), interpolation=cv2.INTER_LANCZOS4)
                     writer.write(cropped)
             finally:
                 writer.release()
 
             duration = (seg.end_frame - seg.start_frame + 1) / fps
             logger.info(
-                "Wrote segment: %s  frames %d–%d  (%.1fs)  person %d  crop %dx%d",
+                "Wrote segment: %s  frames %d–%d  (%.1fs)  person %d  %dx%d",
                 out_path.name, seg.start_frame, seg.end_frame, duration, pid, out_w, out_h,
             )
             written += 1
@@ -434,6 +442,7 @@ def segment_folder(
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
+    crop_size: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -447,6 +456,8 @@ def segment_folder(
         output_dir:          Destination directory for segments.
         every_n:             Frame sampling interval for face detection.
         margin_ratio:        Fractional padding around the crop bounding box.
+        crop_size:           If given, each output frame is resized to this
+                             square resolution in pixels.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds.
         max_segment_length:  Maximum segment duration in seconds.
@@ -484,6 +495,7 @@ def segment_folder(
             output_dir,
             every_n=every_n,
             margin_ratio=margin_ratio,
+            crop_size=crop_size,
             tolerance=tolerance,
             min_segment_length=min_segment_length,
             max_segment_length=max_segment_length,

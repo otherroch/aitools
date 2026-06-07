@@ -923,6 +923,103 @@ class TestSegmentVideo:
         assert stats["segments"] == 3
         assert len(writers_created) == 3
 
+    def test_crop_size_produces_square_frames(self, tmp_path):
+        """When crop_size is given, VideoWriter receives a square size and frames are resized."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0)
+        write_cap = _make_segment_cap(frames, fps=25.0)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+        mock_writer = MagicMock()
+        writer_sizes = []
+
+        def capture_writer(path, fourcc, fps, size):
+            writer_sizes.append(size)
+            return mock_writer
+
+        resized_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d), \
+             patch("vicrop.segment.cv2.resize", return_value=resized_frame) as mock_resize:
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_size=512,
+                backend=backend,
+            )
+
+        assert stats["segments"] == 1
+        # VideoWriter should have been created with a 512x512 size
+        assert writer_sizes == [(512, 512)]
+        # cv2.resize should have been called for each written frame
+        assert mock_resize.call_count >= 1
+        # Each resize call should have requested (512, 512)
+        for call in mock_resize.call_args_list:
+            assert call.args[1] == (512, 512)
+
+    def test_no_crop_size_uses_cropped_rect_dimensions(self, tmp_path):
+        """Without crop_size, VideoWriter uses the natural cropped-rect size."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+        write_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        # Face bbox: top=10, right=60, bottom=50, left=20 → 40h × 40w
+        # margin_ratio=0.0 → crop rect is exactly (10,20,50,60) → 40×40
+        fr_mock.face_locations.return_value = [(10, 60, 50, 20)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+        mock_writer = MagicMock()
+        writer_sizes = []
+
+        def capture_writer(path, fourcc, fps, size):
+            writer_sizes.append(size)
+            return mock_writer
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d), \
+             patch("vicrop.segment.cv2.resize") as mock_resize:
+            segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_size=None,
+                margin_ratio=0.0,
+                backend=backend,
+            )
+
+        # resize should NOT have been called
+        mock_resize.assert_not_called()
+        # Writer size should be the natural crop dimensions (40×40)
+        assert writer_sizes == [(40, 40)]
+
 
 # ---------------------------------------------------------------------------
 # segment_folder
