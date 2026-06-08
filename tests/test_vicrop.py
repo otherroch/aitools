@@ -21,6 +21,16 @@ from vicrop.crop import (
     crop_video,
     crop_folder,
 )
+from vicrop.segment import (
+    DEFAULT_MAX_SEGMENT_LENGTH,
+    DEFAULT_MIN_SEGMENT_LENGTH,
+    _Segment,
+    _build_raw_segments,
+    _compute_crop_rect,
+    _filter_and_split_segments,
+    segment_video,
+    segment_folder,
+)
 
 from face_ops.testing import MockBackendShim
 
@@ -497,3 +507,628 @@ class TestClusterFacesWithReferences:
         )
 
         assert not (tmp_path / "alice").exists()
+
+
+# ---------------------------------------------------------------------------
+# _build_raw_segments
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRawSegments:
+    """Unit tests for the segment-building logic (no I/O)."""
+
+    def _backend(self, distances):
+        """Return a MockBackendShim whose face_distance always returns *distances*."""
+        fr_mock = MagicMock()
+        fr_mock.face_distance.return_value = np.array(distances)
+        return MockBackendShim(fr_mock)
+
+    def test_empty_records_returns_empty(self):
+        backend = self._backend([])
+        result = _build_raw_segments([], every_n=30, tolerance=0.6, backend=backend)
+        assert result == []
+
+    def test_single_single_person_frame_creates_one_segment(self):
+        enc = np.zeros(128)
+        bbox = (10, 40, 40, 10)
+        records = [(0, enc, bbox)]
+        backend = self._backend([])
+        result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
+        assert len(result) == 1
+        assert result[0].start_frame == 0
+        assert result[0].end_frame == 29  # 0 + 30 - 1
+        assert result[0].sample_bboxes == [(0, bbox)]
+
+    def test_none_frame_closes_segment(self):
+        enc = np.zeros(128)
+        bbox = (10, 40, 40, 10)
+        records = [(0, enc, bbox), (30, None, None), (60, enc, bbox)]
+        backend = self._backend([0.1])  # within tolerance when checked
+        result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
+        # Two separate segments
+        assert len(result) == 2
+        assert result[0].start_frame == 0
+        assert result[1].start_frame == 60
+
+    def test_consecutive_same_person_extends_segment(self):
+        enc = np.zeros(128)
+        bbox = (10, 40, 40, 10)
+        records = [(0, enc, bbox), (30, enc, bbox), (60, enc, bbox)]
+        backend = self._backend([0.1])  # distance within tolerance
+        result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
+        assert len(result) == 1
+        assert result[0].start_frame == 0
+        assert result[0].end_frame == 89  # 60 + 30 - 1
+        assert len(result[0].sample_bboxes) == 3
+
+    def test_different_person_starts_new_segment(self):
+        enc_a = np.zeros(128)
+        enc_b = np.ones(128)
+        bbox_a = (10, 40, 40, 10)
+        bbox_b = (50, 80, 80, 50)
+        records = [(0, enc_a, bbox_a), (30, enc_b, bbox_b)]
+        fr_mock = MagicMock()
+        # First call: distance between enc_a and enc_b is large
+        fr_mock.face_distance.return_value = np.array([0.9])
+        backend = MockBackendShim(fr_mock)
+        result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
+        assert len(result) == 2
+        assert result[0].start_frame == 0
+        assert result[1].start_frame == 30
+
+    def test_all_none_records_returns_empty(self):
+        records = [(0, None, None), (30, None, None), (60, None, None)]
+        backend = self._backend([])
+        result = _build_raw_segments(records, every_n=30, tolerance=0.6, backend=backend)
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _compute_crop_rect
+# ---------------------------------------------------------------------------
+
+
+class TestComputeCropRect:
+    """Unit tests for the crop rectangle helper."""
+
+    def test_empty_bboxes_returns_full_frame(self):
+        result = _compute_crop_rect([], margin_ratio=0.4, frame_width=100, frame_height=100)
+        assert result == (0, 0, 100, 100)
+
+    def test_single_bbox_with_zero_margin(self):
+        # bbox: top=10, right=40, bottom=40, left=10
+        bboxes = [(0, (10, 40, 40, 10))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.0, frame_width=100, frame_height=100
+        )
+        assert top == 10
+        assert left == 10
+        assert bottom == 40
+        assert right == 40
+
+    def test_margin_expands_rect(self):
+        # face is 30x30, margin=0.4 → expand by 12 on each side
+        bboxes = [(0, (20, 70, 50, 40))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.4, frame_width=200, frame_height=200
+        )
+        assert top == 8      # 20 - 12
+        assert left == 28    # 40 - 12
+        assert bottom == 62  # 50 + 12
+        assert right == 82   # 70 + 12
+
+    def test_margin_clamped_at_frame_boundary(self):
+        # Face near top-left corner — margin should be clamped to 0
+        bboxes = [(0, (2, 10, 10, 2))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.5, frame_width=100, frame_height=100
+        )
+        assert top >= 0
+        assert left >= 0
+        assert bottom <= 100
+        assert right <= 100
+
+    def test_union_covers_multiple_bboxes(self):
+        # Two faces on opposite sides of a 200x200 frame
+        bboxes = [(0, (10, 50, 40, 20)), (30, (100, 180, 150, 120))]
+        top, left, bottom, right = _compute_crop_rect(
+            bboxes, margin_ratio=0.0, frame_width=200, frame_height=200
+        )
+        # union: top=10, right=180, bottom=150, left=20
+        assert top <= 10
+        assert left <= 20
+        assert bottom >= 150
+        assert right >= 180
+
+
+# ---------------------------------------------------------------------------
+# _filter_and_split_segments
+# ---------------------------------------------------------------------------
+
+
+class TestFilterAndSplitSegments:
+    """Unit tests for segment filtering and splitting."""
+
+    def _seg(self, start, end):
+        return _Segment(start, end, np.zeros(128))
+
+    def test_segment_meeting_min_length_kept(self):
+        # 3 seconds at 10 fps = 30 frames; min = 2 seconds → keep
+        segs = [self._seg(0, 29)]
+        result = _filter_and_split_segments(segs, fps=10.0, total_frames=100,
+                                            min_segment_length=2.0,
+                                            max_segment_length=30.0)
+        assert len(result) == 1
+
+    def test_segment_below_min_length_discarded(self):
+        # 0.5 seconds at 10 fps = 5 frames; min = 2 seconds → discard
+        segs = [self._seg(0, 4)]
+        result = _filter_and_split_segments(segs, fps=10.0, total_frames=100,
+                                            min_segment_length=2.0,
+                                            max_segment_length=30.0)
+        assert result == []
+
+    def test_segment_over_max_length_split(self):
+        # 100 frames at 10 fps = 10 seconds; max = 3 seconds (30 frames) → 4 chunks
+        # [0,29] [30,59] [60,89] [90,99] — last chunk is 10 frames = 1 second < min 2s
+        segs = [self._seg(0, 99)]
+        result = _filter_and_split_segments(segs, fps=10.0, total_frames=200,
+                                            min_segment_length=2.0,
+                                            max_segment_length=3.0)
+        # 3 full chunks of 30 frames; last chunk [90,99] = 10 frames = 1s < 2s → dropped
+        assert len(result) == 3
+        assert result[0].start_frame == 0 and result[0].end_frame == 29
+        assert result[1].start_frame == 30 and result[1].end_frame == 59
+        assert result[2].start_frame == 60 and result[2].end_frame == 89
+
+    def test_end_frame_clipped_to_total_frames(self):
+        # Segment claims end=150 but total_frames=100
+        segs = [self._seg(0, 150)]
+        result = _filter_and_split_segments(segs, fps=10.0, total_frames=100,
+                                            min_segment_length=2.0,
+                                            max_segment_length=30.0)
+        assert len(result) == 1
+        assert result[0].end_frame == 99  # clipped
+
+    def test_empty_input_returns_empty(self):
+        result = _filter_and_split_segments([], fps=25.0, total_frames=1000,
+                                            min_segment_length=2.0,
+                                            max_segment_length=30.0)
+        assert result == []
+
+    def test_defaults_match_constants(self):
+        assert DEFAULT_MAX_SEGMENT_LENGTH == 30.0
+        assert DEFAULT_MIN_SEGMENT_LENGTH == 2.0
+
+
+# ---------------------------------------------------------------------------
+# segment_video
+# ---------------------------------------------------------------------------
+
+
+def _make_segment_cap(frames_rgb, fps=25.0, total=None, width=100, height=100):
+    """Create a mock cv2.VideoCapture for segment_video tests."""
+    import cv2 as _cv2
+
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+
+    prop_map = {
+        _cv2.CAP_PROP_FPS: fps,
+        _cv2.CAP_PROP_FRAME_COUNT: float(total if total is not None else len(frames_rgb)),
+        _cv2.CAP_PROP_FRAME_WIDTH: float(width),
+        _cv2.CAP_PROP_FRAME_HEIGHT: float(height),
+    }
+    mock_cap.get.side_effect = lambda prop: prop_map.get(prop, 0.0)
+
+    call_count = [0]
+
+    def read_side():
+        idx = call_count[0]
+        call_count[0] += 1
+        if idx < len(frames_rgb):
+            bgr = frames_rgb[idx][:, :, ::-1].copy()
+            return True, bgr
+        return False, None
+
+    mock_cap.read.side_effect = read_side
+    return mock_cap
+
+
+class TestSegmentVideo:
+    def _dummy_frame(self, size=(100, 100)):
+        return np.zeros((*size, 3), dtype=np.uint8)
+
+    def test_unopenable_video_returns_zeros(self, tmp_path):
+        video_path = tmp_path / "bad.mp4"
+        video_path.write_bytes(b"not a video")
+
+        fr_mock = MagicMock()
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.segment.cv2.VideoCapture") as mock_vc:
+            mock_cap = MagicMock()
+            mock_cap.isOpened.return_value = False
+            mock_vc.return_value = mock_cap
+
+            stats = segment_video(video_path, tmp_path / "out", backend=backend)
+
+        assert stats["segments"] == 0
+        assert stats["persons"] == 0
+
+    def test_skip_existing_when_output_has_mp4(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+        # Pre-create an MP4 in the expected output location
+        mp4_dir = out_dir / "clip" / "person_01"
+        mp4_dir.mkdir(parents=True)
+        (mp4_dir / "seg_001.mp4").write_bytes(b"fake mp4")
+
+        fr_mock = MagicMock()
+        backend = MockBackendShim(fr_mock)
+        stats = segment_video(video_path, out_dir, skip_existing=True, backend=backend)
+
+        assert stats["segments"] == 0  # skipped
+
+    def test_no_single_person_frames_returns_zeros(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        mock_cap = _make_segment_cap([frame, frame])
+
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = []  # no faces
+        fr_mock.face_encodings.return_value = []
+
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.segment.cv2.VideoCapture", return_value=mock_cap), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame):
+            stats = segment_video(video_path, out_dir, every_n=1, backend=backend)
+
+        assert stats["segments"] == 0
+
+    def test_multi_face_frames_not_included(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        mock_cap = _make_segment_cap([frame])
+
+        fr_mock = MagicMock()
+        # Two faces detected → not a single-person frame
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10), (50, 80, 80, 50)]
+        fr_mock.face_encodings.return_value = [np.zeros(128), np.zeros(128)]
+
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.segment.cv2.VideoCapture", return_value=mock_cap), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame):
+            stats = segment_video(video_path, out_dir, every_n=1, backend=backend)
+
+        assert stats["segments"] == 0
+
+    def test_single_person_segment_written(self, tmp_path):
+        """Happy-path: 5 single-person frames produce one segment file."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        # Analysis cap (first VideoCapture call)
+        analysis_cap = _make_segment_cap(frames, fps=25.0)
+        # Write cap (second VideoCapture call)
+        write_cap = _make_segment_cap(frames, fps=25.0)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+
+        mock_writer = MagicMock()
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", return_value=mock_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d):
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,  # no minimum so the short clip is kept
+                max_segment_length=30.0,
+                backend=backend,
+            )
+
+        assert stats["segments"] == 1
+        assert stats["persons"] == 1
+        # VideoWriter.write() should have been called for each frame in the segment
+        assert mock_writer.write.call_count >= 1
+        mock_writer.release.assert_called_once()
+
+    def test_segment_below_min_length_not_written(self, tmp_path):
+        """A segment shorter than min_segment_length is discarded."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 3  # 3 frames at 25 fps = 0.12 s — below 2 s minimum
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+
+        # Only the analysis cap is needed — no write should happen
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter") as mock_vw_cls:
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=2.0,
+                backend=backend,
+            )
+
+        assert stats["segments"] == 0
+        mock_vw_cls.assert_not_called()
+
+    def test_long_segment_split_into_multiple_files(self, tmp_path):
+        """A segment exceeding max_segment_length is split into multiple files."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        fps = 10.0
+        # 60 frames = 6 seconds; max = 2 seconds (20 frames) → 3 chunks
+        frames = [self._dummy_frame()] * 60
+
+        analysis_cap = _make_segment_cap(frames, fps=fps)
+        write_cap = _make_segment_cap(frames, fps=fps)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+
+        writers_created = []
+
+        def make_writer(*args, **kwargs):
+            w = MagicMock()
+            writers_created.append(w)
+            return w
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", side_effect=lambda f, _: f), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=make_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d):
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=1.0,
+                max_segment_length=2.0,
+                backend=backend,
+            )
+
+        assert stats["segments"] == 3
+        assert len(writers_created) == 3
+
+    def test_crop_size_produces_square_frames(self, tmp_path):
+        """When crop_size is given, VideoWriter receives a square size and frames are resized."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0)
+        write_cap = _make_segment_cap(frames, fps=25.0)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+        mock_writer = MagicMock()
+        writer_sizes = []
+
+        def capture_writer(path, fourcc, fps, size):
+            writer_sizes.append(size)
+            return mock_writer
+
+        resized_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d), \
+             patch("vicrop.segment.cv2.resize", return_value=resized_frame) as mock_resize:
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_size=512,
+                backend=backend,
+            )
+
+        assert stats["segments"] == 1
+        # VideoWriter should have been created with a 512x512 size
+        assert writer_sizes == [(512, 512)]
+        # cv2.resize should have been called for each written frame
+        assert mock_resize.call_count >= 1
+        # Each resize call should have requested (512, 512)
+        for call in mock_resize.call_args_list:
+            assert call.args[1] == (512, 512)
+
+    def test_no_crop_size_uses_cropped_rect_dimensions(self, tmp_path):
+        """Without crop_size, VideoWriter uses the natural cropped-rect size."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+        write_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        # Face bbox: top=10, right=60, bottom=50, left=20 → 40h × 40w
+        # margin_ratio=0.0 → crop rect is exactly (10,20,50,60) → 40×40
+        fr_mock.face_locations.return_value = [(10, 60, 50, 20)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+        mock_writer = MagicMock()
+        writer_sizes = []
+
+        def capture_writer(path, fourcc, fps, size):
+            writer_sizes.append(size)
+            return mock_writer
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d), \
+             patch("vicrop.segment.cv2.resize") as mock_resize:
+            segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_size=None,
+                margin_ratio=0.0,
+                backend=backend,
+            )
+
+        # resize should NOT have been called
+        mock_resize.assert_not_called()
+        # Writer size should be the natural crop dimensions (40×40)
+        assert writer_sizes == [(40, 40)]
+
+
+# ---------------------------------------------------------------------------
+# segment_folder
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentFolder:
+    def test_empty_directory_returns_zeros(self, tmp_path):
+        fr_mock = MagicMock()
+        backend = MockBackendShim(fr_mock)
+        stats = segment_folder(tmp_path / "in", tmp_path / "out", backend=backend)
+
+        assert stats["videos_processed"] == 0
+        assert stats["segments"] == 0
+        assert stats["persons"] == 0
+
+    def test_non_video_files_ignored(self, tmp_path):
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "notes.txt").write_text("ignore me")
+
+        fr_mock = MagicMock()
+        backend = MockBackendShim(fr_mock)
+        stats = segment_folder(src, tmp_path / "out", backend=backend)
+
+        assert stats["videos_processed"] == 0
+
+    def test_counts_videos_processed(self, tmp_path):
+        src = tmp_path / "in"
+        src.mkdir()
+        for name in ["a.mp4", "b.mp4"]:
+            (src / name).write_bytes(b"fake")
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        def make_cap():
+            cap = MagicMock()
+            cap.isOpened.return_value = True
+            cap.read.side_effect = [(True, frame), (False, None)]
+            cap.get.return_value = 0.0
+            return cap
+
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = []
+        fr_mock.face_encodings.return_value = []
+
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=lambda _: make_cap()), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame):
+            stats = segment_folder(src, tmp_path / "out", every_n=1, backend=backend)
+
+        assert stats["videos_processed"] == 2
+
+
+# ---------------------------------------------------------------------------
+# CLI — --output-type integration
+# ---------------------------------------------------------------------------
+
+
+class TestCLIOutputType:
+    """Smoke-test the CLI argument additions."""
+
+    def test_default_output_type_is_photo(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args(["--input", "/tmp/v.mp4", "--output-dir", "/tmp/out"])
+        assert args.output_type == "photo"
+
+    def test_video_output_type_parsed(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--output-type", "video",
+        ])
+        assert args.output_type == "video"
+
+    def test_max_segment_length_default(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args(["--input", "/tmp/v.mp4", "--output-dir", "/tmp/out"])
+        assert args.max_segment_length == 30.0
+
+    def test_min_segment_length_default(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args(["--input", "/tmp/v.mp4", "--output-dir", "/tmp/out"])
+        assert args.min_segment_length == 2.0
+
+    def test_max_min_segment_lengths_parsed(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--output-type", "video",
+            "--max-segment-length", "60",
+            "--min-segment-length", "5",
+        ])
+        assert args.max_segment_length == 60.0
+        assert args.min_segment_length == 5.0
+
+    def test_invalid_output_type_raises(self):
+        from vicrop.cli import parse_args
+
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--input", "/tmp/v.mp4",
+                "--output-dir", "/tmp/out",
+                "--output-type", "gif",
+            ])
