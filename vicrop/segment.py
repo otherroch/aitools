@@ -176,6 +176,9 @@ def _filter_and_split_segments(
             if chunk_end - start + 1 >= min_frames:
                 chunk_bboxes = [(fi, b) for fi, b in bboxes if start <= fi <= chunk_end]
                 if not chunk_bboxes:
+                    # No samples fall within this chunk (e.g. max_segment_length * fps
+                    # < every_n). Fall back to the parent segment's bboxes so that
+                    # _compute_crop_rect can still produce a person-centred crop.
                     chunk_bboxes = bboxes
                 result.append(_Segment(start, chunk_end, enc, sample_bboxes=chunk_bboxes))
             start = chunk_end + 1
