@@ -16,4 +16,5 @@ dist/
 *.png
 *.jpg
 *.jpeg
-
+!testb21/
+!testb21/**
