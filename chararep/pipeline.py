@@ -108,7 +108,7 @@ class CharacterReplacementPipeline:
         """
         import cv2
 
-        threshold = float(getattr(self._cfg, "scene_cut_threshold", 0.0))
+        threshold = float(self._cfg.scene_cut_threshold)
         if threshold <= 0.0:
             return False
 
