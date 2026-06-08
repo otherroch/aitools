@@ -31,6 +31,8 @@ def _stub_pipeline(batch_size: int = 1, enable_timers: bool = False):
     pipe._enhancer = MagicMock()
     pipe._enhancer.available = False
     pipe._blender = MagicMock()
+    pipe._prev_gray = None
+    pipe._scene_cut_cooldown = 0
     return pipe
 
 

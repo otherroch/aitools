@@ -105,6 +105,16 @@ class CharacterReplacementPipeline:
     # segments (e.g. fast-cut intros) that hover near the threshold.
     _SCENE_CUT_COOLDOWN: int = 30
 
+    @staticmethod
+    def _downscale_gray(frame: np.ndarray) -> np.ndarray:
+        """Return a small grayscale thumbnail (~160 px wide) for scene-cut comparison."""
+        import cv2
+
+        w = frame.shape[1]
+        scale = max(1, w // 160)
+        small = frame[::scale, ::scale]
+        return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
     def _detect_scene_cut(self, frame: np.ndarray) -> bool:
         """Return True when the mean per-pixel difference between *frame*
         and the previous frame exceeds ``scene_cut_threshold``.
@@ -121,24 +131,16 @@ class CharacterReplacementPipeline:
             return False
 
         # Cooldown: skip detection while temporal state is rebuilding
-        cooldown = getattr(self, "_scene_cut_cooldown", 0)
-        if cooldown > 0:
-            self._scene_cut_cooldown = cooldown - 1
+        if self._scene_cut_cooldown > 0:
+            self._scene_cut_cooldown -= 1
             # Still update _prev_gray so the first comparison after
             # cooldown uses the most recent frame, not a stale one.
-            h, w = frame.shape[:2]
-            scale = max(1, w // 160)
-            small = frame[::scale, ::scale]
-            self._prev_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            self._prev_gray = self._downscale_gray(frame)
             return False
 
-        # Downscale to ~160px wide for a fast comparison
-        h, w = frame.shape[:2]
-        scale = max(1, w // 160)
-        small = frame[::scale, ::scale]
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        gray = self._downscale_gray(frame)
 
-        prev = getattr(self, "_prev_gray", None)
+        prev = self._prev_gray
         self._prev_gray = gray
 
         if prev is None:
