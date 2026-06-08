@@ -1,10 +1,14 @@
 # vicrop
 
-Extract face-cropped PNG frames from video files.
+Extract face-cropped PNG frames or per-person video segments from video files.
 
-Reads video files using OpenCV, samples frames at a configurable interval, detects faces in each frame, crops them with padding, and saves them as PNG files. Optionally clusters face crops by identity into `person_NN` sub-folders (same greedy nearest-neighbour algorithm as `portrait-prep crop`). Optionally scores each crop for reference-photo quality and writes a `reflist.txt` per identity.
+Reads video files using OpenCV, samples frames at a configurable interval (`--every-n`), detects faces in each sampled frame, crops them with padding, and saves them as PNG files. Optionally clusters face crops by identity into `person_NN` sub-folders (same greedy nearest-neighbour algorithm as `portrait-prep crop`). Optionally scores each crop for reference-photo quality and writes a `reflist.txt` per identity.
+
+When `--output-type video` is used, vicrop instead extracts MP4 segments based on face detection performed on sampled frames (every `--every-n` frames). Contiguous runs of sampled frames that contain exactly one person are grouped into segments; the frames in between sampled frames are included in the segment without individual detection, so multi-person frames may appear in the output if they fall between sampled frames. Each segment is cropped and resized to a square around the detected face. This is useful for preparing single-subject training clips.
 
 ## Usage
+
+### Photo mode (default)
 
 ```bash
 # Process all videos in a directory (face-crop every 30th frame)
@@ -30,7 +34,7 @@ vicrop --input ./videos --output-dir ./frames --ref-thresh 0.75
 vicrop --input ./videos --output-dir ./frames --ref-thresh 0
 ```
 
-Output is organised as:
+Photo output is organised as:
 ```
 frames/
 └── <video_stem>/
@@ -43,6 +47,31 @@ frames/
         ├── frame000060_face1.png
         └── ref/
             └── frame000060_face1.png
+```
+
+### Video segment mode
+
+```bash
+# Extract single-person video segments (max 30 s each, discard clips < 2 s)
+vicrop --input ./videos --output-dir ./segments --output-type video
+
+# Custom segment length limits
+vicrop --input ./videos --output-dir ./segments --output-type video \
+    --max-segment-length 15 --min-segment-length 5
+
+# Process a single file
+vicrop --input ./interview.mp4 --output-dir ./segments --output-type video
+```
+
+Video output is organised as:
+```
+segments/
+└── <video_stem>/
+    ├── person_01/
+    │   ├── seg_001.mp4
+    │   └── seg_002.mp4
+    └── person_02/
+        └── seg_001.mp4
 ```
 
 ## Reference photo selection
@@ -83,10 +112,13 @@ Lower values cast a wider net and produce a larger reference set; higher values 
 | `--margin-ratio` | `0.4` | Fractional padding around each detected face bbox (see below) |
 | `--crop-size` | `1024` | Output square resolution (pixels) |
 | `--no-classify` | — | Disable identity clustering |
-| `--tolerance` | `0.6` | Face-distance threshold for clustering (see below) |
+| `--tolerance` | `0.7` | Face-distance threshold for clustering (see below) |
 | `--detection-model` | `hog` | `hog` (fast) or `cnn` (more accurate) |
-| `--ref-thresh` | `0.8` | Minimum quality score (0–1) for reference-photo selection; `0` disables |
+| `--ref-thresh` | `0.65` | Minimum quality score (0–1) for reference-photo selection; `0` disables |
 | `--no-skip-existing` | — | Re-process videos whose output already contains frames |
+| `--output-type` | `photo` | `photo` (face-cropped PNGs) or `video` (single-person MP4 segments) |
+| `--max-segment-length` | `30` | Maximum segment duration in seconds; longer segments are split (video mode only) |
+| `--min-segment-length` | `2` | Minimum segment duration in seconds; shorter segments are discarded (video mode only) |
 
 ### `--margin-ratio` — controlling how much context surrounds the face
 
