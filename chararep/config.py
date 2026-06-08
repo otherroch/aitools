@@ -65,6 +65,14 @@ class PipelineConfig:
     mask_blur_kernel: int = 15  # Gaussian blur kernel size for softening mask edges
     mask_erode_pixels: int = 2  # erosion pixels to avoid boundary artifacts
 
+    # ── Scene-cut detection ──────────────────────────────────────────────
+    # Mean per-pixel difference threshold between consecutive frames.
+    # When exceeded, the pipeline resets all temporal state (landmark
+    # smoothing history, tracker tracks, temporal blend buffers) so that
+    # stale data from the previous scene does not contaminate the new one.
+    # 0.0 disables scene-cut detection.
+    scene_cut_threshold: float = 35.0
+
     # ── Temporal smoothing ────────────────────────────────────────────────
     # Previous-frame weight for overlap-only temporal smoothing.
     # 0.0 disables it; small values such as 0.1-0.2 can damp residual shimmer.

@@ -685,3 +685,128 @@ class TestTrackedFaceSnapshot:
         # But should have the same data
         assert captured[0][0].track_id == tf.track_id
         assert captured[0][0].identity_label == tf.identity_label
+
+
+# ---------------------------------------------------------------------------
+# Scene-cut detection
+# ---------------------------------------------------------------------------
+
+
+class TestSceneCutDetection:
+    def test_no_scene_cut_on_similar_frames(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        frame = np.ones((64, 64, 3), dtype=np.uint8) * 128
+        assert pipe._detect_scene_cut(frame) is False  # first frame, no prev
+        assert pipe._detect_scene_cut(frame) is False  # identical frame
+
+    def test_scene_cut_on_large_difference(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)  # seed prev
+        assert pipe._detect_scene_cut(bright) is True
+
+    def test_scene_cut_disabled_when_threshold_zero(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 0.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)
+        assert pipe._detect_scene_cut(bright) is False
+
+    def test_reset_temporal_state_clears_all(self):
+        pipe = _stub_pipeline()
+        pipe._landmark_history = {1: (0, np.zeros((5, 2)))}
+        pipe._prev_face_part = np.zeros((4, 4, 3))
+        pipe._prev_face_mask = np.zeros((4, 4))
+        pipe._prev_gray = np.zeros((4, 4))
+
+        pipe._reset_temporal_state()
+
+        assert pipe._landmark_history == {}
+        assert pipe._prev_face_part is None
+        assert pipe._prev_face_mask is None
+        assert pipe._prev_gray is None
+        pipe._detector.reset_tracks.assert_called_once()
+
+    def test_scene_cut_resets_state_in_prepare_frame(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+        pipe._detector.detect.return_value = []
+
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        # Seed landmark history
+        pipe._landmark_history = {1: (0, np.zeros((5, 2)))}
+
+        # Process a dark then a bright frame
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        pipe._prepare_frame(dark, 0, stats)
+        assert len(pipe._landmark_history) == 1  # not cleared yet
+
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+        pipe._prepare_frame(bright, 1, stats)
+        assert pipe._landmark_history == {}  # cleared by scene cut
+
+    def test_first_frame_no_scene_cut(self):
+        """The very first frame should never trigger a scene cut."""
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 255
+        assert pipe._detect_scene_cut(bright) is False
+
+
+class TestSceneCutCliArg:
+    def test_default_scene_cut_threshold(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["chararep", "-i", "in.mp4", "-o", "out.mp4"])
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.scene_cut_threshold == PipelineConfig.scene_cut_threshold
+
+    def test_custom_scene_cut_threshold(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["chararep", "-i", "in.mp4", "-o", "out.mp4", "--scene-cut-threshold", "50.0"],
+        )
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.scene_cut_threshold == 50.0
+
+    def test_scene_cut_threshold_zero_disables(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["chararep", "-i", "in.mp4", "-o", "out.mp4", "--scene-cut-threshold", "0"],
+        )
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.scene_cut_threshold == 0.0
+
+
+class TestResetTracks:
+    def test_reset_tracks_clears_all(self):
+        from chararep.face_detector import FaceDetector, TrackedFace
+
+        cfg = PipelineConfig(detection_model="buffalo_l")
+        with patch("chararep.face_detector.backend_for_model") as mock_backend:
+            mock_backend.return_value = MagicMock()
+            det = FaceDetector(cfg)
+
+        det._tracks = [
+            TrackedFace(
+                track_id=1,
+                bbox=np.array([0, 0, 10, 10], dtype=np.float32),
+                landmarks=np.zeros((5, 2), dtype=np.float32),
+                identity_label="hero",
+            ),
+        ]
+        assert len(det._tracks) == 1
+        det.reset_tracks()
+        assert len(det._tracks) == 0

@@ -67,6 +67,9 @@ class CharacterReplacementPipeline:
         self._prev_face_mask: np.ndarray | None = None
         self._landmark_history: dict[int, tuple[int, np.ndarray]] = {}
 
+        # Scene-cut detection state
+        self._prev_gray: np.ndarray | None = None
+
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
             "All pipeline components ready.  GPU memory: %.2f / %.2f GB",
@@ -95,6 +98,56 @@ class CharacterReplacementPipeline:
         if isinstance(age, (int, np.integer)):
             return int(age) == 0
         return True
+
+    def _detect_scene_cut(self, frame: np.ndarray) -> bool:
+        """Return True when the mean per-pixel difference between *frame*
+        and the previous frame exceeds ``scene_cut_threshold``.
+
+        A small down-scaled grayscale copy is used to keep the comparison
+        cheap.
+        """
+        import cv2
+
+        threshold = float(getattr(self._cfg, "scene_cut_threshold", 0.0))
+        if threshold <= 0.0:
+            return False
+
+        # Downscale to ~160px wide for a fast comparison
+        h, w = frame.shape[:2]
+        scale = max(1, w // 160)
+        small = frame[::scale, ::scale]
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+        prev = getattr(self, "_prev_gray", None)
+        self._prev_gray = gray
+
+        if prev is None:
+            return False
+
+        if prev.shape != gray.shape:
+            return False
+
+        diff = float(cv2.absdiff(prev, gray).mean())
+        is_cut = diff > threshold
+        if is_cut:
+            logger.info(
+                "Scene cut detected (mean_diff=%.1f, threshold=%.1f)",
+                diff,
+                threshold,
+            )
+        return is_cut
+
+    def _reset_temporal_state(self) -> None:
+        """Clear all temporal state so a scene cut doesn't contaminate
+        the new scene with stale landmarks, tracks, or blend buffers.
+        """
+        history = getattr(self, "_landmark_history", None)
+        if history is not None:
+            history.clear()
+        self._prev_face_part = None
+        self._prev_face_mask = None
+        self._prev_gray = None
+        self._detector.reset_tracks()
 
     def _smooth_track_landmarks(
         self,
@@ -444,6 +497,10 @@ class CharacterReplacementPipeline:
         :meth:`_finish_frame`.
         """
         timers = stats.get("timers")
+
+        # 0. Scene-cut detection — reset temporal state before detecting
+        if self._detect_scene_cut(frame):
+            self._reset_temporal_state()
 
         # 1. Detect & track faces
         _t = time.perf_counter()
