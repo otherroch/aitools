@@ -175,6 +175,8 @@ def _filter_and_split_segments(
             chunk_end = min(start + max_frames - 1, end)
             if chunk_end - start + 1 >= min_frames:
                 chunk_bboxes = [(fi, b) for fi, b in bboxes if start <= fi <= chunk_end]
+                if not chunk_bboxes:
+                    chunk_bboxes = bboxes
                 result.append(_Segment(start, chunk_end, enc, sample_bboxes=chunk_bboxes))
             start = chunk_end + 1
 
