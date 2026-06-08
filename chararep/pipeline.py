@@ -69,6 +69,7 @@ class CharacterReplacementPipeline:
 
         # Scene-cut detection state
         self._prev_gray: np.ndarray | None = None
+        self._scene_cut_cooldown: int = 0
 
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
@@ -99,17 +100,36 @@ class CharacterReplacementPipeline:
             return int(age) == 0
         return True
 
+    # Number of frames to suppress scene-cut detection after a reset.
+    # Prevents cascading false-positive resets in sustained high-motion
+    # segments (e.g. fast-cut intros) that hover near the threshold.
+    _SCENE_CUT_COOLDOWN: int = 30
+
     def _detect_scene_cut(self, frame: np.ndarray) -> bool:
         """Return True when the mean per-pixel difference between *frame*
         and the previous frame exceeds ``scene_cut_threshold``.
 
         A small down-scaled grayscale copy is used to keep the comparison
-        cheap.
+        cheap.  After a positive detection, a cooldown suppresses further
+        detections for :attr:`_SCENE_CUT_COOLDOWN` frames so the pipeline
+        can rebuild temporal state before the next check.
         """
         import cv2
 
         threshold = float(self._cfg.scene_cut_threshold)
         if threshold <= 0.0:
+            return False
+
+        # Cooldown: skip detection while temporal state is rebuilding
+        cooldown = getattr(self, "_scene_cut_cooldown", 0)
+        if cooldown > 0:
+            self._scene_cut_cooldown = cooldown - 1
+            # Still update _prev_gray so the first comparison after
+            # cooldown uses the most recent frame, not a stale one.
+            h, w = frame.shape[:2]
+            scale = max(1, w // 160)
+            small = frame[::scale, ::scale]
+            self._prev_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             return False
 
         # Downscale to ~160px wide for a fast comparison
@@ -130,6 +150,7 @@ class CharacterReplacementPipeline:
         diff = float(cv2.absdiff(prev, gray).mean())
         is_cut = diff > threshold
         if is_cut:
+            self._scene_cut_cooldown = self._SCENE_CUT_COOLDOWN
             logger.info(
                 "Scene cut detected (mean_diff=%.1f, threshold=%.1f)",
                 diff,

@@ -763,6 +763,40 @@ class TestSceneCutDetection:
         bright = np.ones((64, 64, 3), dtype=np.uint8) * 255
         assert pipe._detect_scene_cut(bright) is False
 
+    def test_cooldown_suppresses_consecutive_cuts(self):
+        """After a scene cut, detection is suppressed for _SCENE_CUT_COOLDOWN frames."""
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)  # seed prev
+        assert pipe._detect_scene_cut(bright) is True  # triggers cut + cooldown
+
+        # Immediately following large-diff frames should NOT trigger
+        pipe._detect_scene_cut(dark)  # during cooldown
+        assert pipe._detect_scene_cut(bright) is False  # suppressed
+
+    def test_cooldown_expires_and_detection_resumes(self):
+        """After cooldown expires, detection works again."""
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)  # seed prev
+        assert pipe._detect_scene_cut(bright) is True  # triggers cut
+
+        # Exhaust cooldown with neutral frames
+        neutral = np.ones((64, 64, 3), dtype=np.uint8) * 128
+        for _ in range(pipe._SCENE_CUT_COOLDOWN):
+            assert pipe._detect_scene_cut(neutral) is False
+
+        # Cooldown expired — neutral is now prev_gray; big jump should trigger
+        assert pipe._detect_scene_cut(dark) is True  # real cut detected
+
 
 class TestSceneCutCliArg:
     def test_default_scene_cut_threshold(self, monkeypatch):
