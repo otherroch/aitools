@@ -182,6 +182,7 @@ class TestBuildConfigFromArgs:
             verbose=False,
             log_file=None,
             timers=False,
+            scene_cut_threshold=35.0,
         )
         defaults.update(kw)
         return argparse.Namespace(**defaults)
