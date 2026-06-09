@@ -87,6 +87,51 @@ class TestTargetIdentity:
         ti = TargetIdentity("hero", [emb], [])
         np.testing.assert_array_equal(ti.recognition_embedding, np.zeros(3))
 
+    def test_swap_face_uses_gallery_average_embedding(self):
+        emb1 = _unit(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+        emb2 = _unit(np.array([0.0, 1.0, 0.0], dtype=np.float32))
+        face1 = types.SimpleNamespace(
+            embedding=emb1.copy(),
+            normed_embedding=emb1.copy(),
+            det_score=0.9,
+        )
+        face2 = types.SimpleNamespace(
+            embedding=emb2.copy(),
+            normed_embedding=emb2.copy(),
+            det_score=0.8,
+        )
+
+        ti = TargetIdentity("hero", [emb1], [face1, face2])
+
+        expected = _unit(np.array([1.0, 1.0, 0.0], dtype=np.float32))
+        np.testing.assert_allclose(ti.swap_face.embedding, expected, atol=1e-6)
+        np.testing.assert_allclose(ti.swap_face.normed_embedding, expected, atol=1e-6)
+
+    def test_reference_faces_push_outlier_portrait_back(self):
+        center1 = _unit(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+        center2 = _unit(np.array([0.98, 0.2, 0.0], dtype=np.float32))
+        outlier = _unit(np.array([-1.0, 0.0, 0.0], dtype=np.float32))
+
+        outlier_face = types.SimpleNamespace(
+            embedding=outlier.copy(),
+            normed_embedding=outlier.copy(),
+            det_score=0.99,
+        )
+        center_face = types.SimpleNamespace(
+            embedding=center1.copy(),
+            normed_embedding=center1.copy(),
+            det_score=0.6,
+        )
+        support_face = types.SimpleNamespace(
+            embedding=center2.copy(),
+            normed_embedding=center2.copy(),
+            det_score=0.5,
+        )
+
+        ti = TargetIdentity("hero", [center1], [outlier_face, center_face, support_face])
+
+        assert ti.reference_faces[-1] is outlier_face
+
 
 # ---------------------------------------------------------------------------
 # FaceRecognizer.match
@@ -448,3 +493,96 @@ class TestEncodeImages:
         assert faces[0].portrait_crop_arcv2.dtype == np.uint8
         # arcv2 and arcface_crop use the same template; they should be identical arrays
         np.testing.assert_array_equal(faces[0].portrait_crop_arcv2, faces[0].arcface_crop)
+
+
+class TestBuildGalleryPortraitFiltering:
+    def test_build_gallery_ignores_eyewear_portraits_when_clean_ones_exist(self):
+        rec = FaceRecognizer.__new__(FaceRecognizer)
+        rec._cfg = _make_cfg(
+            characters=[
+                CharacterMapping(
+                    source_label="hero",
+                    reference_paths=["ref.jpg"],
+                    portrait_paths=["p1.jpg", "p2.jpg", "p3.jpg"],
+                )
+            ]
+        )
+        rec._backend = _make_stub_backend()
+        rec._targets = []
+
+        clean1 = types.SimpleNamespace(
+            embedding=_unit(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+            normed_embedding=_unit(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+            det_score=0.7,
+            eyewear_detected=False,
+        )
+        clean2 = types.SimpleNamespace(
+            embedding=_unit(np.array([0.9, 0.1, 0.0], dtype=np.float32)),
+            normed_embedding=_unit(np.array([0.9, 0.1, 0.0], dtype=np.float32)),
+            det_score=0.8,
+            eyewear_detected=False,
+        )
+        glasses = types.SimpleNamespace(
+            embedding=_unit(np.array([0.0, 1.0, 0.0], dtype=np.float32)),
+            normed_embedding=_unit(np.array([0.0, 1.0, 0.0], dtype=np.float32)),
+            det_score=0.95,
+            eyewear_detected=True,
+        )
+
+        def fake_encode(paths, kind, label):
+            if kind == "reference":
+                return [_unit(np.ones(3, dtype=np.float32))], []
+            return [], [glasses, clean1, clean2]
+
+        rec._encode_images = fake_encode
+
+        rec._build_gallery(rec._cfg.characters)
+
+        target = rec.get_target("hero")
+        assert target is not None
+        assert len(target.reference_faces) == 2
+        assert all(face is not glasses for face in target.reference_faces)
+        assert all(
+            not getattr(face, "eyewear_detected", False)
+            for face in target.reference_faces
+        )
+
+    def test_build_gallery_falls_back_when_all_portraits_look_like_eyewear(self):
+        rec = FaceRecognizer.__new__(FaceRecognizer)
+        rec._cfg = _make_cfg(
+            characters=[
+                CharacterMapping(
+                    source_label="hero",
+                    reference_paths=["ref.jpg"],
+                    portrait_paths=["p1.jpg", "p2.jpg"],
+                )
+            ]
+        )
+        rec._backend = _make_stub_backend()
+        rec._targets = []
+
+        glasses1 = types.SimpleNamespace(
+            embedding=_unit(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+            normed_embedding=_unit(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+            det_score=0.95,
+            eyewear_detected=True,
+        )
+        glasses2 = types.SimpleNamespace(
+            embedding=_unit(np.array([0.9, 0.1, 0.0], dtype=np.float32)),
+            normed_embedding=_unit(np.array([0.9, 0.1, 0.0], dtype=np.float32)),
+            det_score=0.85,
+            eyewear_detected=True,
+        )
+
+        def fake_encode(paths, kind, label):
+            if kind == "reference":
+                return [_unit(np.ones(3, dtype=np.float32))], []
+            return [], [glasses1, glasses2]
+
+        rec._encode_images = fake_encode
+
+        rec._build_gallery(rec._cfg.characters)
+
+        target = rec.get_target("hero")
+        assert target is not None
+        assert len(target.reference_faces) == 2
