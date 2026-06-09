@@ -66,6 +66,7 @@ class CharacterReplacementPipeline:
         self._prev_face_part: np.ndarray | None = None
         self._prev_face_mask: np.ndarray | None = None
         self._landmark_history: dict[int, tuple[int, np.ndarray]] = {}
+        self._scene_cut_cooldown: int = 0
 
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
@@ -265,6 +266,9 @@ class CharacterReplacementPipeline:
 
     def run(self) -> dict:
         """Process the entire video and return run statistics."""
+        if not hasattr(self, "_scene_cut_cooldown"):
+            self._scene_cut_cooldown = 0
+
         stats = {
             "frames_total": 0,
             "frames_swapped": 0,
