@@ -87,6 +87,7 @@ class TestPrepareFrame:
         target = MagicMock()
         target.label = "hero"
         target.reference_faces = ["ref_face"]
+        target.swap_face = None
 
         pipe._detector.detect.return_value = [tf]
         pipe._recognizer.identify_faces.return_value = [tf]
@@ -98,6 +99,32 @@ class TestPrepareFrame:
         result = pipe._prepare_frame(frame, 5, stats)
         assert len(result[3]) == 1  # one swap pair
         assert result[3][0] == ("face_obj_sentinel", "ref_face")
+        assert stats["faces_identified"] == 1
+
+    def test_swap_pair_prefers_target_swap_face_when_available(self):
+        pipe = _stub_pipeline()
+
+        tf = MagicMock()
+        tf.identity_label = "hero"
+        tf.track_id = 1
+        tf.face_obj = "face_obj_sentinel"
+
+        target = MagicMock()
+        target.label = "hero"
+        target.reference_faces = ["ref_face"]
+        target.swap_face = None
+        target.swap_face = "avg_face"
+
+        pipe._detector.detect.return_value = [tf]
+        pipe._recognizer.identify_faces.return_value = [tf]
+        pipe._recognizer.get_target.return_value = target
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        result = pipe._prepare_frame(frame, 5, stats)
+        assert len(result[3]) == 1
+        assert result[3][0] == ("face_obj_sentinel", "avg_face")
         assert stats["faces_identified"] == 1
 
     def test_stale_tracks_are_skipped_for_swapping(self):
@@ -125,6 +152,7 @@ class TestPrepareFrame:
         target = MagicMock()
         target.label = "hero"
         target.reference_faces = ["ref_face"]
+        target.swap_face = None
 
         pipe._detector.detect.return_value = [stale, active]
         pipe._recognizer.get_target.return_value = target

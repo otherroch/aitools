@@ -605,7 +605,11 @@ class CharacterReplacementPipeline:
 
             logger.debug("Track %d -> target '%s' with %d reference faces", tf.track_id, target.label, len(target.reference_faces))
 
-            swap_pairs.append((tf.face_obj, target.reference_faces[0]))
+            swap_face = getattr(target, "swap_face", None)
+            if swap_face is None:
+                swap_face = target.reference_faces[0]
+
+            swap_pairs.append((tf.face_obj, swap_face))
 
         logger.debug("Frame %d: Identified %d faces for swapping", frame_idx, len(swap_pairs))
 
