@@ -294,6 +294,17 @@ Config JSON format
             "0 disables it; small values like 0.1-0.2 can reduce residual shimmer."
         ),
     )
+    p.add_argument(
+        "--scene-cut-threshold",
+        type=float,
+        default=PipelineConfig.scene_cut_threshold,
+        help=(
+            "Mean per-pixel grayscale difference between consecutive frames "
+            "above which a scene cut is declared and all temporal state "
+            "(landmark smoothing, tracker tracks, blend buffers) is reset. "
+            f"0 disables scene-cut detection (default: {PipelineConfig.scene_cut_threshold})."
+        ),
+    )
 
     # ── Logging ──────────────────────────────────────────────────────────
     p.add_argument(
@@ -396,6 +407,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         mask_blur_kernel=args.mask_blur_kernel,
         mask_erode_pixels=args.mask_erode_pixels,
         temporal_smooth_alpha=float(temporal_smooth_alpha),
+        scene_cut_threshold=float(args.scene_cut_threshold),
         log_level="DEBUG" if args.verbose else "INFO",
         log_file=args.log_file,
         enable_timers=args.timers,
