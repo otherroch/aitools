@@ -65,6 +65,7 @@ class CharacterReplacementPipeline:
         # Temporal smoothing state: for localized EMA on face regions
         self._prev_face_part: np.ndarray | None = None
         self._prev_face_mask: np.ndarray | None = None
+        self._pending_blend_reset_frames: set[int] = set()
         self._landmark_history: dict[int, tuple[int, np.ndarray]] = {}
 
         # Scene-cut detection state
@@ -160,15 +161,20 @@ class CharacterReplacementPipeline:
             )
         return is_cut
 
-    def _reset_temporal_state(self) -> None:
+    def _clear_temporal_blend_buffers(self) -> None:
+        """Clear temporal blend history used by localized face EMA."""
+        self._prev_face_part = None
+        self._prev_face_mask = None
+
+    def _reset_temporal_state(self, *, clear_blend_buffers: bool = True) -> None:
         """Clear all temporal state so a scene cut doesn't contaminate
         the new scene with stale landmarks, tracks, or blend buffers.
         """
         history = getattr(self, "_landmark_history", None)
         if history is not None:
             history.clear()
-        self._prev_face_part = None
-        self._prev_face_mask = None
+        if clear_blend_buffers:
+            self._clear_temporal_blend_buffers()
         self._prev_gray = None
         self._detector.reset_tracks()
 
@@ -450,8 +456,7 @@ class CharacterReplacementPipeline:
 
                 # Submit parallel: swap + blend + enhance
                 future = pool.submit(self._finish_frame, *prep)
-                # We store the frame with the future to allow localized EMA in _drain_one
-                pending.append((frame_data, future))
+                pending.append((fidx, future))
 
                 # Once we hit capacity, drain the oldest result to
                 # keep at most *batch_size* frames in flight.
@@ -478,8 +483,12 @@ class CharacterReplacementPipeline:
         total_frames: int,
     ) -> int:
         """Wait for the oldest pending future and write its result."""
-        frame, future = pending.popleft()
+        frame_idx, future = pending.popleft()
         result, local, mask = future.result()
+
+        if frame_idx in self._pending_blend_reset_frames:
+            self._clear_temporal_blend_buffers()
+            self._pending_blend_reset_frames.discard(frame_idx)
 
         result = self._apply_temporal_face_blend(result, mask)
 
@@ -523,7 +532,10 @@ class CharacterReplacementPipeline:
 
         # 0. Scene-cut detection — reset temporal state before detecting
         if self._detect_scene_cut(frame):
-            self._reset_temporal_state()
+            clear_blend_buffers = self._cfg.batch_size <= 1
+            self._reset_temporal_state(clear_blend_buffers=clear_blend_buffers)
+            if not clear_blend_buffers:
+                self._pending_blend_reset_frames.add(frame_idx)
 
         # 1. Detect & track faces
         _t = time.perf_counter()

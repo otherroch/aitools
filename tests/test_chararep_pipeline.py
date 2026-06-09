@@ -31,6 +31,9 @@ def _stub_pipeline(batch_size: int = 1, enable_timers: bool = False):
     pipe._enhancer = MagicMock()
     pipe._enhancer.available = False
     pipe._blender = MagicMock()
+    pipe._prev_face_part = None
+    pipe._prev_face_mask = None
+    pipe._pending_blend_reset_frames = set()
     pipe._prev_gray = None
     pipe._scene_cut_cooldown = 0
     return pipe
@@ -410,7 +413,7 @@ class TestDrainOne:
 
         future = Future()
         future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local, np.zeros((2, 2), dtype=np.uint8)))
-        pending = deque([(np.zeros((2, 2, 3), dtype=np.uint8), future)])
+        pending = deque([(0, future)])
 
         count = pipe._drain_one(pending, writer, stats, 0, 0.0, 100)
         assert count == 1
@@ -419,6 +422,31 @@ class TestDrainOne:
         assert stats["faces_swapped"] == 2
         assert stats["frames_total"] == 1
         assert len(pending) == 0
+
+    def test_scene_cut_frame_clears_temporal_blend_buffers_before_blend(self):
+        pipe = _stub_pipeline(batch_size=2)
+        pipe._pending_blend_reset_frames = {7}
+        pipe._prev_face_part = np.ones((2, 2, 3), dtype=np.float32)
+        pipe._prev_face_mask = np.ones((2, 2), dtype=np.float32)
+        writer = MagicMock()
+        stats = {"frames_total": 0, "frames_swapped": 0, "faces_swapped": 0}
+        local = {
+            "frames_swapped": 0,
+            "faces_swapped": 0,
+            "swap": 0.0,
+            "blend": 0.0,
+            "enhance": 0.0,
+        }
+
+        future = Future()
+        future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local, np.zeros((2, 2), dtype=np.uint8)))
+        pending = deque([(7, future)])
+
+        pipe._drain_one(pending, writer, stats, 0, 0.0, 100)
+
+        assert pipe._prev_face_part is None
+        assert pipe._prev_face_mask is None
+        assert 7 not in pipe._pending_blend_reset_frames
 
 
 # ---------------------------------------------------------------------------
