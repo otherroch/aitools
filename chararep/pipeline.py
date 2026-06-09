@@ -107,6 +107,27 @@ class CharacterReplacementPipeline:
     # segments (e.g. fast-cut intros) that hover near the threshold.
     _SCENE_CUT_COOLDOWN: int = 30
 
+    def _ensure_runtime_state(self) -> None:
+        """Populate runtime attributes when ``__init__`` was bypassed.
+
+        Some tests and lightweight tooling construct the pipeline via
+        ``__new__`` and manually inject mocked components. In that case,
+        temporal/scene-cut fields normally created in ``__init__`` are
+        absent and must be initialized lazily before processing starts.
+        """
+        if not hasattr(self, "_prev_face_part"):
+            self._prev_face_part = None
+        if not hasattr(self, "_prev_face_mask"):
+            self._prev_face_mask = None
+        if not hasattr(self, "_pending_blend_reset_frames"):
+            self._pending_blend_reset_frames = set()
+        if not hasattr(self, "_landmark_history"):
+            self._landmark_history = {}
+        if not hasattr(self, "_scene_cut_cooldown"):
+            self._scene_cut_cooldown = 0
+        if not hasattr(self, "_prev_gray"):
+            self._prev_gray = None
+
     @staticmethod
     def _downscale_gray(frame: np.ndarray) -> np.ndarray:
         """Return a small grayscale thumbnail (~160 px wide) for scene-cut comparison."""
@@ -348,8 +369,7 @@ class CharacterReplacementPipeline:
 
     def run(self) -> dict:
         """Process the entire video and return run statistics."""
-        if not hasattr(self, "_scene_cut_cooldown"):
-            self._scene_cut_cooldown = 0
+        self._ensure_runtime_state()
 
         stats = {
             "frames_total": 0,
