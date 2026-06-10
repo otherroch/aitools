@@ -67,7 +67,6 @@ class CharacterReplacementPipeline:
         self._prev_face_mask: np.ndarray | None = None
         self._pending_blend_reset_frames: set[int] = set()
         self._landmark_history: dict[int, tuple[int, np.ndarray]] = {}
-        self._scene_cut_cooldown: int = 0
 
         # Scene-cut detection state
         self._prev_gray: np.ndarray | None = None
@@ -553,6 +552,7 @@ class CharacterReplacementPipeline:
         :meth:`_finish_frame`.
         """
         timers = stats.get("timers")
+        self._ensure_runtime_state()
 
         # 0. Scene-cut detection — reset temporal state before detecting
         if self._detect_scene_cut(frame):
