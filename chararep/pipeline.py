@@ -65,7 +65,12 @@ class CharacterReplacementPipeline:
         # Temporal smoothing state: for localized EMA on face regions
         self._prev_face_part: np.ndarray | None = None
         self._prev_face_mask: np.ndarray | None = None
+        self._pending_blend_reset_frames: set[int] = set()
         self._landmark_history: dict[int, tuple[int, np.ndarray]] = {}
+
+        # Scene-cut detection state
+        self._prev_gray: np.ndarray | None = None
+        self._scene_cut_cooldown: int = 0
 
         used, total = gpu_mem_info(cfg.device_id)
         logger.info(
@@ -95,6 +100,104 @@ class CharacterReplacementPipeline:
         if isinstance(age, (int, np.integer)):
             return int(age) == 0
         return True
+
+    # Number of frames to suppress scene-cut detection after a reset.
+    # Prevents cascading false-positive resets in sustained high-motion
+    # segments (e.g. fast-cut intros) that hover near the threshold.
+    _SCENE_CUT_COOLDOWN: int = 30
+
+    def _ensure_runtime_state(self) -> None:
+        """Populate runtime attributes when ``__init__`` was bypassed.
+
+        Some tests and lightweight tooling construct the pipeline via
+        ``__new__`` and manually inject mocked components. In that case,
+        temporal/scene-cut fields normally created in ``__init__`` are
+        absent and must be initialized lazily before processing starts.
+        """
+        if not hasattr(self, "_prev_face_part"):
+            self._prev_face_part = None
+        if not hasattr(self, "_prev_face_mask"):
+            self._prev_face_mask = None
+        if not hasattr(self, "_pending_blend_reset_frames"):
+            self._pending_blend_reset_frames = set()
+        if not hasattr(self, "_landmark_history"):
+            self._landmark_history = {}
+        if not hasattr(self, "_scene_cut_cooldown"):
+            self._scene_cut_cooldown = 0
+        if not hasattr(self, "_prev_gray"):
+            self._prev_gray = None
+
+    @staticmethod
+    def _downscale_gray(frame: np.ndarray) -> np.ndarray:
+        """Return a small grayscale thumbnail (~160 px wide) for scene-cut comparison."""
+        import cv2
+
+        w = frame.shape[1]
+        scale = max(1, w // 160)
+        small = frame[::scale, ::scale]
+        return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    def _detect_scene_cut(self, frame: np.ndarray) -> bool:
+        """Return True when the mean per-pixel difference between *frame*
+        and the previous frame exceeds ``scene_cut_threshold``.
+
+        A small down-scaled grayscale copy is used to keep the comparison
+        cheap.  After a positive detection, a cooldown suppresses further
+        detections for :attr:`_SCENE_CUT_COOLDOWN` frames so the pipeline
+        can rebuild temporal state before the next check.
+        """
+        import cv2
+
+        threshold = float(self._cfg.scene_cut_threshold)
+        if threshold <= 0.0:
+            return False
+
+        # Cooldown: skip detection while temporal state is rebuilding
+        if self._scene_cut_cooldown > 0:
+            self._scene_cut_cooldown -= 1
+            # Still update _prev_gray so the first comparison after
+            # cooldown uses the most recent frame, not a stale one.
+            self._prev_gray = self._downscale_gray(frame)
+            return False
+
+        gray = self._downscale_gray(frame)
+
+        prev = self._prev_gray
+        self._prev_gray = gray
+
+        if prev is None:
+            return False
+
+        if prev.shape != gray.shape:
+            return False
+
+        diff = float(cv2.absdiff(prev, gray).mean())
+        is_cut = diff > threshold
+        if is_cut:
+            self._scene_cut_cooldown = self._SCENE_CUT_COOLDOWN
+            logger.info(
+                "Scene cut detected (mean_diff=%.1f, threshold=%.1f)",
+                diff,
+                threshold,
+            )
+        return is_cut
+
+    def _clear_temporal_blend_buffers(self) -> None:
+        """Clear temporal blend history used by localized face EMA."""
+        self._prev_face_part = None
+        self._prev_face_mask = None
+
+    def _reset_temporal_state(self, *, clear_blend_buffers: bool = True) -> None:
+        """Clear all temporal state so a scene cut doesn't contaminate
+        the new scene with stale landmarks, tracks, or blend buffers.
+        """
+        history = getattr(self, "_landmark_history", None)
+        if history is not None:
+            history.clear()
+        if clear_blend_buffers:
+            self._clear_temporal_blend_buffers()
+        self._prev_gray = None
+        self._detector.reset_tracks()
 
     def _smooth_track_landmarks(
         self,
@@ -265,6 +368,8 @@ class CharacterReplacementPipeline:
 
     def run(self) -> dict:
         """Process the entire video and return run statistics."""
+        self._ensure_runtime_state()
+
         stats = {
             "frames_total": 0,
             "frames_swapped": 0,
@@ -374,8 +479,7 @@ class CharacterReplacementPipeline:
 
                 # Submit parallel: swap + blend + enhance
                 future = pool.submit(self._finish_frame, *prep)
-                # We store the frame with the future to allow localized EMA in _drain_one
-                pending.append((frame_data, future))
+                pending.append((fidx, future))
 
                 # Once we hit capacity, drain the oldest result to
                 # keep at most *batch_size* frames in flight.
@@ -402,8 +506,12 @@ class CharacterReplacementPipeline:
         total_frames: int,
     ) -> int:
         """Wait for the oldest pending future and write its result."""
-        frame, future = pending.popleft()
+        frame_idx, future = pending.popleft()
         result, local, mask = future.result()
+
+        if frame_idx in self._pending_blend_reset_frames:
+            self._clear_temporal_blend_buffers()
+            self._pending_blend_reset_frames.discard(frame_idx)
 
         result = self._apply_temporal_face_blend(result, mask)
 
@@ -444,6 +552,14 @@ class CharacterReplacementPipeline:
         :meth:`_finish_frame`.
         """
         timers = stats.get("timers")
+        self._ensure_runtime_state()
+
+        # 0. Scene-cut detection — reset temporal state before detecting
+        if self._detect_scene_cut(frame):
+            clear_blend_buffers = self._cfg.batch_size <= 1
+            self._reset_temporal_state(clear_blend_buffers=clear_blend_buffers)
+            if not clear_blend_buffers:
+                self._pending_blend_reset_frames.add(frame_idx)
 
         # 1. Detect & track faces
         _t = time.perf_counter()
@@ -489,7 +605,11 @@ class CharacterReplacementPipeline:
 
             logger.debug("Track %d -> target '%s' with %d reference faces", tf.track_id, target.label, len(target.reference_faces))
 
-            swap_pairs.append((tf.face_obj, target.reference_faces[0]))
+            swap_face = getattr(target, "swap_face", None)
+            if swap_face is None:
+                swap_face = target.reference_faces[0]
+
+            swap_pairs.append((tf.face_obj, swap_face))
 
         logger.debug("Frame %d: Identified %d faces for swapping", frame_idx, len(swap_pairs))
 

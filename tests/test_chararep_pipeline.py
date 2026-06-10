@@ -31,6 +31,11 @@ def _stub_pipeline(batch_size: int = 1, enable_timers: bool = False):
     pipe._enhancer = MagicMock()
     pipe._enhancer.available = False
     pipe._blender = MagicMock()
+    pipe._prev_face_part = None
+    pipe._prev_face_mask = None
+    pipe._pending_blend_reset_frames = set()
+    pipe._prev_gray = None
+    pipe._scene_cut_cooldown = 0
     return pipe
 
 
@@ -82,6 +87,7 @@ class TestPrepareFrame:
         target = MagicMock()
         target.label = "hero"
         target.reference_faces = ["ref_face"]
+        target.swap_face = None
 
         pipe._detector.detect.return_value = [tf]
         pipe._recognizer.identify_faces.return_value = [tf]
@@ -93,6 +99,32 @@ class TestPrepareFrame:
         result = pipe._prepare_frame(frame, 5, stats)
         assert len(result[3]) == 1  # one swap pair
         assert result[3][0] == ("face_obj_sentinel", "ref_face")
+        assert stats["faces_identified"] == 1
+
+    def test_swap_pair_prefers_target_swap_face_when_available(self):
+        pipe = _stub_pipeline()
+
+        tf = MagicMock()
+        tf.identity_label = "hero"
+        tf.track_id = 1
+        tf.face_obj = "face_obj_sentinel"
+
+        target = MagicMock()
+        target.label = "hero"
+        target.reference_faces = ["ref_face"]
+        target.swap_face = None
+        target.swap_face = "avg_face"
+
+        pipe._detector.detect.return_value = [tf]
+        pipe._recognizer.identify_faces.return_value = [tf]
+        pipe._recognizer.get_target.return_value = target
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        result = pipe._prepare_frame(frame, 5, stats)
+        assert len(result[3]) == 1
+        assert result[3][0] == ("face_obj_sentinel", "avg_face")
         assert stats["faces_identified"] == 1
 
     def test_stale_tracks_are_skipped_for_swapping(self):
@@ -120,6 +152,7 @@ class TestPrepareFrame:
         target = MagicMock()
         target.label = "hero"
         target.reference_faces = ["ref_face"]
+        target.swap_face = None
 
         pipe._detector.detect.return_value = [stale, active]
         pipe._recognizer.get_target.return_value = target
@@ -408,7 +441,7 @@ class TestDrainOne:
 
         future = Future()
         future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local, np.zeros((2, 2), dtype=np.uint8)))
-        pending = deque([(np.zeros((2, 2, 3), dtype=np.uint8), future)])
+        pending = deque([(0, future)])
 
         count = pipe._drain_one(pending, writer, stats, 0, 0.0, 100)
         assert count == 1
@@ -417,6 +450,31 @@ class TestDrainOne:
         assert stats["faces_swapped"] == 2
         assert stats["frames_total"] == 1
         assert len(pending) == 0
+
+    def test_scene_cut_frame_clears_temporal_blend_buffers_before_blend(self):
+        pipe = _stub_pipeline(batch_size=2)
+        pipe._pending_blend_reset_frames = {7}
+        pipe._prev_face_part = np.ones((2, 2, 3), dtype=np.float32)
+        pipe._prev_face_mask = np.ones((2, 2), dtype=np.float32)
+        writer = MagicMock()
+        stats = {"frames_total": 0, "frames_swapped": 0, "faces_swapped": 0}
+        local = {
+            "frames_swapped": 0,
+            "faces_swapped": 0,
+            "swap": 0.0,
+            "blend": 0.0,
+            "enhance": 0.0,
+        }
+
+        future = Future()
+        future.set_result((np.zeros((2, 2, 3), dtype=np.uint8), local, np.zeros((2, 2), dtype=np.uint8)))
+        pending = deque([(7, future)])
+
+        pipe._drain_one(pending, writer, stats, 0, 0.0, 100)
+
+        assert pipe._prev_face_part is None
+        assert pipe._prev_face_mask is None
+        assert 7 not in pipe._pending_blend_reset_frames
 
 
 # ---------------------------------------------------------------------------
@@ -685,3 +743,162 @@ class TestTrackedFaceSnapshot:
         # But should have the same data
         assert captured[0][0].track_id == tf.track_id
         assert captured[0][0].identity_label == tf.identity_label
+
+
+# ---------------------------------------------------------------------------
+# Scene-cut detection
+# ---------------------------------------------------------------------------
+
+
+class TestSceneCutDetection:
+    def test_no_scene_cut_on_similar_frames(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        frame = np.ones((64, 64, 3), dtype=np.uint8) * 128
+        assert pipe._detect_scene_cut(frame) is False  # first frame, no prev
+        assert pipe._detect_scene_cut(frame) is False  # identical frame
+
+    def test_scene_cut_on_large_difference(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)  # seed prev
+        assert pipe._detect_scene_cut(bright) is True
+
+    def test_scene_cut_disabled_when_threshold_zero(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 0.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)
+        assert pipe._detect_scene_cut(bright) is False
+
+    def test_reset_temporal_state_clears_all(self):
+        pipe = _stub_pipeline()
+        pipe._landmark_history = {1: (0, np.zeros((5, 2)))}
+        pipe._prev_face_part = np.zeros((4, 4, 3))
+        pipe._prev_face_mask = np.zeros((4, 4))
+        pipe._prev_gray = np.zeros((4, 4))
+
+        pipe._reset_temporal_state()
+
+        assert pipe._landmark_history == {}
+        assert pipe._prev_face_part is None
+        assert pipe._prev_face_mask is None
+        assert pipe._prev_gray is None
+        pipe._detector.reset_tracks.assert_called_once()
+
+    def test_scene_cut_resets_state_in_prepare_frame(self):
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+        pipe._detector.detect.return_value = []
+
+        stats = {"frames_detected": 0, "faces_identified": 0}
+
+        # Seed landmark history
+        pipe._landmark_history = {1: (0, np.zeros((5, 2)))}
+
+        # Process a dark then a bright frame
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        pipe._prepare_frame(dark, 0, stats)
+        assert len(pipe._landmark_history) == 1  # not cleared yet
+
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+        pipe._prepare_frame(bright, 1, stats)
+        assert pipe._landmark_history == {}  # cleared by scene cut
+
+    def test_first_frame_no_scene_cut(self):
+        """The very first frame should never trigger a scene cut."""
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 255
+        assert pipe._detect_scene_cut(bright) is False
+
+    def test_cooldown_suppresses_consecutive_cuts(self):
+        """After a scene cut, detection is suppressed for _SCENE_CUT_COOLDOWN frames."""
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)  # seed prev
+        assert pipe._detect_scene_cut(bright) is True  # triggers cut + cooldown
+
+        # Immediately following large-diff frames should NOT trigger
+        pipe._detect_scene_cut(dark)  # during cooldown
+        assert pipe._detect_scene_cut(bright) is False  # suppressed
+
+    def test_cooldown_expires_and_detection_resumes(self):
+        """After cooldown expires, detection works again."""
+        pipe = _stub_pipeline()
+        pipe._cfg.scene_cut_threshold = 35.0
+
+        dark = np.ones((64, 64, 3), dtype=np.uint8) * 30
+        bright = np.ones((64, 64, 3), dtype=np.uint8) * 200
+
+        pipe._detect_scene_cut(dark)  # seed prev
+        assert pipe._detect_scene_cut(bright) is True  # triggers cut
+
+        # Exhaust cooldown with neutral frames
+        neutral = np.ones((64, 64, 3), dtype=np.uint8) * 128
+        for _ in range(pipe._SCENE_CUT_COOLDOWN):
+            assert pipe._detect_scene_cut(neutral) is False
+
+        # Cooldown expired — neutral is now prev_gray; big jump should trigger
+        assert pipe._detect_scene_cut(dark) is True  # real cut detected
+
+
+class TestSceneCutCliArg:
+    def test_default_scene_cut_threshold(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["chararep", "-i", "in.mp4", "-o", "out.mp4"])
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.scene_cut_threshold == PipelineConfig.scene_cut_threshold
+
+    def test_custom_scene_cut_threshold(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["chararep", "-i", "in.mp4", "-o", "out.mp4", "--scene-cut-threshold", "50.0"],
+        )
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.scene_cut_threshold == 50.0
+
+    def test_scene_cut_threshold_zero_disables(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["chararep", "-i", "in.mp4", "-o", "out.mp4", "--scene-cut-threshold", "0"],
+        )
+        from chararep.main import _parse_args
+        args = _parse_args()
+        assert args.scene_cut_threshold == 0.0
+
+
+class TestResetTracks:
+    def test_reset_tracks_clears_all(self):
+        from chararep.face_detector import FaceDetector, TrackedFace
+
+        cfg = PipelineConfig(detection_model="buffalo_l")
+        with patch("chararep.face_detector.backend_for_model") as mock_backend:
+            mock_backend.return_value = MagicMock()
+            det = FaceDetector(cfg)
+
+        det._tracks = [
+            TrackedFace(
+                track_id=1,
+                bbox=np.array([0, 0, 10, 10], dtype=np.float32),
+                landmarks=np.zeros((5, 2), dtype=np.float32),
+                identity_label="hero",
+            ),
+        ]
+        assert len(det._tracks) == 1
+        det.reset_tracks()
+        assert len(det._tracks) == 0

@@ -16,4 +16,7 @@ dist/
 *.png
 *.jpg
 *.jpeg
+!testb21/
+!testb21/**
+testb21/out/_diag/*
 

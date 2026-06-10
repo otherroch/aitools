@@ -13,6 +13,7 @@ character:
     the swap engine so it knows what the new face looks like.
 """
 
+import copy
 import logging
 
 import cv2
@@ -49,7 +50,71 @@ _FFHQ_512_256 = np.array(
     dtype=np.float32,
 ) * 256.0
 
+_EYE_BAND_SLICE = (slice(34, 66), slice(16, 96))
+_EYE_BRIDGE_SLICE = (slice(42, 60), slice(46, 66))
+
 logger = logging.getLogger(__name__)
+
+
+def _normalized_face_embedding(face) -> np.ndarray | None:
+    """Return a finite L2-normalized portrait embedding when available."""
+    raw = getattr(face, "normed_embedding", None)
+    if raw is None:
+        raw = getattr(face, "embedding", None)
+    if raw is None:
+        return None
+
+    try:
+        emb = np.array(raw, dtype=np.float32).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+
+    if emb.size == 0 or not np.isfinite(emb).all():
+        return None
+
+    norm = np.linalg.norm(emb)
+    if norm > 0:
+        emb = emb / norm
+    return emb
+
+
+def _face_det_score(face) -> float:
+    """Return a sortable detection confidence for a portrait face."""
+    score = getattr(face, "det_score", 0.0)
+    try:
+        return float(score)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _looks_like_eyewear(aligned_crop: np.ndarray | None) -> bool:
+    """Heuristically flag portrait crops whose eye band looks like eyewear.
+
+    The crop is already aligned to the ArcFace template, so the eye and bridge
+    regions occupy stable coordinates. Glasses frames tend to create dense
+    vertical edges around the eye rims and a dark bridge between the eyes.
+    """
+    if aligned_crop is None or aligned_crop.size == 0:
+        return False
+
+    crop = aligned_crop
+    if crop.shape[:2] != (112, 112):
+        crop = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_LINEAR)
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    eye_band = gray[_EYE_BAND_SLICE]
+    bridge = gray[_EYE_BRIDGE_SLICE]
+    vertical_edges = np.abs(cv2.Sobel(eye_band, cv2.CV_32F, 1, 0, ksize=3))
+    canny = cv2.Canny(eye_band, 60, 160)
+
+    vertical_edge_ratio = float((vertical_edges > 70.0).mean())
+    canny_ratio = float((canny > 0).mean())
+    bridge_dark_ratio = float((bridge < 90).mean())
+
+    return (
+        (vertical_edge_ratio > 0.28 and canny_ratio > 0.23)
+        or (bridge_dark_ratio > 0.33 and canny_ratio > 0.20)
+    )
 
 
 class TargetIdentity:
@@ -65,6 +130,9 @@ class TargetIdentity:
     reference_faces : list
         Backend-specific face objects from the *replace* images.
         The swap engine picks from these at runtime.
+    swap_face : object | None
+        Representative swap face whose embedding is averaged across the
+        portrait gallery to suppress portrait-specific accessories.
     """
 
     def __init__(
@@ -80,7 +148,71 @@ class TargetIdentity:
         norm = np.linalg.norm(self.recognition_embedding)
         if norm > 0:
             self.recognition_embedding /= norm
-        self.reference_faces = swap_faces
+        self.reference_faces = self._prioritize_swap_faces(swap_faces)
+        self.swap_face = self._build_swap_face(self.reference_faces)
+
+    @staticmethod
+    def _prioritize_swap_faces(swap_faces: list) -> list:
+        """Rank portrait faces by identity centrality, then detection score.
+
+        This pushes outlier portraits, such as glasses-heavy shots, behind
+        more representative examples even when the outlier had the highest
+        detector confidence.
+        """
+        ranked = []
+        for idx, face in enumerate(swap_faces):
+            ranked.append((idx, face, _normalized_face_embedding(face)))
+
+        valid_embeddings = [emb for _, _, emb in ranked if emb is not None]
+        if not valid_embeddings:
+            return sorted(swap_faces, key=_face_det_score, reverse=True)
+
+        mean_embedding = np.mean(valid_embeddings, axis=0)
+        mean_norm = np.linalg.norm(mean_embedding)
+        if mean_norm > 0:
+            mean_embedding = mean_embedding / mean_norm
+
+        def _sort_key(item) -> tuple[float, float]:
+            _, face, emb = item
+            centrality = float(np.dot(emb, mean_embedding)) if emb is not None else -1.0
+            return centrality, _face_det_score(face)
+
+        return [
+            face
+            for _, face, _ in sorted(ranked, key=_sort_key, reverse=True)
+        ]
+
+    @staticmethod
+    def _build_swap_face(swap_faces: list):
+        """Build a representative swap face with an averaged identity vector."""
+        if not swap_faces:
+            return None
+
+        representative = swap_faces[0]
+        embeddings = [
+            emb for emb in (_normalized_face_embedding(face) for face in swap_faces)
+            if emb is not None
+        ]
+        if not embeddings:
+            return representative
+
+        mean_embedding = np.mean(embeddings, axis=0)
+        norm = np.linalg.norm(mean_embedding)
+        if norm > 0:
+            mean_embedding = mean_embedding / norm
+        mean_embedding = mean_embedding.astype(np.float32, copy=False)
+
+        try:
+            swap_face = copy.copy(representative)
+        except Exception:
+            swap_face = representative
+
+        try:
+            setattr(swap_face, "embedding", mean_embedding.copy())
+            setattr(swap_face, "normed_embedding", mean_embedding.copy())
+        except Exception:
+            return representative
+        return swap_face
 
 
 def _bbox_area(bbox) -> float:
@@ -148,6 +280,10 @@ class FaceRecognizer:
                             raw_face.arcface_crop = cv2.warpAffine(
                                 img, M, (112, 112), flags=cv2.INTER_LINEAR
                             )
+                            if kind == "portrait":
+                                raw_face.eyewear_detected = _looks_like_eyewear(
+                                    raw_face.arcface_crop
+                                )
                             # blendswap uses the same template (arcface_112_v2 ≡
                             # _ARCFACE_112_V1); alias intentionally shares the
                             # same array since both attributes are read-only at
@@ -180,6 +316,28 @@ class FaceRecognizer:
                 ch.portrait_paths, "portrait", ch.source_label
             )
 
+            clean_swap_faces = [
+                face for face in swap_faces
+                if not getattr(face, "eyewear_detected", False)
+            ]
+            if clean_swap_faces:
+                ignored = len(swap_faces) - len(clean_swap_faces)
+                if ignored:
+                    logger.info(
+                        "Character '%s': ignored %d portrait(s) with eyewear-like eye contours.",
+                        ch.source_label,
+                        ignored,
+                    )
+                swap_faces = clean_swap_faces
+            elif swap_faces and any(
+                getattr(face, "eyewear_detected", False) for face in swap_faces
+            ):
+                logger.warning(
+                    "Character '%s': all usable portraits looked eyewear-like; "
+                    "falling back to the full portrait gallery.",
+                    ch.source_label,
+                )
+
             if not rec_embeddings:
                 logger.error(
                     "No usable reference images for '%s' – "
@@ -195,21 +353,15 @@ class FaceRecognizer:
                 )
                 continue
 
-            # Sort portraits by detection confidence so reference_faces[0]
-            # is always the highest-quality face.
-            swap_faces.sort(
-                key=lambda f: getattr(f, "det_score", 0.0), reverse=True
-            )
-
             tid = TargetIdentity(ch.source_label, rec_embeddings, swap_faces)
             self._targets.append(tid)
-            best_score = getattr(swap_faces[0], "det_score", None)
+            best_score = getattr(tid.reference_faces[0], "det_score", None)
             logger.info(
                 "Character '%s': %d reference(s) for recognition, "
-                "%d portrait(s) for swapping (best det_score=%.3f).",
+                "%d portrait(s) for swapping (representative det_score=%.3f).",
                 ch.source_label,
                 len(rec_embeddings),
-                len(swap_faces),
+                len(tid.reference_faces),
                 best_score if best_score is not None else 0.0,
             )
 

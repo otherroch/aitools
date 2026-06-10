@@ -123,6 +123,10 @@ class FaceDetector:
         """Return only tracks that were seen in the most recent frame."""
         return [t for t in self._tracks if t.age_since_seen == 0]
 
+    def reset_tracks(self) -> None:
+        """Clear all tracked faces (e.g. after a scene cut)."""
+        self._tracks.clear()
+
     # ── simple IoU tracker ───────────────────────────────────────────────
 
     def _match_tracks(

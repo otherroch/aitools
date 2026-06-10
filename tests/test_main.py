@@ -182,6 +182,7 @@ class TestBuildConfigFromArgs:
             verbose=False,
             log_file=None,
             timers=False,
+            scene_cut_threshold=PipelineConfig.scene_cut_threshold,
         )
         defaults.update(kw)
         return argparse.Namespace(**defaults)
