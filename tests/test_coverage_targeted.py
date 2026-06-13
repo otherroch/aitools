@@ -232,6 +232,95 @@ class TestVicropCli:
         with pytest.raises(SystemExit):
             mod.main([])
 
+    def test_main_video_output_type_calls_segment_folder(self, monkeypatch, tmp_path):
+        mod = importlib.import_module("vicrop.cli")
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        args = types.SimpleNamespace(
+            input=in_dir,
+            output_dir=tmp_path / "out",
+            every_n=10,
+            margin_ratio=0.4,
+            crop_size=None,
+            detection_model="hog",
+            no_classify=False,
+            tolerance=0.6,
+            no_skip_existing=False,
+            ref_thresh=0.65,
+            classified_path=None,
+            classified_max=10,
+            output_type="video",
+            max_segment_length=30.0,
+            min_segment_length=2.0,
+        )
+        called = {}
+
+        def fake_segment_folder(*a, **kw):
+            called["args"] = a
+            called["kwargs"] = kw
+            return {"videos_processed": 1, "segments": 2, "persons": 1}
+
+        monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
+        crop_stub = types.SimpleNamespace(SUPPORTED_VIDEO_EXTS={".mp4", ".mov"})
+        monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+        segment_stub = types.SimpleNamespace(
+            segment_folder=fake_segment_folder,
+            segment_video=None,
+        )
+        monkeypatch.setitem(sys.modules, "vicrop.segment", segment_stub)
+
+        import face_ops
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(face_ops, "backend_for_model", lambda *a, **kw: MagicMock())
+        mod.main([])
+        assert called["args"][0] == in_dir
+        assert called["args"][1] == tmp_path / "out"
+        assert called["kwargs"]["skip_existing"] is True
+
+    def test_main_video_output_type_calls_segment_video(self, monkeypatch, tmp_path):
+        mod = importlib.import_module("vicrop.cli")
+        video_file = tmp_path / "clip.mp4"
+        video_file.write_bytes(b"fake")
+        args = types.SimpleNamespace(
+            input=video_file,
+            output_dir=tmp_path / "out",
+            every_n=10,
+            margin_ratio=0.4,
+            crop_size=None,
+            detection_model="hog",
+            no_classify=False,
+            tolerance=0.6,
+            no_skip_existing=False,
+            ref_thresh=0.65,
+            classified_path=None,
+            classified_max=10,
+            output_type="video",
+            max_segment_length=30.0,
+            min_segment_length=2.0,
+        )
+        called = {}
+
+        def fake_segment_video(*a, **kw):
+            called["path"] = a[0]
+            called["kwargs"] = kw
+            return {"segments": 1, "persons": 1}
+
+        monkeypatch.setattr(mod, "parse_args", lambda _argv=None: args)
+        crop_stub = types.SimpleNamespace(SUPPORTED_VIDEO_EXTS={".mp4", ".mov"})
+        monkeypatch.setitem(sys.modules, "vicrop.crop", crop_stub)
+        segment_stub = types.SimpleNamespace(
+            segment_folder=None,
+            segment_video=fake_segment_video,
+        )
+        monkeypatch.setitem(sys.modules, "vicrop.segment", segment_stub)
+
+        import face_ops
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(face_ops, "backend_for_model", lambda *a, **kw: MagicMock())
+        mod.main([])
+        assert called["path"] == video_file
+        assert called["kwargs"]["skip_existing"] is True
+
 
 class TestTranscription:
     def test_combine_and_format(self, monkeypatch):
