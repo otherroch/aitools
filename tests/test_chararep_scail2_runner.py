@@ -1,6 +1,7 @@
 """Tests for the SCAIL-2 prepared-assets runner."""
 
 import subprocess
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 
 from chararep.config import CharacterMapping, PipelineConfig
+from chararep.face_detector import TrackedFace
 from chararep.scail2_runner import Scail2PreparedAssetsRunner
 
 
@@ -143,7 +145,6 @@ class TestScail2PreparedAssetsRunner:
             scail2_ckpt_dir=str(ckpt),
             scail2_model_path=str(model),
             scail2_prompt="A detailed prompt",
-            scail2_matchnearest=True,
         )
         runner = Scail2PreparedAssetsRunner(cfg)
 
@@ -160,6 +161,16 @@ class TestScail2PreparedAssetsRunner:
             return MagicMock(returncode=0, stdout="ok", stderr="")
 
         with patch.object(runner, "_probe_video", return_value=(6, 24.0)), \
+             patch.object(
+                 runner,
+                 "_scan_driving_identity",
+                 return_value={
+                     "frames_sampled": 3,
+                     "frames_with_target": 2,
+                     "max_active_faces_in_frame": 2,
+                     "max_target_faces_in_frame": 1,
+                 },
+             ), \
              patch("chararep.scail2_runner.subprocess.run", side_effect=_run_side_effect) as mock_run, \
              patch("chararep.scail2_runner.finalize_video_output") as mock_finalize:
             stats = runner.run()
@@ -172,6 +183,7 @@ class TestScail2PreparedAssetsRunner:
         assert Path(gen_cmd[gen_cmd.index("--image") + 1]).name == "ref_image.png"
         assert Path(gen_cmd[gen_cmd.index("--mask_image") + 1]).name == "ref_mask.png"
         assert Path(gen_cmd[gen_cmd.index("--mask_video") + 1]).name == "replace_mask.mp4"
+        assert "--matchnearest" in pose_cmd
         mock_finalize.assert_called_once()
         assert stats["frames_total"] == 6
 
@@ -185,3 +197,146 @@ class TestScail2PreparedAssetsRunner:
 
         assert img.shape == (8, 8, 3)
         assert tuple(int(x) for x in img[0, 0]) == (32, 64, 128)
+
+    def test_preflight_auto_enables_matchnearest(self, tmp_path):
+        cfg = _make_scail2_cfg(tmp_path)
+        cfg.characters = [
+            CharacterMapping(
+                source_label="hero",
+                reference_paths=[str(tmp_path / "ref-find.png")],
+                portrait_paths=[str(tmp_path / "portrait.png")],
+            )
+        ]
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        with patch.object(
+            runner,
+            "_scan_driving_identity",
+            return_value={
+                "frames_sampled": 4,
+                "frames_with_target": 2,
+                "max_active_faces_in_frame": 2,
+                "max_target_faces_in_frame": 1,
+            },
+        ):
+            matchnearest, egocentric = runner._resolve_pose_preprocess_flags(120, 24.0)
+
+        assert matchnearest is True
+        assert egocentric is False
+
+    def test_preflight_rejects_when_target_is_ambiguous(self, tmp_path):
+        cfg = _make_scail2_cfg(tmp_path)
+        cfg.characters = [
+            CharacterMapping(
+                source_label="hero",
+                reference_paths=[str(tmp_path / "ref-find.png")],
+                portrait_paths=[str(tmp_path / "portrait.png")],
+            )
+        ]
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        with patch.object(
+            runner,
+            "_scan_driving_identity",
+            return_value={
+                "frames_sampled": 4,
+                "frames_with_target": 2,
+                "max_active_faces_in_frame": 2,
+                "max_target_faces_in_frame": 2,
+            },
+        ):
+            with pytest.raises(RuntimeError, match="multiple simultaneous faces matching target"):
+                runner._resolve_pose_preprocess_flags(120, 24.0)
+
+    def test_preflight_rejects_when_clip_is_too_crowded(self, tmp_path):
+        cfg = _make_scail2_cfg(tmp_path)
+        cfg.characters = [
+            CharacterMapping(
+                source_label="hero",
+                reference_paths=[str(tmp_path / "ref-find.png")],
+                portrait_paths=[str(tmp_path / "portrait.png")],
+            )
+        ]
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        with patch.object(
+            runner,
+            "_scan_driving_identity",
+            return_value={
+                "frames_sampled": 4,
+                "frames_with_target": 2,
+                "max_active_faces_in_frame": 3,
+                "max_target_faces_in_frame": 1,
+            },
+        ):
+            with pytest.raises(RuntimeError, match="more than two simultaneous faces"):
+                runner._resolve_pose_preprocess_flags(120, 24.0)
+
+    def test_scan_driving_identity_uses_detector_and_recognizer(self, tmp_path, monkeypatch):
+        cfg = _make_scail2_cfg(tmp_path)
+        cfg.characters = [
+            CharacterMapping(
+                source_label="hero",
+                reference_paths=[str(tmp_path / "ref-find.png")],
+                portrait_paths=[str(tmp_path / "portrait.png")],
+            )
+        ]
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        frames = [np.zeros((8, 8, 3), dtype=np.uint8) for _ in range(3)]
+
+        class _FakeCapture:
+            def __init__(self, _path):
+                self._frames = list(frames)
+
+            def isOpened(self):
+                return True
+
+            def read(self):
+                if self._frames:
+                    return True, self._frames.pop(0)
+                return False, None
+
+            def release(self):
+                return None
+
+        detections = [
+            [
+                TrackedFace(1, np.zeros(4, dtype=np.float32), np.zeros((5, 2), dtype=np.float32)),
+                TrackedFace(2, np.zeros(4, dtype=np.float32), np.zeros((5, 2), dtype=np.float32)),
+            ],
+            [
+                TrackedFace(1, np.zeros(4, dtype=np.float32), np.zeros((5, 2), dtype=np.float32)),
+            ],
+        ]
+
+        class _FakeDetector:
+            def __init__(self, _cfg):
+                self.backend = object()
+                self._calls = 0
+
+            def detect(self, _frame):
+                idx = min(self._calls, len(detections) - 1)
+                self._calls += 1
+                return detections[idx]
+
+        class _FakeRecognizer:
+            def __init__(self, _cfg, backend):
+                self.targets = [types.SimpleNamespace(label="hero")]
+
+            def identify_faces(self, faces):
+                for face in faces:
+                    if face.track_id == 1:
+                        face.identity_label = "hero"
+                return faces
+
+        monkeypatch.setattr("chararep.scail2_runner.cv2.VideoCapture", _FakeCapture)
+        monkeypatch.setattr("chararep.face_detector.FaceDetector", _FakeDetector)
+        monkeypatch.setattr("chararep.face_recognizer.FaceRecognizer", _FakeRecognizer)
+
+        summary = runner._scan_driving_identity(total_frames=3, input_fps=1.0)
+
+        assert summary["frames_sampled"] >= 2
+        assert summary["frames_with_target"] >= 2
+        assert summary["max_active_faces_in_frame"] == 2
+        assert summary["max_target_faces_in_frame"] == 1

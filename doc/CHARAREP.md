@@ -180,9 +180,10 @@ In this mode, chararep stages the driving clip and the first portrait image from
 the generated `ref_mask.png` and `replace_mask.mp4` into `generate.py`.
 
 Current limitation: the SCAIL-2 auto-prep path only supports one `--char` mapping per run.
-The `FIND` images are still accepted for CLI compatibility, but the current wrapper does not
-yet use them to disambiguate driving subjects. Use `--scail2-matchnearest` for the upstream
-SCAIL-Pose IoU-based track selection when the clip contains two candidate subjects.
+The `FIND` images are now used by chararep's own detector/recognizer stack to sample the
+driving clip before SCAIL-Pose runs. If that preflight sees exactly one matched target in a
+two-person clip, chararep auto-enables `--scail2-matchnearest`. If it sees multiple matched
+targets or more than two simultaneous faces, it rejects the clip early instead of guessing.
 
 ### CLI (SCAIL-2 prepared assets)
 

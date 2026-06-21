@@ -30,6 +30,10 @@ class Scail2PreparedAssetsRunner:
     def __init__(self, cfg: PipelineConfig):
         self._cfg = cfg
 
+    _PREFLIGHT_WINDOW_SECONDS: float = 8.0
+    _PREFLIGHT_MIN_SAMPLED_FRAMES: int = 8
+    _PREFLIGHT_MAX_SAMPLED_FRAMES: int = 24
+
     def run(self) -> dict:
         start = time.perf_counter()
         prompt = self._resolve_prompt()
@@ -39,7 +43,7 @@ class Scail2PreparedAssetsRunner:
         cleanup_job_dir = not self._cfg.scail2_keep_intermediates
 
         try:
-            staged = self._prepare_inputs(job_dir)
+            staged = self._prepare_inputs(job_dir, total_frames, _input_fps)
             output_path = job_dir / "output.mp4"
             cmd = self._build_command(staged, prompt, output_path)
 
@@ -80,11 +84,16 @@ class Scail2PreparedAssetsRunner:
             "fps": fps,
         }
 
-    def _prepare_inputs(self, job_dir: Path) -> dict[str, Path]:
+    def _prepare_inputs(
+        self,
+        job_dir: Path,
+        total_frames: int,
+        input_fps: float,
+    ) -> dict[str, Path]:
         """Return generate.py inputs, either from explicit assets or auto-prep."""
         if self._cfg.scail2_has_prepared_assets():
             return self._stage_prepared_assets(job_dir)
-        return self._stage_inputs_from_scail_pose(job_dir)
+        return self._stage_inputs_from_scail_pose(job_dir, total_frames, input_fps)
 
     def _resolve_prompt(self) -> str:
         prompt = (self._cfg.scail2_prompt or "").strip()
@@ -117,12 +126,25 @@ class Scail2PreparedAssetsRunner:
         }
         return staged
 
-    def _stage_inputs_from_scail_pose(self, job_dir: Path) -> dict[str, Path]:
+    def _stage_inputs_from_scail_pose(
+        self,
+        job_dir: Path,
+        total_frames: int,
+        input_fps: float,
+    ) -> dict[str, Path]:
         """Derive SCAIL-2 masks and intermediates from SCAIL-Pose."""
         ref_image = self._stage_auto_reference_image(job_dir)
         driving_video = self._stage_driving_video(job_dir)
 
-        cmd = self._build_pose_command(job_dir)
+        matchnearest, egocentric = self._resolve_pose_preprocess_flags(
+            total_frames,
+            input_fps,
+        )
+        cmd = self._build_pose_command(
+            job_dir,
+            matchnearest=matchnearest,
+            egocentric=egocentric,
+        )
         logger.info("Running SCAIL-Pose replacement preprocessing in %s", job_dir)
         result = subprocess.run(
             cmd,
@@ -195,7 +217,177 @@ class Scail2PreparedAssetsRunner:
             raise ValueError("SCAIL-Pose repo path is not configured")
         return path
 
-    def _build_pose_command(self, job_dir: Path) -> list[str]:
+    def _resolve_pose_preprocess_flags(
+        self,
+        total_frames: int,
+        input_fps: float,
+    ) -> tuple[bool, bool]:
+        """Resolve the SCAIL-Pose replacement-mode flags for this clip.
+
+        When auto-prep is driven from a chararep character mapping, use the
+        existing detector/recognizer stack to decide whether `--matchnearest`
+        is necessary and to reject clips that remain ambiguous.
+        """
+        matchnearest = bool(self._cfg.scail2_matchnearest)
+        egocentric = bool(self._cfg.scail2_egocentric)
+
+        if egocentric or not self._cfg.characters:
+            return matchnearest, egocentric
+
+        summary = self._scan_driving_identity(total_frames, input_fps)
+        target_label = self._cfg.characters[0].source_label
+
+        if summary["frames_with_target"] == 0:
+            raise RuntimeError(
+                "SCAIL-2 auto-prep could not identify target "
+                f"'{target_label}' in sampled driving frames. "
+                "Use clearer reference images, prepared assets, or a clip where "
+                "the target face is visible earlier."
+            )
+
+        if summary["max_target_faces_in_frame"] > 1:
+            raise RuntimeError(
+                "SCAIL-2 auto-prep found multiple simultaneous faces matching "
+                f"target '{target_label}' in sampled driving frames. "
+                "Use prepared assets or a less ambiguous clip."
+            )
+
+        if summary["max_active_faces_in_frame"] > 2:
+            raise RuntimeError(
+                "SCAIL-2 auto-prep saw more than two simultaneous faces in the "
+                "sampled driving frames. Upstream matchnearest only supports "
+                "two-track selection, so refuse the clip early instead of "
+                "guessing."
+            )
+
+        if summary["max_active_faces_in_frame"] > 1 and not matchnearest:
+            matchnearest = True
+            logger.info(
+                "Auto-enabling scail2_matchnearest: preflight saw %d faces in a "
+                "frame and exactly one matched target '%s'.",
+                summary["max_active_faces_in_frame"],
+                target_label,
+            )
+
+        return matchnearest, egocentric
+
+    def _scan_driving_identity(
+        self,
+        total_frames: int,
+        input_fps: float,
+    ) -> dict[str, int]:
+        """Sample early frames with the classic detector/recognizer stack."""
+        from .face_detector import FaceDetector
+        from .face_recognizer import FaceRecognizer
+
+        detector = FaceDetector(self._cfg)
+        recognizer = FaceRecognizer(self._cfg, backend=detector.backend)
+        if not recognizer.targets:
+            raise RuntimeError(
+                "SCAIL-2 auto-prep could not build a usable recognition gallery "
+                "from the provided character mapping."
+            )
+
+        read_limit, sample_stride, sample_budget = self._preflight_sampling_plan(
+            total_frames,
+            input_fps,
+        )
+        cap = cv2.VideoCapture(self._cfg.input_video)
+        if not cap.isOpened():
+            raise FileNotFoundError(
+                f"Cannot open input video for SCAIL-2 identity preflight: {self._cfg.input_video}"
+            )
+
+        summary = {
+            "frames_sampled": 0,
+            "frames_with_target": 0,
+            "max_active_faces_in_frame": 0,
+            "max_target_faces_in_frame": 0,
+        }
+        target_label = self._cfg.characters[0].source_label
+
+        frame_idx = 0
+        sampled = 0
+        try:
+            while frame_idx < read_limit and sampled < sample_budget:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+
+                should_sample = (frame_idx % sample_stride) == 0
+                frame_idx += 1
+                if not should_sample:
+                    continue
+
+                tracked = [
+                    tf
+                    for tf in detector.detect(frame)
+                    if getattr(tf, "age_since_seen", 0) == 0
+                ]
+                recognizer.identify_faces(tracked)
+
+                target_faces = [
+                    tf for tf in tracked if tf.identity_label == target_label
+                ]
+                summary["frames_sampled"] += 1
+                sampled += 1
+                summary["max_active_faces_in_frame"] = max(
+                    summary["max_active_faces_in_frame"],
+                    len(tracked),
+                )
+                summary["max_target_faces_in_frame"] = max(
+                    summary["max_target_faces_in_frame"],
+                    len(target_faces),
+                )
+                if target_faces:
+                    summary["frames_with_target"] += 1
+
+                if (
+                    summary["max_target_faces_in_frame"] > 1
+                    or summary["max_active_faces_in_frame"] > 2
+                ):
+                    break
+        finally:
+            cap.release()
+
+        logger.info(
+            "SCAIL-2 identity preflight: sampled=%d target_frames=%d "
+            "max_faces=%d max_target_faces=%d",
+            summary["frames_sampled"],
+            summary["frames_with_target"],
+            summary["max_active_faces_in_frame"],
+            summary["max_target_faces_in_frame"],
+        )
+        return summary
+
+    def _preflight_sampling_plan(
+        self,
+        total_frames: int,
+        input_fps: float,
+    ) -> tuple[int, int, int]:
+        """Return (read_limit, sample_stride, sample_budget) for preflight."""
+        fps = input_fps if input_fps > 0 else 24.0
+        window = max(
+            self._PREFLIGHT_MIN_SAMPLED_FRAMES,
+            int(round(fps * self._PREFLIGHT_WINDOW_SECONDS)),
+        )
+        if total_frames > 0:
+            read_limit = min(total_frames, window)
+        else:
+            read_limit = window
+
+        sample_budget = min(self._PREFLIGHT_MAX_SAMPLED_FRAMES, read_limit)
+        sample_budget = max(1, sample_budget)
+        sample_stride = max(1, read_limit // sample_budget)
+        return read_limit, sample_stride, sample_budget
+
+    def _build_pose_command(
+        self,
+        job_dir: Path,
+        *,
+        matchnearest: bool,
+        egocentric: bool,
+    ) -> list[str]:
         """Build the SCAIL-Pose replacement preprocessing command."""
         pose_script = Path(self._resolve_pose_repo_path()) / "NLFPoseExtract" / "process_replacement.py"
         cmd = [
@@ -204,9 +396,9 @@ class Scail2PreparedAssetsRunner:
             "--subdir",
             str(job_dir),
         ]
-        if self._cfg.scail2_matchnearest:
+        if matchnearest:
             cmd.append("--matchnearest")
-        if self._cfg.scail2_egocentric:
+        if egocentric:
             cmd.append("--egocentric")
         if self._cfg.scail2_sam_text:
             cmd.extend(["--text", *self._cfg.scail2_sam_text])
