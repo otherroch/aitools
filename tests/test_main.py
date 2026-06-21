@@ -24,6 +24,7 @@ class TestParseArgs:
     def test_defaults(self):
         """All defaults are set when no arguments are passed."""
         args = self._parse([])
+        assert args.backend == "classic"
         assert args.input_video is None
         assert args.output_video is None
         assert args.config_file is None
@@ -46,6 +47,15 @@ class TestParseArgs:
         assert args.log_file is None
         assert args.timers is False
         assert args.dump_config is False
+        assert args.scail2_offload_model is True
+
+    def test_scail2_backend_flag(self):
+        args = self._parse(["--backend", "scail2"])
+        assert args.backend == "scail2"
+
+    def test_scail2_prompt_file_flag(self):
+        args = self._parse(["--scail2-prompt-file", "prompt.txt"])
+        assert args.scail2_prompt_file == "prompt.txt"
 
     def test_temporal_smooth_alpha_nan_rejected(self):
         with pytest.raises(SystemExit):
@@ -158,6 +168,7 @@ class TestBuildConfigFromArgs:
         """Return a minimal argparse.Namespace for _build_config_from_args."""
         import argparse
         defaults = dict(
+            backend="classic",
             input_video="input.mp4",
             output_video="output.mp4",
             characters=[],
@@ -183,6 +194,24 @@ class TestBuildConfigFromArgs:
             log_file=None,
             timers=False,
             scene_cut_threshold=PipelineConfig.scene_cut_threshold,
+            scail2_repo_path=None,
+            scail2_ckpt_dir=None,
+            scail2_model_path=None,
+            scail2_model_name=PipelineConfig.scail2_model_name,
+            scail2_reference_image=None,
+            scail2_reference_mask=None,
+            scail2_mask_video=None,
+            scail2_prompt=None,
+            scail2_prompt_file=None,
+            scail2_target_width=PipelineConfig.scail2_target_width,
+            scail2_target_height=PipelineConfig.scail2_target_height,
+            scail2_sample_steps=PipelineConfig.scail2_sample_steps,
+            scail2_sample_shift=PipelineConfig.scail2_sample_shift,
+            scail2_sample_guide_scale=PipelineConfig.scail2_sample_guide_scale,
+            scail2_sample_solver=PipelineConfig.scail2_sample_solver,
+            scail2_offload_model=PipelineConfig.scail2_offload_model,
+            scail2_work_dir=None,
+            scail2_keep_intermediates=False,
         )
         defaults.update(kw)
         return argparse.Namespace(**defaults)
@@ -249,6 +278,38 @@ class TestBuildConfigFromArgs:
         args = self._make_args(enhance=True)
         cfg = _build_config_from_args(args)
         assert cfg.enable_face_enhancement is True
+
+    def test_scail2_fields_passed_through(self):
+        from chararep.main import _build_config_from_args
+        args = self._make_args(
+            backend="scail2",
+            scail2_repo_path="repo",
+            scail2_ckpt_dir="ckpt",
+            scail2_model_path="model.safetensors",
+            scail2_reference_image="ref.png",
+            scail2_reference_mask="ref_mask.png",
+            scail2_mask_video="mask.mp4",
+            scail2_prompt="prompt",
+            scail2_target_width=704,
+            scail2_target_height=512,
+            scail2_sample_steps=28,
+            scail2_sample_solver="dpm++",
+            scail2_offload_model=False,
+        )
+        cfg = _build_config_from_args(args)
+        assert cfg.backend == "scail2"
+        assert cfg.scail2_repo_path == "repo"
+        assert cfg.scail2_ckpt_dir == "ckpt"
+        assert cfg.scail2_model_path == "model.safetensors"
+        assert cfg.scail2_reference_image == "ref.png"
+        assert cfg.scail2_reference_mask == "ref_mask.png"
+        assert cfg.scail2_mask_video == "mask.mp4"
+        assert cfg.scail2_prompt == "prompt"
+        assert cfg.scail2_target_width == 704
+        assert cfg.scail2_target_height == 512
+        assert cfg.scail2_sample_steps == 28
+        assert cfg.scail2_sample_solver == "dpm++"
+        assert cfg.scail2_offload_model is False
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +660,57 @@ class TestMain:
                 main_module.main()
 
         mock_pipeline.run.assert_called_once()
+
+    def test_build_runner_selects_scail2_backend(self):
+        from chararep import main as main_module
+
+        cfg = PipelineConfig(backend="scail2")
+        mock_runner = MagicMock()
+
+        with patch("chararep.main.Scail2PreparedAssetsRunner", return_value=mock_runner):
+            runner = main_module._build_runner(cfg)
+
+        assert runner is mock_runner
+
+    def test_main_uses_scail2_runner(self, tmp_path, monkeypatch):
+        """main() dispatches to the SCAIL-2 runner when backend=scail2."""
+        from chararep import main as main_module
+
+        mock_args = MagicMock()
+        mock_args.config_file = None
+        mock_args.dump_config = False
+        monkeypatch.setattr(main_module, "_parse_args", lambda: mock_args)
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(tmp_path / "in.mp4"),
+            output_video=str(tmp_path / "out.mp4"),
+            scail2_repo_path=str(tmp_path / "repo"),
+            scail2_ckpt_dir=str(tmp_path / "ckpt"),
+            scail2_model_path=str(tmp_path / "model.safetensors"),
+            scail2_reference_image=str(tmp_path / "ref.png"),
+            scail2_reference_mask=str(tmp_path / "ref_mask.png"),
+            scail2_mask_video=str(tmp_path / "mask.mp4"),
+            scail2_prompt="prompt",
+        )
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = {
+            "backend": "scail2",
+            "frames_total": 8,
+            "frames_swapped": 8,
+            "faces_swapped": 0,
+            "elapsed_s": 1.0,
+            "fps": 8.0,
+            "frames_detected": 0,
+            "faces_identified": 0,
+        }
+
+        with patch("chararep.main._build_config_from_args", return_value=cfg), \
+             patch("chararep.main.Scail2PreparedAssetsRunner", return_value=mock_runner):
+            with patch.object(PipelineConfig, "validate", return_value=[]):
+                main_module.main()
+
+        mock_runner.run.assert_called_once()
 
     def test_main_uses_json_config_when_provided(self, tmp_path, monkeypatch):
         """When --config is set, _build_config_from_json is called."""

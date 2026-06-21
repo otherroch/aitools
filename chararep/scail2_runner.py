@@ -1,0 +1,179 @@
+"""SCAIL-2 prepared-assets runner for whole-video character replacement."""
+
+import logging
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import cv2
+
+from .config import PipelineConfig
+from .video_io import finalize_video_output
+
+logger = logging.getLogger(__name__)
+
+
+class Scail2PreparedAssetsRunner:
+    """Run SCAIL-2 replacement in prepared-assets mode.
+
+    This runner intentionally stays separate from the classic per-frame
+    face-swap pipeline. It stages the required assets into a temporary job
+    directory, invokes the upstream ``generate.py`` entrypoint, and finalizes
+    the resulting video for chararep's output contract.
+    """
+
+    def __init__(self, cfg: PipelineConfig):
+        self._cfg = cfg
+
+    def run(self) -> dict:
+        start = time.perf_counter()
+        prompt = self._resolve_prompt()
+        total_frames, _input_fps = self._probe_video(self._cfg.input_video)
+
+        job_dir = self._create_job_dir()
+        cleanup_job_dir = not self._cfg.scail2_keep_intermediates
+
+        try:
+            staged = self._stage_inputs(job_dir)
+            output_path = job_dir / "output.mp4"
+            cmd = self._build_command(staged, prompt, output_path)
+
+            logger.info("Running SCAIL-2 prepared-assets job in %s", job_dir)
+            result = subprocess.run(
+                cmd,
+                cwd=self._cfg.scail2_repo_path,
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(self._format_subprocess_failure(result))
+            if not output_path.is_file():
+                raise FileNotFoundError(
+                    f"SCAIL-2 did not produce an output video: {output_path}"
+                )
+
+            finalize_video_output(
+                str(output_path),
+                self._cfg.output_video,
+                audio_source=self._cfg.input_video if self._cfg.copy_audio else None,
+            )
+        finally:
+            if cleanup_job_dir:
+                shutil.rmtree(job_dir, ignore_errors=True)
+
+        elapsed_s = time.perf_counter() - start
+        fps = total_frames / elapsed_s if elapsed_s > 0 and total_frames > 0 else 0.0
+        return {
+            "backend": "scail2",
+            "frames_total": total_frames,
+            "frames_swapped": total_frames,
+            "faces_swapped": 0,
+            "elapsed_s": elapsed_s,
+            "frames_detected": 0,
+            "faces_identified": 0,
+            "fps": fps,
+        }
+
+    def _resolve_prompt(self) -> str:
+        prompt = (self._cfg.scail2_prompt or "").strip()
+        if prompt:
+            return prompt
+
+        prompt_file = self._cfg.scail2_prompt_file
+        if not prompt_file:
+            raise ValueError("SCAIL-2 prompt is required")
+
+        text = Path(prompt_file).read_text(encoding="utf-8").strip()
+        if not text:
+            raise ValueError(f"SCAIL-2 prompt file is empty: {prompt_file}")
+        return text
+
+    def _create_job_dir(self) -> Path:
+        return Path(
+            tempfile.mkdtemp(
+                prefix="chararep_scail2_",
+                dir=self._cfg.scail2_work_dir,
+            )
+        )
+
+    def _stage_inputs(self, job_dir: Path) -> dict[str, Path]:
+        staged = {
+            "image": self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_image, "ref"),
+            "mask_image": self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_mask, "ref_mask"),
+            "pose": self._copy_to_job_dir(job_dir, self._cfg.input_video, "rendered_v2"),
+            "mask_video": self._copy_to_job_dir(job_dir, self._cfg.scail2_mask_video, "rendered_mask_v2"),
+        }
+        return staged
+
+    @staticmethod
+    def _copy_to_job_dir(job_dir: Path, source_path: str, stem: str) -> Path:
+        source = Path(source_path)
+        target = job_dir / f"{stem}{source.suffix}"
+        shutil.copy2(source, target)
+        return target
+
+    def _build_command(self, staged: dict[str, Path], prompt: str, output_path: Path) -> list[str]:
+        generate_script = Path(self._cfg.scail2_repo_path) / "generate.py"
+        cmd = [
+            sys.executable,
+            str(generate_script),
+            "--model",
+            self._cfg.scail2_model_name,
+            "--ckpt_dir",
+            str(self._cfg.scail2_ckpt_dir),
+            "--scail_path",
+            str(self._cfg.scail2_model_path),
+            "--target_w",
+            str(self._cfg.scail2_target_width),
+            "--target_h",
+            str(self._cfg.scail2_target_height),
+            "--image",
+            str(staged["image"]),
+            "--mask_image",
+            str(staged["mask_image"]),
+            "--pose",
+            str(staged["pose"]),
+            "--mask_video",
+            str(staged["mask_video"]),
+            "--prompt",
+            prompt,
+            "--save_file",
+            str(output_path),
+            "--replace_flag",
+            "--sample_steps",
+            str(self._cfg.scail2_sample_steps),
+            "--sample_shift",
+            str(self._cfg.scail2_sample_shift),
+            "--sample_guide_scale",
+            str(self._cfg.scail2_sample_guide_scale),
+            "--sample_solver",
+            self._cfg.scail2_sample_solver,
+        ]
+        if self._cfg.scail2_offload_model:
+            cmd.append("--offload_model")
+        return cmd
+
+    @staticmethod
+    def _probe_video(path: str) -> tuple[int, float]:
+        cap = cv2.VideoCapture(path)
+        try:
+            if not cap.isOpened():
+                return 0, 0.0
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            return total_frames, fps
+        finally:
+            cap.release()
+
+    @staticmethod
+    def _format_subprocess_failure(result: subprocess.CompletedProcess) -> str:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        details = stderr or stdout or "no subprocess output captured"
+        if len(details) > 1000:
+            details = details[-1000:]
+        return f"SCAIL-2 generate.py failed with exit code {result.returncode}: {details}"

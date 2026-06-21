@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .config import CharacterMapping, PipelineConfig
 from .pipeline import CharacterReplacementPipeline
+from .scail2_runner import Scail2PreparedAssetsRunner
 
 
 def _positive_int(value: str) -> int:
@@ -45,6 +46,14 @@ def _unit_interval(value: str) -> float:
             f"expected a value in [0, 1], got {x}"
         )
     return x
+
+
+def _arg_get(args: argparse.Namespace, name: str, default):
+    """Return an argparse value without triggering MagicMock fallback attrs."""
+    values = getattr(args, "__dict__", None)
+    if isinstance(values, dict) and name in values:
+        return values[name]
+    return default
 
 
 def _parse_args() -> argparse.Namespace:
@@ -110,6 +119,12 @@ Config JSON format
         dest="config_file",
         help="JSON config file (overrides all other args).",
     )
+    p.add_argument(
+        "--backend",
+        choices=["classic", "scail2"],
+        default=PipelineConfig.backend,
+        help="Execution backend (default: classic).",
+    )
 
     # ── Characters ───────────────────────────────────────────────────────
     p.add_argument(
@@ -171,6 +186,106 @@ Config JSON format
         default=640,
         metavar="N",
         help="Detection resolution: frame is resized to NxN before RetinaFace runs (default: 640). Try 1024 for better landmark precision on HD video.",
+    )
+
+    # ── SCAIL-2 prepared-assets mode ────────────────────────────────────
+    p.add_argument(
+        "--scail2-repo-path",
+        default=None,
+        help="Path to an upstream SCAIL-2 checkout containing generate.py.",
+    )
+    p.add_argument(
+        "--scail2-ckpt-dir",
+        default=None,
+        help="Path to the SCAIL-2 checkpoint directory passed to --ckpt_dir.",
+    )
+    p.add_argument(
+        "--scail2-model-path",
+        default=None,
+        help="Path to the converted SCAIL-2 .safetensors file passed to --scail_path.",
+    )
+    p.add_argument(
+        "--scail2-model-name",
+        default=PipelineConfig.scail2_model_name,
+        help=f"SCAIL-2 model name argument for generate.py (default: {PipelineConfig.scail2_model_name}).",
+    )
+    p.add_argument(
+        "--scail2-reference-image",
+        default=None,
+        help="Prepared SCAIL-2 replacement reference image.",
+    )
+    p.add_argument(
+        "--scail2-reference-mask",
+        default=None,
+        help="Prepared SCAIL-2 reference mask image.",
+    )
+    p.add_argument(
+        "--scail2-mask-video",
+        default=None,
+        help="Prepared SCAIL-2 driving mask video.",
+    )
+    p.add_argument(
+        "--scail2-prompt",
+        default=None,
+        help="Positive prompt describing the output video for SCAIL-2.",
+    )
+    p.add_argument(
+        "--scail2-prompt-file",
+        default=None,
+        help="Path to a text file containing the SCAIL-2 positive prompt.",
+    )
+    p.add_argument(
+        "--scail2-target-width",
+        type=_positive_int,
+        default=PipelineConfig.scail2_target_width,
+        help=f"SCAIL-2 target width, divisible by 32 (default: {PipelineConfig.scail2_target_width}).",
+    )
+    p.add_argument(
+        "--scail2-target-height",
+        type=_positive_int,
+        default=PipelineConfig.scail2_target_height,
+        help=f"SCAIL-2 target height, divisible by 32 (default: {PipelineConfig.scail2_target_height}).",
+    )
+    p.add_argument(
+        "--scail2-sample-steps",
+        type=_positive_int,
+        default=PipelineConfig.scail2_sample_steps,
+        help=f"SCAIL-2 denoising steps (default: {PipelineConfig.scail2_sample_steps}).",
+    )
+    p.add_argument(
+        "--scail2-sample-shift",
+        type=float,
+        default=PipelineConfig.scail2_sample_shift,
+        help=f"SCAIL-2 sample shift (default: {PipelineConfig.scail2_sample_shift}).",
+    )
+    p.add_argument(
+        "--scail2-sample-guide-scale",
+        type=float,
+        default=PipelineConfig.scail2_sample_guide_scale,
+        help=f"SCAIL-2 guidance scale (default: {PipelineConfig.scail2_sample_guide_scale}).",
+    )
+    p.add_argument(
+        "--scail2-sample-solver",
+        choices=["unipc", "dpm++"],
+        default=PipelineConfig.scail2_sample_solver,
+        help=f"SCAIL-2 sampler (default: {PipelineConfig.scail2_sample_solver}).",
+    )
+    p.add_argument(
+        "--scail2-no-offload-model",
+        action="store_false",
+        dest="scail2_offload_model",
+        help="Disable SCAIL-2 model offload during generate.py execution.",
+    )
+    p.set_defaults(scail2_offload_model=PipelineConfig.scail2_offload_model)
+    p.add_argument(
+        "--scail2-work-dir",
+        default=None,
+        help="Optional parent directory for staged SCAIL-2 job files.",
+    )
+    p.add_argument(
+        "--scail2-keep-intermediates",
+        action="store_true",
+        help="Keep the staged SCAIL-2 job directory after the run finishes.",
     )
 
     # ── Enhancement ──────────────────────────────────────────────────────
@@ -360,6 +475,8 @@ def _scan_image_dir(folder: str, kind: str) -> list[str]:
 def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
     """Construct a PipelineConfig from CLI arguments."""
 
+    backend = _arg_get(args, "backend", PipelineConfig.backend)
+
     temporal_smooth_alpha = getattr(
         args,
         "temporal_smooth_alpha",
@@ -386,6 +503,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         )
 
     return PipelineConfig(
+        backend=backend,
         input_video=args.input_video or "",
         output_video=args.output_video or "",
         characters=characters,
@@ -411,6 +529,50 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         log_level="DEBUG" if args.verbose else "INFO",
         log_file=args.log_file,
         enable_timers=args.timers,
+        scail2_repo_path=_arg_get(args, "scail2_repo_path", None),
+        scail2_ckpt_dir=_arg_get(args, "scail2_ckpt_dir", None),
+        scail2_model_path=_arg_get(args, "scail2_model_path", None),
+        scail2_model_name=_arg_get(
+            args, "scail2_model_name", PipelineConfig.scail2_model_name
+        ),
+        scail2_reference_image=_arg_get(args, "scail2_reference_image", None),
+        scail2_reference_mask=_arg_get(args, "scail2_reference_mask", None),
+        scail2_mask_video=_arg_get(args, "scail2_mask_video", None),
+        scail2_prompt=_arg_get(args, "scail2_prompt", None),
+        scail2_prompt_file=_arg_get(args, "scail2_prompt_file", None),
+        scail2_target_width=int(
+            _arg_get(args, "scail2_target_width", PipelineConfig.scail2_target_width)
+        ),
+        scail2_target_height=int(
+            _arg_get(args, "scail2_target_height", PipelineConfig.scail2_target_height)
+        ),
+        scail2_sample_steps=int(
+            _arg_get(args, "scail2_sample_steps", PipelineConfig.scail2_sample_steps)
+        ),
+        scail2_sample_shift=float(
+            _arg_get(args, "scail2_sample_shift", PipelineConfig.scail2_sample_shift)
+        ),
+        scail2_sample_guide_scale=float(
+            _arg_get(
+                args,
+                "scail2_sample_guide_scale",
+                PipelineConfig.scail2_sample_guide_scale,
+            )
+        ),
+        scail2_sample_solver=_arg_get(
+            args, "scail2_sample_solver", PipelineConfig.scail2_sample_solver
+        ),
+        scail2_offload_model=bool(
+            _arg_get(
+                args,
+                "scail2_offload_model",
+                PipelineConfig.scail2_offload_model,
+            )
+        ),
+        scail2_work_dir=_arg_get(args, "scail2_work_dir", None),
+        scail2_keep_intermediates=bool(
+            _arg_get(args, "scail2_keep_intermediates", False)
+        ),
     )
 
 
@@ -457,6 +619,13 @@ def _setup_logging(cfg: PipelineConfig) -> None:
     )
 
 
+def _build_runner(cfg: PipelineConfig):
+    """Return the execution backend selected by configuration."""
+    if cfg.backend == "scail2":
+        return Scail2PreparedAssetsRunner(cfg)
+    return CharacterReplacementPipeline(cfg)
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -482,8 +651,8 @@ def main() -> None:
         print(json.dumps(dataclasses.asdict(cfg), indent=2))
 
     # Run pipeline
-    pipeline = CharacterReplacementPipeline(cfg)
-    stats = pipeline.run()
+    runner = _build_runner(cfg)
+    stats = runner.run()
 
     # Summary
     logger.info("=" * 60)
@@ -494,11 +663,14 @@ def main() -> None:
         stats["elapsed_s"],
         stats["fps"],
     )
-    logger.info(
-        "Frames with swaps: %d  |  Total faces swapped: %d",
-        stats["frames_swapped"],
-        stats["faces_swapped"],
-    )
+    if cfg.backend == "classic":
+        logger.info(
+            "Frames with swaps: %d  |  Total faces swapped: %d",
+            stats["frames_swapped"],
+            stats["faces_swapped"],
+        )
+    else:
+        logger.info("SCAIL-2 prepared-assets backend completed successfully.")
     logger.info("=" * 60)
 
 
