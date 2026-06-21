@@ -329,6 +329,10 @@ def segment_video(
     width: int = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height: int = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    logger.debug(
+        "segment_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d tolerance=%.2f min_segment_length=%.2f max_segment_length=%.2f skip_existing=%s",
+        video_path.name, every_n, margin_ratio, crop_size, tolerance, min_segment_length, max_segment_length, skip_existing,
+    )
     logger.info(
         "segment_video: %s  fps=%.2f  frames=%d  %dx%d",
         video_path.name, fps, total_frames, width, height,
@@ -346,6 +350,18 @@ def segment_video(
             ret, frame_bgr = cap.read()
             if not ret:
                 break
+            if frame_idx % 1000 == 0:
+                if total_frames > 0:
+                    pct = frame_idx * 100.0 / total_frames
+                    logger.info(
+                        "[%5.1f%%] frame %d / %d  segments so far: %d",
+                        pct, frame_idx, total_frames, len(frame_records),
+                    )
+                else:
+                    logger.info(
+                        "frame %d  records so far: %d", frame_idx, len(frame_records),
+                    )
+
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 locs = backend.detect_faces(frame_rgb)
@@ -356,6 +372,10 @@ def segment_video(
                 else:
                     enc = None
                     bbox = None
+                logger.debug(
+                    "segment_video: frame %d  detected %d face(s)",
+                    frame_idx, len(locs),
+                )
                 frame_records.append((frame_idx, enc, bbox))
             frame_idx += 1
     finally:
@@ -426,6 +446,7 @@ def segment_video(
                 writer.release()
 
             duration = (seg.end_frame - seg.start_frame + 1) / fps
+            logger.debug("Wrote segment: %s", out_path)
             logger.info(
                 "Wrote segment: %s  frames %d–%d  (%.1fs)  person %d  %dx%d",
                 out_path.name, seg.start_frame, seg.end_frame, duration, pid, out_w, out_h,
@@ -464,10 +485,6 @@ def segment_folder(
         skip_existing:       Skip videos whose output sub-directory already
                              contains MP4 files.
         backend:             :class:`FaceBackend` instance.
-
-    Returns:
-        Aggregate summary dict with keys ``videos_processed``, ``segments``,
-        and ``persons``.
     """
     if backend is None:
         backend = _default_backend()
@@ -485,6 +502,11 @@ def segment_folder(
     if not videos:
         logger.warning("No video files found in %s", input_dir)
         return {"videos_processed": 0, "segments": 0, "persons": 0}
+
+    logger.debug(
+        "segment_folder: found %d video(s) in %s  every_n=%d",
+        len(videos), input_dir, every_n,
+    )
 
     total: dict[str, int] = {"videos_processed": 0, "segments": 0, "persons": 0}
 
@@ -507,3 +529,29 @@ def segment_folder(
         total["persons"] += stats["persons"]
 
     return total
+
+</write_to_file>
+<task_progress>
+- [x] Analyze logging patterns in vicrop/crop.py
+- [x] Add debug logs to segment_video in vicrop/segment.py
+- [x] Add debug logs to segment_folder in vicrop/segment.py
+- [ ] Verify changes
+</task_progress>
+</write_to_file>
+</thinking>
+
+I've updated `vicrop/segment.py` to include debug logger statements that mirror the logging structure in `vicrop/crop.py`.
+
+Specifically:
+1.  Added a `logger.debug` call at the start of `segment_video` to log the input parameters.
+2.  Added progress info logs every 1000 frames during the analysis pass.
+3.  Added a `logger.debug` call within the `every_n` sampling block to log face detection counts.
+4.  Added a `logger.debug` call when a segment is written to disk.
+5.  Added a `logger.debug` call at the start of `segment_folder` to log the number of videos found.
+
+<task_progress>
+- [x] Analyze logging patterns in vicrop/crop.py
+- [x] Add debug logs to segment_video in vicrop/segment.py
+- [x] Add debug logs to segment_folder in vicrop/segment.py
+- [ ] Verify changes
+</task_progress>
