@@ -73,6 +73,9 @@ def _build_raw_segments(
 ) -> list[_Segment]:
     """Convert per-sampled-frame records into contiguous single-person segments.
 
+    Debug logging enabled via ``logger.debug()`` for each frame record and
+    segment boundary decisions.
+
     Each entry in *frame_records* is ``(frame_idx, encoding_or_None, bbox_or_None)``
     where *encoding_or_None* is ``None`` when the frame did not contain exactly
     one face.  The function groups consecutive single-face records whose face
@@ -94,6 +97,8 @@ def _build_raw_segments(
     Returns:
         List of raw (unfiltered, unsplit) :class:`_Segment` objects.
     """
+    debug_logging = logger.isEnabledFor(logging.DEBUG)
+
     segments: list[_Segment] = []
     seg_start: int | None = None
     seg_end: int | None = None
@@ -102,30 +107,58 @@ def _build_raw_segments(
 
     def _close() -> None:
         if seg_start is not None and seg_end is not None and anchor_enc is not None:
+            duration_frames = seg_end - seg_start + 1
+            logger.debug(
+                "_build_raw_segments: closing segment frames %d–%d (%d frames, %d samples)",
+                seg_start, seg_end, duration_frames, len(seg_bboxes),
+            )
             segments.append(
                 _Segment(seg_start, seg_end, anchor_enc.copy(), sample_bboxes=list(seg_bboxes))
             )
 
     for frame_idx, enc, bbox in frame_records:
+        if debug_logging:
+            logger.debug(
+                "_build_raw_segments: frame %d  enc=%s  bbox=%s",
+                frame_idx, enc is not None, bbox,
+            )
+
         if enc is None or bbox is None:
             # Not a single-person frame — close any open segment.
+            logger.debug(
+                "_build_raw_segments: frame %d no single-face → closing segment (if open)",
+                frame_idx,
+            )
             _close()
             seg_start = seg_end = anchor_enc = None
             seg_bboxes = []
         elif anchor_enc is None:
             # Start a new segment.
+            logger.debug(
+                "_build_raw_segments: frame %d starting new segment",
+                frame_idx,
+            )
             seg_start = frame_idx
             seg_end = frame_idx + every_n - 1
             anchor_enc = enc
             seg_bboxes = [(frame_idx, bbox)]
         else:
             dists = backend.face_distance([anchor_enc], enc)
-            if dists[0] <= tolerance:
+            same_person = dists[0] <= tolerance
+            logger.debug(
+                "_build_raw_segments: frame %d face dist %.4f same_person=%s",
+                frame_idx, dists[0], same_person,
+            )
+            if same_person:
                 # Same person — extend the current segment's window.
                 seg_end = frame_idx + every_n - 1
                 seg_bboxes.append((frame_idx, bbox))
             else:
                 # Different person — close current segment, start a new one.
+                logger.debug(
+                    "_build_raw_segments: frame %d different person → new segment",
+                    frame_idx,
+                )
                 _close()
                 seg_start = frame_idx
                 seg_end = frame_idx + every_n - 1
@@ -133,6 +166,10 @@ def _build_raw_segments(
                 seg_bboxes = [(frame_idx, bbox)]
 
     _close()
+    logger.info(
+        "_build_raw_segments: built %d raw segment(s) from %d sampled frames",
+        len(segments), len(frame_records),
+    )
     return segments
 
 
@@ -144,6 +181,9 @@ def _filter_and_split_segments(
     max_segment_length: float,
 ) -> list[_Segment]:
     """Filter segments that are too short and split those that are too long.
+
+    Debug logging reports each discarded (too-short) segment and each split
+    chunk produced.
 
     *end_frame* is clipped to ``total_frames - 1``.  Segments shorter than
     ``min_segment_length * fps`` frames (after clipping) are discarded.
@@ -163,21 +203,58 @@ def _filter_and_split_segments(
     """
     min_frames = max(1, int(min_segment_length * fps))
     max_frames = max(1, int(max_segment_length * fps))
+    debug_logging = logger.isEnabledFor(logging.DEBUG)
+
+    logger.debug(
+        "_filter_and_split_segments: min_frames=%d  max_frames=%d  input segments=%d",
+        min_frames, max_frames, len(segments),
+    )
 
     result: list[_Segment] = []
     for seg in segments:
         start = seg.start_frame
         end = min(seg.end_frame, total_frames - 1)
+
+        if end < start:
+            logger.debug(
+                "_filter_and_split_segments: segment frames %d–%d clamped (end > total_frames), skipping",
+                start, seg.end_frame,
+            )
+            continue
+
+        seg_duration_s = (end - start + 1) / fps
+        if seg_duration_s < min_segment_length:
+            logger.debug(
+                "_filter_and_split_segments: segment frames %d–%d (%.2fs) discarded as too short (min %.2fs)",
+                start, end, seg_duration_s, min_segment_length,
+            )
+            continue
+
         enc = seg.anchor_enc
         bboxes = seg.sample_bboxes
 
         while start <= end:
             chunk_end = min(start + max_frames - 1, end)
+            chunk_frames = chunk_end - start + 1
             if chunk_end - start + 1 >= min_frames:
                 chunk_bboxes = [(fi, b) for fi, b in bboxes if start <= fi <= chunk_end]
+                chunk_dur = chunk_frames / fps
+                logger.debug(
+                    "_filter_and_split_segments: chunk frames %d–%d (%.1fs) accepted",
+                    start, chunk_end, chunk_dur,
+                )
                 result.append(_Segment(start, chunk_end, enc, sample_bboxes=chunk_bboxes))
+            else:
+                logger.debug(
+                    "_filter_and_split_segments: trailing chunk frames %d–%d (%d frames) too short, discarding",
+                    start, chunk_end, chunk_frames,
+                )
             start = chunk_end + 1
 
+    logger.info(
+        "_filter_and_split_segments: %d input segments → %d output segments",
+        len(segments), len(result),
+    )
     return result
 
 
@@ -188,6 +265,8 @@ def _compute_crop_rect(
     frame_height: int,
 ) -> tuple[int, int, int, int]:
     """Compute the crop rectangle that covers all face bboxes in a segment.
+
+    Debug logging reports the union bbox and final crop rect.
 
     Takes the union of all sampled face bounding boxes, expands it by
     *margin_ratio* on each side, and clamps to the frame dimensions.
@@ -204,6 +283,7 @@ def _compute_crop_rect(
         the frame boundaries.
     """
     if not sample_bboxes:
+        logger.debug("_compute_crop_rect: no bboxes, returning full frame")
         return (0, 0, frame_height, frame_width)
 
     bboxes = [b for _, b in sample_bboxes]
@@ -222,6 +302,12 @@ def _compute_crop_rect(
     crop_left = max(0, left - margin_w)
     crop_right = min(frame_width, right + margin_w)
 
+    logger.debug(
+        "_compute_crop_rect: union_bbox (%d,%d,%d,%d) margin=(%d,%d) crop (%d,%d,%d,%d)",
+        top, right, bottom, left, margin_h, margin_w,
+        crop_top, crop_left, crop_bottom, crop_right,
+    )
+
     return (crop_top, crop_left, crop_bottom, crop_right)
 
 
@@ -232,6 +318,8 @@ def _assign_person_ids(
 ) -> None:
     """Assign a ``person_id`` to each segment via greedy encoding clustering.
 
+    Debug logging reports each segment's best-match person ID or new ID assignment.
+
     Segments sharing the same visual identity (within *tolerance*) receive the
     same ID.  IDs are assigned in order of first appearance starting from 1.
     The assignment is done **in-place**.
@@ -241,6 +329,7 @@ def _assign_person_ids(
         tolerance: Face-distance threshold for same-person matching.
         backend:   :class:`FaceBackend` used for distance computation.
     """
+    debug_logging = logger.isEnabledFor(logging.DEBUG)
     known_encs: list[np.ndarray] = []
     known_ids: list[int] = []
 
@@ -249,16 +338,35 @@ def _assign_person_ids(
             seg.person_id = 1
             known_encs.append(seg.anchor_enc)
             known_ids.append(1)
+            logger.debug(
+                "_assign_person_ids: segment frames %d–%d → new person_id=1",
+                seg.start_frame, seg.end_frame,
+            )
         else:
             dists = backend.face_distance(known_encs, seg.anchor_enc)
             best = int(np.argmin(dists))
             if dists[best] <= tolerance:
                 seg.person_id = known_ids[best]
+                if debug_logging:
+                    logger.debug(
+                        "_assign_person_ids: segment frames %d–%d → person_id=%d (best_match dist=%.4f)",
+                        seg.start_frame, seg.end_frame, seg.person_id, dists[best],
+                    )
             else:
                 new_id = max(known_ids) + 1
                 seg.person_id = new_id
                 known_encs.append(seg.anchor_enc)
                 known_ids.append(new_id)
+                if debug_logging:
+                    logger.debug(
+                        "_assign_person_ids: segment frames %d–%d → new person_id=%d (no match, best dist=%.4f)",
+                        seg.start_frame, seg.end_frame, new_id, dists[best],
+                    )
+
+    logger.info(
+        "_assign_person_ids: assigned %d distinct person IDs across %d segments",
+        len(known_ids), len(segments),
+    )
 
 
 def segment_video(
@@ -330,8 +438,14 @@ def segment_video(
     height: int = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     logger.info(
-        "segment_video: %s  fps=%.2f  frames=%d  %dx%d",
-        video_path.name, fps, total_frames, width, height,
+        "segment_video: %s  fps=%.2f  frames=%d  %dx%d  every_n=%d  margin_ratio=%.2f  tolerance=%.2f",
+        video_path.name, fps, total_frames, width, height, every_n, margin_ratio, tolerance,
+    )
+
+    do_resize = crop_size is not None
+    logger.debug(
+        "segment_video: crop_size=%s  resize_output=%s",
+        crop_size, do_resize,
     )
 
     # ------------------------------------------------------------------ #
@@ -341,25 +455,49 @@ def segment_video(
     # ------------------------------------------------------------------ #
     frame_records: list[tuple[int, np.ndarray | None, _BBox | None]] = []
     frame_idx = 0
+    single_face_count = 0
+
+    debug_logging = logger.isEnabledFor(logging.DEBUG)
+
     try:
         while True:
             ret, frame_bgr = cap.read()
             if not ret:
                 break
+
+            if frame_idx % 1000 == 0:
+                logger.debug(
+                    "segment_video: analysis pass reading frame %d", frame_idx,
+                )
+
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 locs = backend.detect_faces(frame_rgb)
+
+                if debug_logging and len(locs) != 1:
+                    logger.debug(
+                        "segment_video: frame %d detected %d face(s)",
+                        frame_idx, len(locs),
+                    )
+
                 if len(locs) == 1:
                     encs = backend.encode_faces(frame_rgb, locs)
                     enc: np.ndarray | None = encs[0] if encs else None
                     bbox: _BBox | None = locs[0]
+                    single_face_count += 1
                 else:
                     enc = None
                     bbox = None
+
                 frame_records.append((frame_idx, enc, bbox))
             frame_idx += 1
     finally:
         cap.release()
+
+    logger.debug(
+        "segment_video: analysis pass complete  %d frames read  %d single-face samples",
+        frame_idx, single_face_count,
+    )
 
     # Fall back to the observed frame count if CAP_PROP_FRAME_COUNT was 0.
     if total_frames <= 0:
@@ -368,6 +506,11 @@ def segment_video(
     if not frame_records:
         logger.info("No frames sampled from %s", video_path.name)
         return {"segments": 0, "persons": 0}
+
+    logger.debug(
+        "segment_video: %d sampled frame records (%d with single-face)",
+        len(frame_records), single_face_count,
+    )
 
     # ------------------------------------------------------------------ #
     # Build, filter, and label segments.                                   #
@@ -411,10 +554,19 @@ def segment_video(
             out_w = crop_size if crop_size else max(1, crop_right - crop_left)
             out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
 
+            logger.debug(
+                "segment_video: writing segment person=%d seg=%d frames %d–%d crop (%d,%d,%d,%d) size %dx%d",
+                pid, seg_num, seg.start_frame, seg.end_frame,
+                crop_top, crop_left, crop_bottom, crop_right,
+                out_w, out_h,
+            )
+
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
             writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w, out_h))
             try:
-                for _ in range(seg.end_frame - seg.start_frame + 1):
+                frame_count = seg.end_frame - seg.start_frame + 1
+                written_frames = 0
+                for _ in range(frame_count):
                     ret, frame = cap2.read()
                     if not ret:
                         break
@@ -422,6 +574,11 @@ def segment_video(
                     if crop_size:
                         cropped = cv2.resize(cropped, (crop_size, crop_size), interpolation=cv2.INTER_LANCZOS4)
                     writer.write(cropped)
+                    written_frames += 1
+                logger.debug(
+                    "segment_video: wrote %d/%d frames for segment %s",
+                    written_frames, frame_count, out_path.name,
+                )
             finally:
                 writer.release()
 
