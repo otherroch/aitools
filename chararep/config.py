@@ -94,6 +94,7 @@ class PipelineConfig:
     # ── SCAIL-2 prepared-assets mode ─────────────────────────────────────
     # These fields are used only when backend == "scail2".
     scail2_repo_path: Optional[str] = None
+    scail2_pose_repo_path: Optional[str] = None
     scail2_ckpt_dir: Optional[str] = None
     scail2_model_path: Optional[str] = None
     scail2_model_name: str = "SCAIL-14B"
@@ -108,6 +109,10 @@ class PipelineConfig:
     scail2_sample_shift: float = 3.0
     scail2_sample_guide_scale: float = 5.0
     scail2_sample_solver: str = "unipc"
+    scail2_matchnearest: bool = False
+    scail2_egocentric: bool = False
+    scail2_sam_text: list[str] = field(default_factory=lambda: ["human", "character"])
+    scail2_sam3_model: Optional[str] = None
     scail2_offload_model: bool = True
     scail2_work_dir: Optional[str] = None
     scail2_keep_intermediates: bool = False
@@ -167,13 +172,8 @@ class PipelineConfig:
         return errors
 
     def _validate_scail2_backend(self) -> list[str]:
-        """Validate prepared-assets mode for the SCAIL-2 backend."""
+        """Validate prepared-assets and auto-prep SCAIL-2 modes."""
         errors: list[str] = []
-
-        if self.characters:
-            errors.append(
-                "SCAIL-2 backend does not yet support character mappings; provide prepared SCAIL-2 assets instead"
-            )
 
         self._require_dir(
             errors,
@@ -183,23 +183,71 @@ class PipelineConfig:
         )
         self._require_dir(errors, "scail2_ckpt_dir", self.scail2_ckpt_dir)
         self._require_file(errors, "scail2_model_path", self.scail2_model_path)
-        self._require_file(
-            errors,
-            "scail2_reference_image",
-            self.scail2_reference_image,
-        )
-        self._require_file(
-            errors,
-            "scail2_reference_mask",
-            self.scail2_reference_mask,
-        )
-        self._require_file(errors, "scail2_mask_video", self.scail2_mask_video)
 
         prompt = (self.scail2_prompt or "").strip()
         if self.scail2_prompt_file:
             self._require_file(errors, "scail2_prompt_file", self.scail2_prompt_file)
         if not prompt and not self.scail2_prompt_file:
             errors.append("SCAIL-2 backend requires scail2_prompt or scail2_prompt_file")
+
+        if self.scail2_matchnearest and self.scail2_egocentric:
+            errors.append("SCAIL-2 auto-prep cannot enable both scail2_matchnearest and scail2_egocentric")
+        if self.scail2_sam3_model:
+            self._require_file(errors, "scail2_sam3_model", self.scail2_sam3_model)
+        if not self.scail2_sam_text:
+            errors.append("SCAIL-2 auto-prep requires at least one SAM text prompt")
+
+        prepared_assets = self.scail2_has_prepared_assets()
+        any_prepared_asset = any(
+            [
+                self.scail2_reference_image,
+                self.scail2_reference_mask,
+                self.scail2_mask_video,
+            ]
+        )
+
+        if prepared_assets:
+            self._require_file(
+                errors,
+                "scail2_reference_image",
+                self.scail2_reference_image,
+            )
+            self._require_file(
+                errors,
+                "scail2_reference_mask",
+                self.scail2_reference_mask,
+            )
+            self._require_file(errors, "scail2_mask_video", self.scail2_mask_video)
+        else:
+            if any_prepared_asset:
+                errors.append(
+                    "SCAIL-2 prepared-assets mode requires scail2_reference_image, scail2_reference_mask, and scail2_mask_video together"
+                )
+
+            if self.scail2_reference_image:
+                self._require_file(
+                    errors,
+                    "scail2_reference_image",
+                    self.scail2_reference_image,
+                )
+            elif not self.characters:
+                errors.append(
+                    "SCAIL-2 auto-prep requires scail2_reference_image or one character mapping"
+                )
+
+            if len(self.characters) > 1:
+                errors.append(
+                    "SCAIL-2 auto-prep currently supports at most one character mapping"
+                )
+            elif self.characters:
+                errors.extend(self._validate_character_mappings(max_characters=1))
+
+            self._require_dir(
+                errors,
+                "scail2_pose_repo_path",
+                self._resolved_scail2_pose_repo_path(),
+                must_contain="NLFPoseExtract/process_replacement.py",
+            )
 
         if self.scail2_target_width <= 0 or self.scail2_target_height <= 0:
             errors.append("SCAIL-2 target width and height must be positive")
@@ -222,6 +270,56 @@ class PipelineConfig:
                     f"scail2_work_dir must be a directory when provided: {self.scail2_work_dir}"
                 )
 
+        return errors
+
+    def scail2_has_prepared_assets(self) -> bool:
+        """Return True when explicit SCAIL-2 image/mask assets were provided."""
+        return bool(
+            self.scail2_reference_image
+            and self.scail2_reference_mask
+            and self.scail2_mask_video
+        )
+
+    def _resolved_scail2_pose_repo_path(self) -> Optional[str]:
+        """Return the configured or default SCAIL-Pose checkout path."""
+        if self.scail2_pose_repo_path:
+            return self.scail2_pose_repo_path
+        if not self.scail2_repo_path:
+            return None
+        return str(Path(self.scail2_repo_path) / "SCAIL-Pose")
+
+    def _validate_character_mappings(self, *, max_characters: int) -> list[str]:
+        """Validate character mappings with the existing chararep constraints."""
+        errors: list[str] = []
+        if len(self.characters) == 0:
+            errors.append("At least one character mapping is required")
+            return errors
+        if len(self.characters) > max_characters:
+            errors.append(
+                f"Maximum of {max_characters} character replacements supported"
+            )
+
+        for ch in self.characters:
+            if not ch.reference_paths:
+                errors.append(
+                    f"Character '{ch.source_label}' has no reference images "
+                    f"(needed to identify the face in the video)"
+                )
+            for p in ch.reference_paths:
+                if not Path(p).is_file():
+                    errors.append(
+                        f"Reference image not found for '{ch.source_label}': {p}"
+                    )
+            if not ch.portrait_paths:
+                errors.append(
+                    f"Character '{ch.source_label}' has no portrait images "
+                    f"(the replacement face)"
+                )
+            for p in ch.portrait_paths:
+                if not Path(p).is_file():
+                    errors.append(
+                        f"Portrait not found for '{ch.source_label}': {p}"
+                    )
         return errors
 
     @staticmethod

@@ -195,6 +195,11 @@ Config JSON format
         help="Path to an upstream SCAIL-2 checkout containing generate.py.",
     )
     p.add_argument(
+        "--scail2-pose-repo-path",
+        default=None,
+        help="Optional path to an upstream SCAIL-Pose checkout. Defaults to <scail2_repo_path>/SCAIL-Pose.",
+    )
+    p.add_argument(
         "--scail2-ckpt-dir",
         default=None,
         help="Path to the SCAIL-2 checkpoint directory passed to --ckpt_dir.",
@@ -212,7 +217,7 @@ Config JSON format
     p.add_argument(
         "--scail2-reference-image",
         default=None,
-        help="Prepared SCAIL-2 replacement reference image.",
+        help="SCAIL-2 reference image. When masks are omitted, this image is also used as the SCAIL-Pose auto-prep reference.",
     )
     p.add_argument(
         "--scail2-reference-mask",
@@ -233,6 +238,27 @@ Config JSON format
         "--scail2-prompt-file",
         default=None,
         help="Path to a text file containing the SCAIL-2 positive prompt.",
+    )
+    p.add_argument(
+        "--scail2-matchnearest",
+        action="store_true",
+        help="SCAIL-Pose auto-prep: allow two driving tracks and keep the one closest to the reference mask by IoU.",
+    )
+    p.add_argument(
+        "--scail2-egocentric",
+        action="store_true",
+        help="SCAIL-Pose auto-prep: union multiple disconnected actor parts for egocentric or first-person footage.",
+    )
+    p.add_argument(
+        "--scail2-sam-text",
+        nargs="+",
+        default=list(PipelineConfig().scail2_sam_text),
+        help="SCAIL-Pose auto-prep SAM text prompts (default: human character).",
+    )
+    p.add_argument(
+        "--scail2-sam3-model",
+        default=None,
+        help="Optional path to SAM3 weights for SCAIL-Pose auto-prep.",
     )
     p.add_argument(
         "--scail2-target-width",
@@ -530,6 +556,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         log_file=args.log_file,
         enable_timers=args.timers,
         scail2_repo_path=_arg_get(args, "scail2_repo_path", None),
+        scail2_pose_repo_path=_arg_get(args, "scail2_pose_repo_path", None),
         scail2_ckpt_dir=_arg_get(args, "scail2_ckpt_dir", None),
         scail2_model_path=_arg_get(args, "scail2_model_path", None),
         scail2_model_name=_arg_get(
@@ -562,6 +589,12 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         scail2_sample_solver=_arg_get(
             args, "scail2_sample_solver", PipelineConfig.scail2_sample_solver
         ),
+        scail2_matchnearest=bool(_arg_get(args, "scail2_matchnearest", False)),
+        scail2_egocentric=bool(_arg_get(args, "scail2_egocentric", False)),
+        scail2_sam_text=list(
+            _arg_get(args, "scail2_sam_text", list(PipelineConfig().scail2_sam_text))
+        ),
+        scail2_sam3_model=_arg_get(args, "scail2_sam3_model", None),
         scail2_offload_model=bool(
             _arg_get(
                 args,

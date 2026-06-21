@@ -48,6 +48,7 @@ class TestParseArgs:
         assert args.timers is False
         assert args.dump_config is False
         assert args.scail2_offload_model is True
+        assert args.scail2_pose_repo_path is None
 
     def test_scail2_backend_flag(self):
         args = self._parse(["--backend", "scail2"])
@@ -56,6 +57,14 @@ class TestParseArgs:
     def test_scail2_prompt_file_flag(self):
         args = self._parse(["--scail2-prompt-file", "prompt.txt"])
         assert args.scail2_prompt_file == "prompt.txt"
+
+    def test_scail2_matchnearest_flag(self):
+        args = self._parse(["--scail2-matchnearest"])
+        assert args.scail2_matchnearest is True
+
+    def test_scail2_sam_text_flag(self):
+        args = self._parse(["--scail2-sam-text", "human", "bear"])
+        assert args.scail2_sam_text == ["human", "bear"]
 
     def test_temporal_smooth_alpha_nan_rejected(self):
         with pytest.raises(SystemExit):
@@ -196,6 +205,7 @@ class TestBuildConfigFromArgs:
             scene_cut_threshold=PipelineConfig.scene_cut_threshold,
             scail2_repo_path=None,
             scail2_ckpt_dir=None,
+            scail2_pose_repo_path=None,
             scail2_model_path=None,
             scail2_model_name=PipelineConfig.scail2_model_name,
             scail2_reference_image=None,
@@ -209,6 +219,10 @@ class TestBuildConfigFromArgs:
             scail2_sample_shift=PipelineConfig.scail2_sample_shift,
             scail2_sample_guide_scale=PipelineConfig.scail2_sample_guide_scale,
             scail2_sample_solver=PipelineConfig.scail2_sample_solver,
+            scail2_matchnearest=False,
+            scail2_egocentric=False,
+            scail2_sam_text=list(PipelineConfig().scail2_sam_text),
+            scail2_sam3_model=None,
             scail2_offload_model=PipelineConfig.scail2_offload_model,
             scail2_work_dir=None,
             scail2_keep_intermediates=False,
@@ -284,6 +298,7 @@ class TestBuildConfigFromArgs:
         args = self._make_args(
             backend="scail2",
             scail2_repo_path="repo",
+            scail2_pose_repo_path="pose-repo",
             scail2_ckpt_dir="ckpt",
             scail2_model_path="model.safetensors",
             scail2_reference_image="ref.png",
@@ -294,11 +309,14 @@ class TestBuildConfigFromArgs:
             scail2_target_height=512,
             scail2_sample_steps=28,
             scail2_sample_solver="dpm++",
+            scail2_matchnearest=True,
+            scail2_sam_text=["human", "bear"],
             scail2_offload_model=False,
         )
         cfg = _build_config_from_args(args)
         assert cfg.backend == "scail2"
         assert cfg.scail2_repo_path == "repo"
+        assert cfg.scail2_pose_repo_path == "pose-repo"
         assert cfg.scail2_ckpt_dir == "ckpt"
         assert cfg.scail2_model_path == "model.safetensors"
         assert cfg.scail2_reference_image == "ref.png"
@@ -309,6 +327,8 @@ class TestBuildConfigFromArgs:
         assert cfg.scail2_target_height == 512
         assert cfg.scail2_sample_steps == 28
         assert cfg.scail2_sample_solver == "dpm++"
+        assert cfg.scail2_matchnearest is True
+        assert cfg.scail2_sam_text == ["human", "bear"]
         assert cfg.scail2_offload_model is False
 
 

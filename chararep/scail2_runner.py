@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from .config import PipelineConfig
 from .video_io import finalize_video_output
@@ -17,12 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 class Scail2PreparedAssetsRunner:
-    """Run SCAIL-2 replacement in prepared-assets mode.
+    """Run SCAIL-2 replacement in prepared-assets or auto-prep mode.
 
     This runner intentionally stays separate from the classic per-frame
-    face-swap pipeline. It stages the required assets into a temporary job
-    directory, invokes the upstream ``generate.py`` entrypoint, and finalizes
-    the resulting video for chararep's output contract.
+    face-swap pipeline. It either stages explicit SCAIL-2 assets or derives
+    them through SCAIL-Pose auto-preprocessing, then invokes the upstream
+    ``generate.py`` entrypoint and finalizes the resulting video for chararep's
+    output contract.
     """
 
     def __init__(self, cfg: PipelineConfig):
@@ -37,11 +39,11 @@ class Scail2PreparedAssetsRunner:
         cleanup_job_dir = not self._cfg.scail2_keep_intermediates
 
         try:
-            staged = self._stage_inputs(job_dir)
+            staged = self._prepare_inputs(job_dir)
             output_path = job_dir / "output.mp4"
             cmd = self._build_command(staged, prompt, output_path)
 
-            logger.info("Running SCAIL-2 prepared-assets job in %s", job_dir)
+            logger.info("Running SCAIL-2 generate job in %s", job_dir)
             result = subprocess.run(
                 cmd,
                 cwd=self._cfg.scail2_repo_path,
@@ -78,6 +80,12 @@ class Scail2PreparedAssetsRunner:
             "fps": fps,
         }
 
+    def _prepare_inputs(self, job_dir: Path) -> dict[str, Path]:
+        """Return generate.py inputs, either from explicit assets or auto-prep."""
+        if self._cfg.scail2_has_prepared_assets():
+            return self._stage_prepared_assets(job_dir)
+        return self._stage_inputs_from_scail_pose(job_dir)
+
     def _resolve_prompt(self) -> str:
         prompt = (self._cfg.scail2_prompt or "").strip()
         if prompt:
@@ -100,7 +108,7 @@ class Scail2PreparedAssetsRunner:
             )
         )
 
-    def _stage_inputs(self, job_dir: Path) -> dict[str, Path]:
+    def _stage_prepared_assets(self, job_dir: Path) -> dict[str, Path]:
         staged = {
             "image": self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_image, "ref"),
             "mask_image": self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_mask, "ref_mask"),
@@ -109,12 +117,113 @@ class Scail2PreparedAssetsRunner:
         }
         return staged
 
+    def _stage_inputs_from_scail_pose(self, job_dir: Path) -> dict[str, Path]:
+        """Derive SCAIL-2 masks and intermediates from SCAIL-Pose."""
+        ref_image = self._stage_auto_reference_image(job_dir)
+        driving_video = self._stage_driving_video(job_dir)
+
+        cmd = self._build_pose_command(job_dir)
+        logger.info("Running SCAIL-Pose replacement preprocessing in %s", job_dir)
+        result = subprocess.run(
+            cmd,
+            cwd=self._resolve_pose_repo_path(),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(self._format_pose_failure(result))
+
+        mask_image = job_dir / "ref_mask.png"
+        pose_video = job_dir / "rendered_v2.mp4"
+        mask_video = job_dir / "replace_mask.mp4"
+        for path in [mask_image, pose_video, mask_video]:
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"SCAIL-Pose auto-prep did not produce expected output: {path}"
+                )
+
+        return {
+            "image": ref_image,
+            "mask_image": mask_image,
+            "pose": pose_video,
+            "mask_video": mask_video,
+            "driving_input": driving_video,
+        }
+
     @staticmethod
     def _copy_to_job_dir(job_dir: Path, source_path: str, stem: str) -> Path:
         source = Path(source_path)
         target = job_dir / f"{stem}{source.suffix}"
         shutil.copy2(source, target)
         return target
+
+    def _stage_auto_reference_image(self, job_dir: Path) -> Path:
+        """Write a PNG ref image for SCAIL-Pose auto-prep."""
+        source_path = self._resolve_reference_image_source()
+        img = self._read_image_bgr(source_path)
+        target = job_dir / "ref_image.png"
+        if not cv2.imwrite(str(target), img):
+            raise RuntimeError(f"Could not write staged SCAIL-2 ref image: {target}")
+        return target
+
+    def _stage_driving_video(self, job_dir: Path) -> Path:
+        """Stage the input clip under the filename expected by SCAIL-Pose."""
+        target = job_dir / "driving.mp4"
+        if Path(self._cfg.input_video).suffix.lower() != ".mp4":
+            logger.warning(
+                "SCAIL-Pose auto-prep expects driving.mp4; staging non-mp4 input %s as %s",
+                self._cfg.input_video,
+                target,
+            )
+        shutil.copy2(self._cfg.input_video, target)
+        return target
+
+    def _resolve_reference_image_source(self) -> str:
+        """Return the image used as SCAIL-2's replacement reference."""
+        if self._cfg.scail2_reference_image:
+            return self._cfg.scail2_reference_image
+        if self._cfg.characters:
+            portraits = self._cfg.characters[0].portrait_paths
+            if portraits:
+                return portraits[0]
+        raise ValueError("No SCAIL-2 reference image available for auto-prep")
+
+    def _resolve_pose_repo_path(self) -> str:
+        """Return the SCAIL-Pose checkout directory."""
+        path = self._cfg._resolved_scail2_pose_repo_path()
+        if not path:
+            raise ValueError("SCAIL-Pose repo path is not configured")
+        return path
+
+    def _build_pose_command(self, job_dir: Path) -> list[str]:
+        """Build the SCAIL-Pose replacement preprocessing command."""
+        pose_script = Path(self._resolve_pose_repo_path()) / "NLFPoseExtract" / "process_replacement.py"
+        cmd = [
+            sys.executable,
+            str(pose_script),
+            "--subdir",
+            str(job_dir),
+        ]
+        if self._cfg.scail2_matchnearest:
+            cmd.append("--matchnearest")
+        if self._cfg.scail2_egocentric:
+            cmd.append("--egocentric")
+        if self._cfg.scail2_sam_text:
+            cmd.extend(["--text", *self._cfg.scail2_sam_text])
+        if self._cfg.scail2_sam3_model:
+            cmd.extend(["--sam3_model", str(self._cfg.scail2_sam3_model)])
+        return cmd
+
+    @staticmethod
+    def _read_image_bgr(image_path: str) -> cv2.typing.MatLike:
+        """Read an image as BGR uint8, using PIL as a fallback when needed."""
+        img = cv2.imread(str(image_path))
+        if img is not None:
+            return img
+        from PIL import Image
+
+        pil = Image.open(image_path).convert("RGB")
+        return np.array(pil)[:, :, ::-1].copy()
 
     def _build_command(self, staged: dict[str, Path], prompt: str, output_path: Path) -> list[str]:
         generate_script = Path(self._cfg.scail2_repo_path) / "generate.py"
@@ -177,3 +286,12 @@ class Scail2PreparedAssetsRunner:
         if len(details) > 1000:
             details = details[-1000:]
         return f"SCAIL-2 generate.py failed with exit code {result.returncode}: {details}"
+
+    @staticmethod
+    def _format_pose_failure(result: subprocess.CompletedProcess) -> str:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        details = stderr or stdout or "no subprocess output captured"
+        if len(details) > 1000:
+            details = details[-1000:]
+        return f"SCAIL-Pose process_replacement.py failed with exit code {result.returncode}: {details}"
