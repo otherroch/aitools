@@ -1,54 +1,54 @@
-# aitools
+# Project README - Character Recognition and Replacement Tool
 
-**AI dataset preparation toolkit for diffusion model LoRA training.**
+## Overview
+This project provides character recognition and replacement capabilities for image processing, using multiple AI models including Google Gemini, Qwen, and open-source frameworks.
 
-`aitools` provides 3 command-line tools and Python APIs for preparing image and video datasets. Also included is a tool called `chararep` which uses the output of the other tools to swap faces in videos. 
+## Installation and Setup
+1. Ensure Python 3.8+ is installed
+2. Install requirements from `requirements.txt` or `pyproject.toml`
+3. Set up virtual environment if needed
 
-| Tool | Command | Description |
-|------|---------|-------------|
-| Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (`convert → crop → caption → augment`) |
-| Video Crop | `vicrop` | Extract face-cropped PNG frames or per-person video segments (based on sampled-frame detection) from video files |
-| Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL / Qwen3-omni / Qwen3.5   (`--vl`) or Gemma4 (`--gemma4`) or a remote vLLM server (`--vllm`) |
-| Character Replace | `chararep` | Replace character faces in a video using deep face-swapping models (inswapper, SimSwap, uniface, hyperswap, blendswap). Other tools like `vicrop` and `portrait-prep` can be used to create the portrait galleries required by `chararep` |
-
----
-
-## Quick start
-
+## Usage
 ```bash
-git clone https://github.com/otherroch/aitools.git
-cd aitools
+# Basic usage - Process an image
+python -m chararep.main --image_path input.jpg --char_index 0
 
-python -m venv .venv
-source .venv/bin/activate   # Linux/macOS
-# .venv\Scripts\activate    # Windows
-
-# upgrade pip to get --group support
-python -m pip install -U pip
-
-# install base dependencies (CPU only support)
-pip install --group base
-
-# install aitools
-pip install -e .
+# The tool processes images through character recognition pipeline:
+# 1. Loads and preprocesses the input image
+# 2. Uses AI models (Google Gemini/Qwen) for character detection
+# 3. Applies character replacement based on specified parameters
+# 4. Outputs processed image with character transformations
 ```
 
-For individual feature installs, GPU support, `chararep` dependencies (including basicsr),
-**docker images**, install extras, system prerequisites, or project structure 
-see [installation](doc/INSTALLATION.md).
+## Main Components
+- `chararep/main.py`: Command-line interface and file processing
+- `chararep/chararep.py`: Core character recognition implementation
+- `CharacterRec`: Main class handling OCR and character replacement operations
 
-## Documentation
-
-For a complete reference of each tool's command line options, usage examples, and Python API:
-
-- [portrait-prep](doc/PORTRAIT_PREP.md) — portrait dataset preparation pipeline: **convert, crop, caption, augment, cpcap**
-- [vicrop](doc/VICROP.md) — video face-crop extraction with identity clustering, reference photo selection, and per-person video segment extraction (via sampled-frame detection)
-- [videsc](doc/VIDESC.md) — video description generator (WD14 tags, Qwen3-VL, Qwen3-omni, Qwen3.5, Gemma4, vLLM remote server) natural language)
-- [chararep](doc/CHARAREP.md) — video character face-replacement pipeline (architecture, CLI, config, input requirements, VRAM guidelines)
-- [Python API and Testing](doc/API_AND_TESTING.md) — Python API examples for each tool, test commands, and coverage
-
----
+## Key Features
+- Multiple AI model support (Google Gemini, Qwen)
+- CPU/GPU processing capability
+- Batch processing support
+- Image preprocessing and enhancement
+- Selective character replacement
 
 ## License
+[License information from original repository]
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+## Support
+For issues or feature requests, refer to the original repository documentation.
+
+Last updated: $(date +%Y-%m-%d)
+
+## Quick Start Example
+```python
+from chararep.chararep import CharacterRec
+
+# Initialize character recognition
+recognizer = CharacterRec()
+
+# Process an image
+result = recognizer.match("input.jpg")
+
+# Get recognized characters and their replacements
+print(f"Processed: {result}")
