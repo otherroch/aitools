@@ -16,6 +16,61 @@ logger = logging.getLogger(__name__)
 _EOS = object()
 
 
+def finalize_video_output(
+    source_path: str,
+    output_path: str,
+    *,
+    audio_source: Optional[str] = None,
+) -> None:
+    """Finalize a generated video, muxing original audio when requested."""
+    source = Path(source_path)
+    target = Path(output_path)
+
+    if audio_source is None:
+        if source != target:
+            source.replace(target)
+        return
+
+    logger.info("Muxing original audio into output video...")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source),
+        "-i",
+        audio_source,
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0?",
+        "-shortest",
+        str(target),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Audio mux timed out – output will have no audio.")
+        source.replace(target)
+        return
+
+    if result.returncode == 0:
+        source.unlink(missing_ok=True)
+        logger.info("Audio muxed successfully.")
+        return
+
+    logger.warning(
+        "Audio mux failed (output will have no audio): %s",
+        result.stderr[-500:] if result.stderr else "",
+    )
+    source.replace(target)
+
+
 class VideoReader:
     """Reads frames from a video file in a background thread.
 
@@ -267,34 +322,8 @@ class VideoWriter:
 
     def _mux_audio(self) -> None:
         """Mux original audio into the final output using ffmpeg."""
-        logger.info("Muxing original audio into output video...")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", self._tmp_path,
-            "-i", self._audio_source,
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-map", "0:v:0",
-            "-map", "1:a:0?",
-            "-shortest",
+        finalize_video_output(
+            self._tmp_path,
             self._final_path,
-        ]
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("Audio mux timed out – output will have no audio.")
-            Path(self._tmp_path).rename(self._final_path)
-            return
-        if result.returncode == 0:
-            Path(self._tmp_path).unlink(missing_ok=True)
-            logger.info("Audio muxed successfully.")
-        else:
-            logger.warning(
-                "Audio mux failed (output will have no audio): %s",
-                result.stderr[-500:] if result.stderr else "",
-            )
-            # Fall back to video-only output
-            Path(self._tmp_path).rename(self._final_path)
+            audio_source=self._audio_source,
+        )
