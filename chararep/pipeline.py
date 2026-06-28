@@ -62,6 +62,12 @@ class CharacterReplacementPipeline:
         self._enhancer = FaceEnhancer(cfg)
         self._blender = FaceBlender(cfg)
 
+        # SCAIL-2 swapper (optional)
+        self._scail2_swapper = None
+        if cfg.enable_scail2:
+            from .scail2 import SCAIL2Swapper
+            self._scail2_swapper = SCAIL2Swapper(cfg)
+
         # Temporal smoothing state: for localized EMA on face regions
         self._prev_face_part: np.ndarray | None = None
         self._prev_face_mask: np.ndarray | None = None
@@ -389,7 +395,11 @@ class CharacterReplacementPipeline:
                 "blend": 0.0,
             }
 
+        # Check if SCAIL-2 is enabled
         t0 = time.perf_counter()
+        if self._cfg.enable_scail2 and self._scail2_swapper:
+            logger.info("Using SCAIL-2 mode for character replacement")
+            return self._run_scail2(stats, t0)
 
         with VideoReader(
             self._cfg.input_video, queue_size=self._cfg.batch_size * 2
@@ -430,6 +440,53 @@ class CharacterReplacementPipeline:
 
         if "timers" in stats:
             self._log_timer_distribution(stats["timers"])
+
+        return stats
+
+    def _run_scail2(self, stats: dict, t0: float) -> dict:
+        """Run SCAIL-2 based character replacement pipeline.
+
+        This method handles the entire video processing with SCAIL-2,
+        which is a diffusion-based approach that doesn't require face
+        detection or tracking.
+
+        Args:
+            stats: Statistics dictionary to update
+            t0: Start time for timing
+
+        Returns:
+            Updated statistics dictionary
+        """
+        from .scail2 import SCAIL2Swapper
+
+        logger.info("Starting SCAIL-2 character replacement pipeline")
+
+        # Load reference data
+        if self._cfg.scail2_reference_video:
+            logger.info("Loading reference video: %s", self._cfg.scail2_reference_video)
+            self._scail2_swapper.load_reference_video(self._cfg.scail2_reference_video)
+        elif self._cfg.scail2_reference_images:
+            logger.info("Loading reference images: %s", self._cfg.scail2_reference_images)
+            self._scail2_swapper.load_reference_images(self._cfg.scail2_reference_images)
+        else:
+            logger.warning("No reference data specified for SCAIL-2 mode")
+
+        # Process video
+        logger.info("Processing video with SCAIL-2...")
+        self._scail2_swapper.swap_video(
+            self._cfg.input_video,
+            self._cfg.output_video
+        )
+
+        # Update stats
+        stats["frames_total"] = 1  # SCAIL-2 processes entire video at once
+        stats["faces_swapped"] = len(self._cfg.characters)
+        stats["elapsed_s"] = time.perf_counter() - t0
+        stats["fps"] = 0.0  # Not applicable for SCAIL-2
+        stats["frames_detected"] = 0
+        stats["faces_identified"] = 0
+
+        logger.info("SCAIL-2 processing complete")
 
         return stats
 

@@ -82,6 +82,22 @@ class PipelineConfig:
     log_level: str = "INFO"
     log_file: Optional[str] = None
 
+    # ── SCAIL-2 (Diffusion-based) ─────────────────────────────────────────
+    # When enabled, the pipeline uses SCAIL-2 for end-to-end character
+    # replacement instead of ONNX-based face swap.
+    #
+    # Reference can be a video (video-to-video mode) or a set of portrait
+    # images (image-to-video mode).  The diffusion model itself is loaded
+    # from ``scail2_model_path`` (PyTorch checkpoint or GGUF).
+    enable_scail2: bool = False
+    scail2_model_path: Optional[str] = None  # SCAIL-2 checkpoint or GGUF file
+    scail2_reference_video: Optional[str] = None  # reference character video
+    scail2_reference_images: Optional[list[str]] = None  # portrait images
+    scail2_resolution: str = "704p"  # "512p" or "704p" (H & W must be divisible by 32)
+    scail2_use_gguf: bool = False  # Use GGUF quantized model for CPU/GPU
+    scail2_device_id: int = 0  # CUDA device for SCAIL-2 (overrides ``device_id``)
+    scail2_use_fp16: bool = True  # FP16 inference for SCAIL-2
+
     # ── Diagnostics ──────────────────────────────────────────────────────
     enable_timers: bool = False  # Collect and report per-stage timing distribution
 
@@ -119,4 +135,32 @@ class PipelineConfig:
                     errors.append(
                         f"Portrait not found for '{ch.source_label}': {p}"
                     )
+
+        # ── SCAIL-2 validation ───────────────────────────────────────────
+        if self.enable_scail2:
+            if not self.scail2_model_path:
+                errors.append("SCAIL-2 enabled but scail2_model_path is required")
+            if self.scail2_reference_video and self.scail2_reference_images:
+                errors.append(
+                    "SCAIL-2: specify either --scail2-reference-video OR "
+                    "--scail2-reference-images, not both"
+                )
+            if not self.scail2_reference_video and not self.scail2_reference_images:
+                errors.append(
+                    "SCAIL-2: provide --scail2-reference-video or "
+                    "--scail2-reference-images"
+                )
+            if self.scail2_resolution not in ("512p", "704p"):
+                errors.append(
+                    f"SCAIL-2: invalid resolution '{self.scail2_resolution}' "
+                    f"(must be '512p' or '704p')"
+                )
+            if self.scail2_use_gguf and not Path(self.scail2_model_path).suffix.lower().startswith(".gguf"):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "SCAIL-2: model path '%s' does not end with '.gguf'; "
+                    "using PyTorch checkpoint loader instead.",
+                    self.scail2_model_path,
+                )
         return errors

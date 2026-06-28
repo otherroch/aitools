@@ -318,6 +318,53 @@ Config JSON format
         help="Write log to a file in addition to stderr.",
     )
 
+    # ── SCAIL-2 (Diffusion-based) ─────────────────────────────────────────
+    # When enabled, the pipeline uses SCAIL-2 for end-to-end character
+    # replacement instead of ONNX-based face swap.
+    p.add_argument(
+        "--scail2",
+        action="store_true",
+        help="Enable SCAIL-2 mode for diffusion-based character replacement.",
+    )
+    p.add_argument(
+        "--scail2-model-path",
+        default=None,
+        help="Path to SCAIL-2 model (PyTorch checkpoint or GGUF file).",
+    )
+    p.add_argument(
+        "--scail2-reference-video",
+        default=None,
+        help="Path to reference character video for video-to-video mode.",
+    )
+    p.add_argument(
+        "--scail2-reference-images",
+        nargs="*",
+        default=None,
+        help="Portrait images for image-to-video mode (repeat --scail2-reference-images for multiple files).",
+    )
+    p.add_argument(
+        "--scail2-resolution",
+        choices=["512p", "704p"],
+        default="704p",
+        help="SCAIL-2 output resolution (default: 704p). H & W must be divisible by 32.",
+    )
+    p.add_argument(
+        "--scail2-use-gguf",
+        action="store_true",
+        help="Use GGUF quantized model for CPU/GPU inference.",
+    )
+    p.add_argument(
+        "--scail2-device",
+        type=int,
+        default=0,
+        help="CUDA device ID for SCAIL-2 (overrides --device).",
+    )
+    p.add_argument(
+        "--scail2-no-fp16",
+        action="store_true",
+        help="Disable FP16 for SCAIL-2 inference (use FP32).",
+    )
+
     # ── Diagnostics ──────────────────────────────────────────────────────
     p.add_argument(
         "--timers",
@@ -385,6 +432,16 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
             )
         )
 
+    # SCAIL-2 parameters
+    enable_scail2 = getattr(args, "scail2", False)
+    scail2_model_path = getattr(args, "scail2_model_path", None)
+    scail2_reference_video = getattr(args, "scail2_reference_video", None)
+    scail2_reference_images = getattr(args, "scail2_reference_images", None)
+    scail2_resolution = getattr(args, "scail2_resolution", "704p")
+    scail2_use_gguf = getattr(args, "scail2_use_gguf", False)
+    scail2_device_id = getattr(args, "scail2_device", 0)
+    scail2_no_fp16 = getattr(args, "scail2_no_fp16", False)
+
     return PipelineConfig(
         input_video=args.input_video or "",
         output_video=args.output_video or "",
@@ -411,6 +468,15 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         log_level="DEBUG" if args.verbose else "INFO",
         log_file=args.log_file,
         enable_timers=args.timers,
+        # SCAIL-2 parameters
+        enable_scail2=enable_scail2,
+        scail2_model_path=scail2_model_path,
+        scail2_reference_video=scail2_reference_video,
+        scail2_reference_images=scail2_reference_images,
+        scail2_resolution=scail2_resolution,
+        scail2_use_gguf=scail2_use_gguf,
+        scail2_device_id=scail2_device_id,
+        scail2_use_fp16=not scail2_no_fp16,
     )
 
 
