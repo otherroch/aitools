@@ -6,6 +6,30 @@ Reads video files using OpenCV, samples frames at a configurable interval (`--ev
 
 When `--output-type video` is used, vicrop instead extracts MP4 segments based on face detection performed on sampled frames (every `--every-n` frames). Contiguous runs of sampled frames that contain exactly one person are grouped into segments; the frames in between sampled frames are included in the segment without individual detection, so multi-person frames may appear in the output if they fall between sampled frames. Each segment is cropped and resized to a square around the detected face. This is useful for preparing single-subject training clips.
 
+### Fast frame extraction with `--extract-only`
+
+When `--extract-only` is passed, vicrop skips face detection and recognition entirely. Every N-th frame is simply extracted as-is (no cropping, no identity clustering) and saved as a PNG file. This is useful for quick frame sampling or when you only need raw frames without any face analysis.
+
+```bash
+# Extract every 30th frame without face detection
+vicrop --input ./video.mp4 --output-dir ./frames --extract-only
+
+# Extract with custom interval and resolution
+vicrop --input ./video.mp4 --output-dir ./frames --extract-only --every-n 10 --crop-size 512
+```
+
+### Non-square output with `--crop-height`
+
+By default, `--crop-size` specifies the square output resolution (width and height). When `--crop-height` is specified, `--crop-size` becomes the **width** in pixels and `--crop-height` becomes the **height** in pixels. This allows you to create non-square output frames.
+
+```bash
+# Create non-square frames (width=1024, height=768)
+vicrop --input ./video.mp4 --output-dir ./frames --crop-size 1024 --crop-height 768
+
+# Without --crop-height, crop-size is the square output size
+vicrop --input ./video.mp4 --output-dir ./frames --crop-size 1024
+```
+
 ## Usage
 
 ### Photo mode (default)

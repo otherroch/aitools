@@ -46,6 +46,26 @@ print(stats)  # {'frames_processed': 20, 'faces': 5, 'persons': 1}
 
 # Process all videos in a directory
 stats = crop_folder(Path("videos"), Path("frames"))
+
+# Fast frame extraction without face detection
+stats = crop_video(
+    Path("interview.mp4"),
+    Path("frames"),
+    every_n=10,
+    crop_size=512,
+    extract_only=True,
+)
+print(stats)  # {'frames_extracted': 50, 'faces': 0, 'persons': 0}
+
+# Non-square output with crop_height
+stats = crop_video(
+    Path("interview.mp4"),
+    Path("frames"),
+    every_n=30,
+    crop_size=1024,
+    crop_height=768,
+)
+print(stats)  # {'frames_processed': 20, 'faces': 5, 'persons': 1}
 ```
 
 ### videsc

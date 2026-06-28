@@ -1132,3 +1132,258 @@ class TestCLIOutputType:
                 "--output-dir", "/tmp/out",
                 "--output-type", "gif",
             ])
+
+
+# ---------------------------------------------------------------------------
+# CLI — --extract-only and --crop-height integration
+# ---------------------------------------------------------------------------
+
+
+class TestCLIExtractOnlyAndCropHeight:
+    """Smoke-test the CLI argument additions."""
+
+    def test_extract_only_flag_parsed(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--extract-only",
+        ])
+        assert args.extract_only is True
+
+    def test_crop_size_default(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args(["--input", "/tmp/v.mp4", "--output-dir", "/tmp/out"])
+        assert args.crop_size == 1024
+
+    def test_crop_height_default_none(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args(["--input", "/tmp/v.mp4", "--output-dir", "/tmp/out"])
+        assert args.crop_height is None
+
+    def test_crop_height_parsed(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--crop-height", "768",
+        ])
+        assert args.crop_height == 768
+
+    def test_crop_size_with_crop_height(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--crop-size", "1024",
+            "--crop-height", "768",
+        ])
+        assert args.crop_size == 1024
+        assert args.crop_height == 768
+
+    def test_extract_only_with_crop_size(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--extract-only",
+            "--crop-size", "512",
+        ])
+        assert args.extract_only is True
+        assert args.crop_size == 512
+
+    def test_extract_only_with_crop_height(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--extract-only",
+            "--crop-size", "1024",
+            "--crop-height", "768",
+        ])
+        assert args.extract_only is True
+        assert args.crop_size == 1024
+        assert args.crop_height == 768
+
+    def test_extract_only_with_every_n(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--extract-only",
+            "--every-n", "15",
+            "--crop-size", "512",
+        ])
+        assert args.extract_only is True
+        assert args.every_n == 15
+        assert args.crop_size == 512
+
+
+# ---------------------------------------------------------------------------
+# Functional tests for --extract-only and --crop-height
+# ---------------------------------------------------------------------------
+
+
+class TestExtractOnlyAndCropHeightFunctional:
+    """Verify the actual behavior of extract_only and crop_height options."""
+
+    def test_extract_only_extracts_frames_without_face_detection(self, tmp_path):
+        """When extract_only=True, frames are extracted without face detection."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        # Create 6 frames - we should get 3 extracted (every_n=2)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap = _fake_video_capture([frame] * 6)
+
+        backend = MockBackendShim(MagicMock())
+
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_video(
+                    video_path, out_dir,
+                    every_n=2,
+                    extract_only=True,
+                    crop_size=64,
+                    backend=backend,
+                )
+
+        # Should extract 3 frames (frames 0, 2, 4)
+        assert stats["frames_extracted"] == 3
+        # Should not have faces detected (no face detection in extract-only mode)
+        assert stats["faces"] == 0
+        # Output files should be named without face number
+        saved = list((out_dir / "clip").rglob("*.png"))
+        assert len(saved) == 3
+        for f in saved:
+            assert "face" not in f.name
+
+    def test_extract_only_with_crop_height(self, tmp_path):
+        """When extract_only=True and crop_height is specified, output is non-square."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap = _fake_video_capture([frame])
+
+        backend = MockBackendShim(MagicMock())
+
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_video(
+                    video_path, out_dir,
+                    every_n=1,
+                    extract_only=True,
+                    crop_size=1024,
+                    crop_height=768,
+                    backend=backend,
+                )
+
+        assert stats["frames_extracted"] == 1
+        saved = list((out_dir / "clip").rglob("*.png"))
+        assert len(saved) == 1
+        # Verify the file exists (we can't easily check dimensions without PIL)
+        assert saved[0].exists()
+
+    def test_crop_size_without_crop_height_is_square(self, tmp_path):
+        """Without crop_height, crop_size specifies square output."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap = _fake_video_capture([frame])
+
+        backend = MockBackendShim(MagicMock())
+
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_video(
+                    video_path, out_dir,
+                    every_n=1,
+                    extract_only=True,
+                    crop_size=512,
+                    backend=backend,
+                )
+
+        assert stats["frames_extracted"] == 1
+        saved = list((out_dir / "clip").rglob("*.png"))
+        assert len(saved) == 1
+        # File should be 512x512 (square)
+        assert saved[0].exists()
+
+    def test_crop_folder_with_extract_only(self, tmp_path):
+        """crop_folder should work with extract_only."""
+        src = tmp_path / "in"
+        src.mkdir()
+        video_path = src / "clip.mp4"
+        video_path.write_bytes(b"fake")
+
+        out_dir = tmp_path / "out"
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap = _fake_video_capture([frame] * 6)
+
+        backend = MockBackendShim(MagicMock())
+
+        with patch("vicrop.crop.cv2.VideoCapture", side_effect=lambda _: mock_cap):
+            with patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+                stats = crop_folder(
+                    src, out_dir,
+                    every_n=2,
+                    extract_only=True,
+                    crop_size=64,
+                    backend=backend,
+                )
+
+        assert stats["videos_processed"] == 1
+        assert stats["frames_extracted"] == 3
+        assert stats["faces"] == 0
+
+    def test_segment_video_with_crop_height(self, tmp_path):
+        """segment_video should support crop_height for non-square output."""
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0)
+        write_cap = _make_segment_cap(frames, fps=25.0)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+
+        mock_writer = MagicMock()
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", return_value=mock_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d):
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_size=512,
+                crop_height=384,
+                backend=backend,
+            )
+
+        assert stats["segments"] == 1
+        assert stats["persons"] == 1
+        # VideoWriter should have been created with non-square size (512x384)
+        mock_writer.write.assert_called_once()

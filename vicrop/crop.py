@@ -57,12 +57,14 @@ def crop_video(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
+    crop_height: int | None = None,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
+    extract_only: bool = False,
     backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
@@ -71,12 +73,21 @@ def crop_video(
     a fractional *margin_ratio* padding, resized to *crop_size* × *crop_size*,
     and saved as PNG files inside a sub-directory named after the video stem.
 
+    When ``extract_only`` is True, face detection and recognition are skipped
+    and every N-th frame is simply extracted as-is.
+
     Args:
         video_path:      Path to the input video file.
         output_dir:      Root directory where cropped images are saved.
         every_n:         Process every N-th frame (default: 30).
         margin_ratio:    Fractional padding around each detected face bbox.
-        crop_size:       Output square resolution in pixels (default: 1024).
+        crop_size:       Output resolution in pixels.  When *crop_height* is
+                         not specified this is the square output pixel size.
+                         When *crop_height* is specified this is the width.
+        crop_height:     Height (in pixels) of the output photo or video.
+                         If specified then *crop_size* specifies the width.
+                         If not specified then *crop_size* specifies the square
+                         output pixel size.
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
@@ -89,6 +100,8 @@ def crop_video(
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        extract_only:    If True, just extract frames without doing face
+                         recognition.  Simply extract every N-th frames.
         backend:         :class:`FaceBackend` instance for detection, encoding,
                          and clustering.  When *None*, a default dlib backend
                          is created.
@@ -156,62 +169,96 @@ def crop_video(
                     )
 
             if frame_idx % every_n == 0:
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                face_locations = backend.detect_faces(frame_rgb)
-                face_encodings = backend.encode_faces(frame_rgb, face_locations)
+                if extract_only:
+                    # Extract every N-th frame without face recognition
+                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                    h_img, w_img = frame_rgb.shape[:2]
 
-                logger.debug(
-                    "crop_video: frame %d  detected %d face(s)",
-                    frame_idx, len(face_locations),
-                )
+                    # Determine output dimensions
+                    if crop_height is not None:
+                        out_w = crop_size
+                        out_h = crop_height
+                    else:
+                        out_w = crop_size
+                        out_h = crop_size
 
-                h_img, w_img = frame_rgb.shape[:2]
-
-                for i, ((top, right, bottom, left), encoding) in enumerate(
-                    zip(face_locations, face_encodings)
-                ):
-                    face_h = bottom - top
-                    face_w = right - left
-                    margin_h = int(face_h * margin_ratio)
-                    margin_w = int(face_w * margin_ratio)
-
-                    crop_top = max(0, top - margin_h)
-                    crop_bottom = min(h_img, bottom + margin_h)
-                    crop_left = max(0, left - margin_w)
-                    crop_right = min(w_img, right + margin_w)
-
-                    face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
+                    face_arr = frame_rgb
                     pil_img = Image.fromarray(face_arr).resize(
-                        (crop_size, crop_size), Image.LANCZOS
+                        (out_w, out_h), Image.LANCZOS
                     )
 
-                    out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
+                    out_name = f"frame{frame_idx:06d}.png"
                     out_path = staging_dir / out_name
                     pil_img.save(out_path)
-                    logger.debug("Saved face crop: %s", out_path)
-                    all_results.append((out_path, encoding))
+                    logger.debug("Extracted frame: %s", out_path)
+                    all_results.append((out_path, None))
 
                     faces_detected += 1
+                else:
+                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                    face_locations = backend.detect_faces(frame_rgb)
+                    face_encodings = backend.encode_faces(frame_rgb, face_locations)
 
-                    if do_ref:
-                        lm_list = backend.face_landmarks(
-                            frame_rgb, [(top, right, bottom, left)],
-                        )
-                        lm = lm_list[0] if lm_list else None
-                        ref_scores[out_name] = score_reference_quality(
-                            frame_rgb,
-                            (top, right, bottom, left),
-                            lm,
-                            face_arr,
-                            face_count=len(face_locations),
-                            name = out_name if debug_logging else None,
+                    logger.debug(
+                        "crop_video: frame %d  detected %d face(s)",
+                        frame_idx, len(face_locations),
+                    )
+
+                    h_img, w_img = frame_rgb.shape[:2]
+
+                    for i, ((top, right, bottom, left), encoding) in enumerate(
+                        zip(face_locations, face_encodings)
+                    ):
+                        face_h = bottom - top
+                        face_w = right - left
+                        margin_h = int(face_h * margin_ratio)
+                        margin_w = int(face_w * margin_ratio)
+
+                        crop_top = max(0, top - margin_h)
+                        crop_bottom = min(h_img, bottom + margin_h)
+                        crop_left = max(0, left - margin_w)
+                        crop_right = min(w_img, right + margin_w)
+
+                        face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
+                        pil_img = Image.fromarray(face_arr).resize(
+                            (crop_size, crop_size), Image.LANCZOS
                         )
 
-                frames_processed += 1
+                        out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
+                        out_path = staging_dir / out_name
+                        pil_img.save(out_path)
+                        logger.debug("Saved face crop: %s", out_path)
+                        all_results.append((out_path, encoding))
+
+                        faces_detected += 1
+
+                        if do_ref:
+                            lm_list = backend.face_landmarks(
+                                frame_rgb, [(top, right, bottom, left)],
+                            )
+                            lm = lm_list[0] if lm_list else None
+                            ref_scores[out_name] = score_reference_quality(
+                                frame_rgb,
+                                (top, right, bottom, left),
+                                lm,
+                                face_arr,
+                                face_count=len(face_locations),
+                                name = out_name if debug_logging else None,
+                            )
+
+                    frames_processed += 1
 
             frame_idx += 1
-    finally:
-        cap.release()
+
+    cap.release()
+
+    # Count frames extracted (for extract_only mode)
+    frames_extracted = 0
+    if extract_only:
+        # Count frames that were extracted
+        # In extract_only mode, every_n-th frame was extracted
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frames_extracted = max(1, (total_frames + every_n - 1) // every_n) if total_frames > 0 else 0
 
     persons = 0
     total_refs = 0
@@ -270,6 +317,7 @@ def crop_video(
 
     return {
         "frames_processed": frames_processed,
+        "frames_extracted": frames_extracted,
         "faces": len(all_results),
         "persons": persons,
         "ref_photos": total_refs,
@@ -282,12 +330,14 @@ def crop_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
+    crop_height: int | None = None,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
+    extract_only: bool = False,
     backend: FaceBackend | None = None,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
@@ -297,7 +347,13 @@ def crop_folder(
         output_dir:      Destination directory.
         every_n:         Process every N-th frame from each video.
         margin_ratio:    Fractional margin around each detected face bbox.
-        crop_size:       Output square resolution in pixels.
+        crop_size:       Output resolution in pixels.  When *crop_height* is
+                         not specified this is the square output pixel size.
+                         When *crop_height* is specified this is the width.
+        crop_height:     Height (in pixels) of the output photo or video.
+                         If specified then *crop_size* specifies the width.
+                         If not specified then *crop_size* specifies the square
+                         output pixel size.
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
@@ -308,6 +364,8 @@ def crop_folder(
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
+        extract_only:    If True, just extract frames without doing face
+                         recognition.  Simply extract every N-th frames.
         backend:         :class:`FaceBackend` instance.  When *None*, a
                          default dlib backend is created.
 
@@ -340,6 +398,7 @@ def crop_folder(
     total: dict[str, int] = {
         "videos_processed": 0,
         "frames_processed": 0,
+        "frames_extracted": 0,
         "faces": 0,
         "persons": 0,
         "ref_photos": 0,
@@ -353,16 +412,19 @@ def crop_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
+            crop_height=crop_height,
             classify=classify,
             tolerance=tolerance,
             skip_existing=skip_existing,
             ref_thresh=ref_thresh,
             classified_path=classified_path,
             classified_max=classified_max,
+            extract_only=extract_only,
             backend=backend,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]
+        total["frames_extracted"] += stats["frames_extracted"]
         total["faces"] += stats["faces"]
         total["persons"] += stats["persons"]
         total["ref_photos"] += stats["ref_photos"]

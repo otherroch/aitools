@@ -267,10 +267,12 @@ def segment_video(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_height: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
     skip_existing: bool = True,
+    extract_only: bool = False,
     backend: "FaceBackend | None" = None,
 ) -> dict[str, int]:
     """Extract single-person video segments from *video_path*.
@@ -284,7 +286,11 @@ def segment_video(
     the person's detected face positions across the whole segment (with
     *margin_ratio* padding), so the final video contains only that person.
     When *crop_size* is given the cropped region is resized to a square
-    ``crop_size × crop_size`` frame.
+    ``crop_size × crop_size`` frame.  When *crop_height* is specified,
+    *crop_size* specifies the width and *crop_height* the output height.
+
+    When *extract_only* is True, face detection and recognition are skipped
+    and every N-th frame is simply extracted as-is.
 
     Args:
         video_path:          Path to the input video file.
@@ -295,13 +301,20 @@ def segment_video(
                              (default: 0.4).
         crop_size:           If given, each output frame is resized to this
                              square resolution in pixels (default: None, keep
-                             the cropped rect dimensions).
+                             the cropped rect dimensions).  When *crop_height*
+                             is specified this is the width in pixels.
+        crop_height:         Height (in pixels) of the output photo or video.
+                             If specified then *crop_size* specifies the width.
+                             If not specified then *crop_size* specifies the
+                             square output pixel size.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds (default: 2).
         max_segment_length:  Maximum segment duration in seconds; longer
                              segments are split at this boundary (default: 30).
         skip_existing:       Skip the video when its output sub-directory
                              already contains MP4 files.
+        extract_only:        If True, just extract frames without doing face
+                             recognition.  Simply extract every N-th frames.
         backend:             :class:`FaceBackend` instance.  *None* creates a
                              default dlib backend.
 
@@ -408,8 +421,16 @@ def segment_video(
             crop_top, crop_left, crop_bottom, crop_right = _compute_crop_rect(
                 seg.sample_bboxes, margin_ratio, width, height
             )
-            out_w = crop_size if crop_size else max(1, crop_right - crop_left)
-            out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
+            # Determine output dimensions
+            if crop_height is not None:
+                out_w = crop_size
+                out_h = crop_height
+            elif crop_size:
+                out_w = crop_size
+                out_h = crop_size
+            else:
+                out_w = max(1, crop_right - crop_left)
+                out_h = max(1, crop_bottom - crop_top)
 
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
             writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w, out_h))
@@ -420,7 +441,7 @@ def segment_video(
                         break
                     cropped = frame[crop_top:crop_bottom, crop_left:crop_right]
                     if crop_size:
-                        cropped = cv2.resize(cropped, (crop_size, crop_size), interpolation=cv2.INTER_LANCZOS4)
+                        cropped = cv2.resize(cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
                     writer.write(cropped)
             finally:
                 writer.release()
@@ -443,10 +464,12 @@ def segment_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_height: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
     skip_existing: bool = True,
+    extract_only: bool = False,
     backend: "FaceBackend | None" = None,
 ) -> dict[str, int]:
     """Process all videos in *input_dir*, extracting single-person segments.
@@ -457,12 +480,19 @@ def segment_folder(
         every_n:             Frame sampling interval for face detection.
         margin_ratio:        Fractional padding around the crop bounding box.
         crop_size:           If given, each output frame is resized to this
-                             square resolution in pixels.
+                             square resolution in pixels.  When *crop_height*
+                             is specified this is the width in pixels.
+        crop_height:         Height (in pixels) of the output photo or video.
+                             If specified then *crop_size* specifies the width.
+                             If not specified then *crop_size* specifies the
+                             square output pixel size.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds.
         max_segment_length:  Maximum segment duration in seconds.
         skip_existing:       Skip videos whose output sub-directory already
                              contains MP4 files.
+        extract_only:        If True, just extract frames without doing face
+                             recognition.  Simply extract every N-th frames.
         backend:             :class:`FaceBackend` instance.
 
     Returns:
@@ -496,10 +526,12 @@ def segment_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
+            crop_height=crop_height,
             tolerance=tolerance,
             min_segment_length=min_segment_length,
             max_segment_length=max_segment_length,
             skip_existing=skip_existing,
+            extract_only=extract_only,
             backend=backend,
         )
         total["videos_processed"] += 1
