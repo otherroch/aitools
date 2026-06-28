@@ -55,8 +55,8 @@ def crop_video(
     video_path: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    crop_size: int = DEFAULT_CROP_SIZE,
+    margin_ratio: float = 0.4,
+    crop_size: int | None = None,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
@@ -64,34 +64,39 @@ def crop_video(
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
+    crop_height: int | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
-    Frames are sampled every *every_n* frames.  Detected faces are cropped with
-    a fractional *margin_ratio* padding, resized to *crop_size* × *crop_size*,
-    and saved as PNG files inside a sub-directory named after the video stem.
+    Frames are sampled every *every_n* frames.  Detected faces are cropped
+    with a fractional *margin_ratio* padding, resized to *crop_size* x
+    *crop_size*, and saved as PNG files inside a sub-directory named after
+    the video stem.
 
     Args:
         video_path:      Path to the input video file.
         output_dir:      Root directory where cropped images are saved.
         every_n:         Process every N-th frame (default: 30).
-        margin_ratio:    Fractional padding around each detected face bbox.
+        margin_ratio:    Fractional margin around each detected face bbox.
         crop_size:       Output square resolution in pixels (default: 1024).
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
         skip_existing:   Skip the video if its output sub-directory already
                          contains PNG files.
-        ref_thresh:      Minimum quality score (0–1) for a face crop to be
+        ref_thresh:      Minimum quality score (0-1) for a face crop to be
                          listed as a reference photo.  ``0`` disables the
                          analysis entirely.
         classified_path: Optional path to a directory of pre-classified
                          reference photos used to seed identity clustering.
         classified_max:  Maximum reference images to load per identity.
                          ``0`` means no limit.
-        backend:         :class:`FaceBackend` instance for detection, encoding,
-                         and clustering.  When *None*, a default dlib backend
-                         is created.
+        backend:         :class:`FaceBackend` instance for detection,
+                         encoding, and clustering.  When *None*, a default
+                         dlib backend is created.
+        crop_height:     If given, resize each output image to
+                         ``crop_height x crop_height`` pixels.  If *None*,
+                         the natural cropped dimensions are used.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``,
@@ -104,26 +109,41 @@ def crop_video(
     video_stem_dir = output_dir / video_path.stem
 
     logger.debug(
-        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d classify=%s",
-        video_path.name, every_n, margin_ratio, crop_size, classify,
+        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%s "
+        "crop_height=%s classify=%s",
+        video_path.name, every_n, margin_ratio, crop_size, crop_height,
+        classify,
     )
 
-    if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.png")):
+    if skip_existing and video_stem_dir.exists() and any(
+        video_stem_dir.rglob("*.png")
+    ):
         logger.info("Skipping (already processed): %s", video_path.name)
-        return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
+        return {
+            "frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0,
+        }
 
-    staging_dir = video_stem_dir / "_staging" if classify else video_stem_dir
+    staging_dir = (
+        video_stem_dir / "_staging" if classify else video_stem_dir
+    )
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.error("Could not open video: %s", video_path)
-        return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
+        return {
+            "frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0,
+        }
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frames_to_sample = max(1, (total_frames + every_n - 1) // every_n) if total_frames > 0 else 0
+    frames_to_sample = (
+        max(1, (total_frames + every_n - 1) // every_n)
+        if total_frames > 0
+        else 0
+    )
     logger.info(
-        "Video %s: %d total frames, sampling every %d → ~%d frames to process",
+        "Video %s: %d total frames, sampling every %d -> ~%d frames to "
+        "process",
         video_path.name, total_frames, every_n, frames_to_sample,
     )
 
@@ -133,10 +153,10 @@ def crop_video(
     frames_processed = 0
     faces_detected = 0
     all_results: list[tuple[Path, np.ndarray]] = []
-    ref_scores: dict[str, float] = {}  # filename → quality score
+    ref_scores: dict[str, float] = {}  # filename -> quality score
 
     debug_logging = logger.isEnabledFor(logging.DEBUG)
-     
+
     try:
         while True:
             ret, frame_bgr = cap.read()
@@ -158,7 +178,9 @@ def crop_video(
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 face_locations = backend.detect_faces(frame_rgb)
-                face_encodings = backend.encode_faces(frame_rgb, face_locations)
+                face_encodings = backend.encode_faces(
+                    frame_rgb, face_locations
+                )
 
                 logger.debug(
                     "crop_video: frame %d  detected %d face(s)",
@@ -180,12 +202,16 @@ def crop_video(
                     crop_left = max(0, left - margin_w)
                     crop_right = min(w_img, right + margin_w)
 
-                    face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
+                    face_arr = frame_rgb[
+                        crop_top:crop_bottom, crop_left:crop_right
+                    ]
                     pil_img = Image.fromarray(face_arr).resize(
                         (crop_size, crop_size), Image.LANCZOS
                     )
 
-                    out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
+                    out_name = (
+                        f"frame{frame_idx:06d}_face{i + 1}.png"
+                    )
                     out_path = staging_dir / out_name
                     pil_img.save(out_path)
                     logger.debug("Saved face crop: %s", out_path)
@@ -195,16 +221,21 @@ def crop_video(
 
                     if do_ref:
                         lm_list = backend.face_landmarks(
-                            frame_rgb, [(top, right, bottom, left)],
+                            frame_rgb,
+                            [(top, right, bottom, left)],
                         )
                         lm = lm_list[0] if lm_list else None
-                        ref_scores[out_name] = score_reference_quality(
-                            frame_rgb,
-                            (top, right, bottom, left),
-                            lm,
-                            face_arr,
-                            face_count=len(face_locations),
-                            name = out_name if debug_logging else None,
+                        ref_scores[out_name] = (
+                            score_reference_quality(
+                                frame_rgb,
+                                (top, right, bottom, left),
+                                lm,
+                                face_arr,
+                                face_count=len(face_locations),
+                                name=out_name
+                                if debug_logging
+                                else None,
+                            )
                         )
 
                 frames_processed += 1
@@ -216,7 +247,8 @@ def crop_video(
     persons = 0
     total_refs = 0
     logger.info(
-        "Finished processing video: %s  frames processed: %d  faces detected: %d",
+        "Finished processing video: %s  frames processed: %d  faces "
+        "detected: %d",
         video_path.name, frames_processed, faces_detected,
     )
 
@@ -240,27 +272,34 @@ def crop_video(
             pass
 
         # Move reference photos into ref/ sub-folder per person
-      
         if do_ref:
             for _pid, paths in person_dirs.items():
                 ref_paths = []
                 for p in paths:
-                    if p.name in ref_scores and ref_scores[p.name] >= ref_thresh:
+                    if (
+                        p.name in ref_scores
+                        and ref_scores[p.name] >= ref_thresh
+                    ):
                         ref_paths.append(p)
                         logger.debug(
-                          "Selected reference photo: %s  score=%.3f",
-                          p.name, ref_scores[p.name],
-                        ) 
+                            "Selected reference photo: %s  "
+                            "score=%.3f",
+                            p.name, ref_scores[p.name],
+                        )
                 if ref_paths:
                     collect_ref_photos(ref_paths[0].parent, ref_paths)
                     total_refs += len(ref_paths)
     elif not classify and do_ref and all_results:
         ref_paths = []
         for path, _ in all_results:
-            if path.name in ref_scores and ref_scores[path.name] >= ref_thresh:
+            if (
+                path.name in ref_scores
+                and ref_scores[path.name] >= ref_thresh
+            ):
                 ref_paths.append(path)
                 logger.debug(
-                    "Selected reference photo: %s  score=%.3f",
+                    "Selected reference photo: %s  "
+                    "score=%.3f",
                     path.name, ref_scores[path.name],
                 )
 
@@ -293,7 +332,8 @@ def crop_folder(
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
     Args:
-        input_dir:       Source directory (searched recursively for video files).
+        input_dir:       Source directory (searched recursively for video
+                         files).
         output_dir:      Destination directory.
         every_n:         Process every N-th frame from each video.
         margin_ratio:    Fractional margin around each detected face bbox.
@@ -301,8 +341,9 @@ def crop_folder(
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
-        skip_existing:   Skip videos whose output sub-directory already has PNGs.
-        ref_thresh:      Minimum quality score (0–1) for reference-photo
+        skip_existing:   Skip videos whose output sub-directory already has
+                         PNGs.
+        ref_thresh:      Minimum quality score (0-1) for reference-photo
                          selection.  ``0`` disables the analysis.
         classified_path: Optional path to a directory of pre-classified
                          reference photos used to seed identity clustering.
@@ -330,7 +371,10 @@ def crop_folder(
 
     if not videos:
         logger.warning("No video files found in %s", input_dir)
-        return {"videos_processed": 0, "frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
+        return {
+            "videos_processed": 0, "frames_processed": 0, "faces": 0,
+            "persons": 0, "ref_photos": 0,
+        }
 
     logger.debug(
         "crop_folder: found %d video(s) in %s  every_n=%d classify=%s",
@@ -368,3 +412,121 @@ def crop_folder(
         total["ref_photos"] += stats["ref_photos"]
 
     return total
+
+
+def extract_frames(
+    input_path: Path,
+    output_dir: Path,
+    every_n: int = DEFAULT_EVERY_N_FRAMES,
+    crop_size: int | None = None,
+    crop_height: int | None = None,
+    skip_existing: bool = True,
+) -> dict[str, int]:
+    """Extract raw frames from video files without face detection.
+
+    Each selected frame is saved as a PNG in the output directory.
+
+    Args:
+        input_path:      Path to a single video file or a directory of
+                         videos.
+        output_dir:      Root directory where extracted frames are saved.
+        every_n:         Process every N-th frame (default: 30).
+        crop_size:       If given, resize each frame to
+                         (crop_size, crop_size).
+        crop_height:     If given, resize each frame to
+                         (crop_height, crop_height).
+        skip_existing:   If True, skip videos whose output already
+                         contains PNGs.
+
+    Returns:
+        Summary dict with keys ``videos_processed``, ``frames_extracted``.
+    """
+    if crop_height is not None and crop_size is None:
+        crop_size = crop_height
+
+    videos: list[Path] = []
+    if input_path.is_file():
+        if input_path.suffix.lower() in {
+            ".mp4", ".mov", ".avi", ".mkv",
+            ".webm", ".m4v", ".wmv",
+        }:
+            videos = [input_path]
+        else:
+            logger.error(
+                "Unsupported file type '%s' for file: %s",
+                input_path.suffix,
+                input_path,
+            )
+            return {"videos_processed": 0, "frames_extracted": 0}
+    else:
+        videos = [
+            p for p in input_path.rglob("*")
+            if p.is_file() and p.suffix.lower() in SUPPORTED_VIDEO_EXTS
+        ]
+
+    if not videos:
+        logger.warning("No video files found in %s", input_path)
+        return {"videos_processed": 0, "frames_extracted": 0}
+
+    total_frames = 0
+    for video_path in videos:
+        stats = _extract_frames_single(
+            video_path, output_dir, every_n, crop_size, skip_existing,
+        )
+        total_frames += stats["frames_extracted"]
+
+    return {"videos_processed": len(videos), "frames_extracted": total_frames}
+
+
+def _extract_frames_single(
+    video_path: Path,
+    output_dir: Path,
+    every_n: int,
+    crop_size: int | None,
+    skip_existing: bool,
+) -> dict[str, int]:
+    """Extract raw frames from a single video file.
+
+    Each selected frame is saved as a PNG in ``output_dir/video_stem/``.
+    """
+    stem_dir = output_dir / video_path.stem
+    if skip_existing and any(stem_dir.rglob("*.png")):
+        logger.info("Skipping (already processed): %s", video_path.name)
+        return {"frames_extracted": 0}
+
+    stem_dir.mkdir(parents=True, exist_ok=True)
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        logger.error("Could not open video: %s", video_path)
+        return {"frames_extracted": 0}
+
+    frame_idx = 0
+    frames_extracted = 0
+
+    try:
+        while True:
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+
+            if frame_idx % every_n == 0:
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
+                if crop_size:
+                    pil_img = pil_img.resize(
+                        (crop_size, crop_size), Image.LANCZOS
+                    )
+                out_name = f"frame{frame_idx:06d}.png"
+                pil_img.save(stem_dir / out_name)
+                frames_extracted += 1
+
+            frame_idx += 1
+    finally:
+        cap.release()
+
+    logger.info(
+        "Extracted %d frames from %s",
+        frames_extracted, video_path.name,
+    )
+    return {"frames_extracted": frames_extracted}

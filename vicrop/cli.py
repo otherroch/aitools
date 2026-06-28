@@ -134,6 +134,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     # ------------------------------------------------------------------ #
+    # Extract-only mode: extract frames without face recognition.              #
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help=(
+            "Extract frames without performing face detection or identity "
+            "clustering. Each selected frame is saved as a PNG in the output "
+            "directory.  Useful for quick previews or when face analysis is "
+            "not needed."
+        ),
+    )
+    parser.add_argument(
+        "--crop-height",
+        type=int,
+        default=None,
+        help=(
+            "Height (in pixels) of the output photo or video segment. "
+            "When specified together with --crop-size, the output is "
+            "resized to (crop-size × crop-size) for the width. "
+            "When not specified, the natural cropped dimensions are used."
+        ),
+    )
+
+    # ------------------------------------------------------------------ #
     # Output type                                                          #
     # ------------------------------------------------------------------ #
     parser.add_argument(
@@ -197,7 +222,36 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(1)
 
-    if args.output_type == "video":
+    if args.extract_only:
+        from vicrop.crop import extract_frames
+
+        if args.input.is_file():
+            logger.info("vicrop: extracting frames from %s", args.input)
+            stats = extract_frames(
+                args.input,
+                args.output_dir,
+                every_n=args.every_n,
+                crop_size=args.crop_size,
+                crop_height=args.crop_height,
+                skip_existing=not args.no_skip_existing,
+            )
+            stats["videos_processed"] = 1
+        else:
+            logger.info("vicrop: extracting frames from %s", args.input)
+            stats = extract_frames(
+                args.input,
+                args.output_dir,
+                every_n=args.every_n,
+                crop_size=args.crop_size,
+                crop_height=args.crop_height,
+                skip_existing=not args.no_skip_existing,
+            )
+        logger.info(
+            "vicrop: %d videos processed, %d frames extracted",
+            stats["videos_processed"],
+            stats["frames_extracted"],
+        )
+    elif args.output_type == "video":
         from vicrop.segment import segment_folder, segment_video
 
         if args.input.is_file():
@@ -208,6 +262,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_height=args.crop_height,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -223,6 +278,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_height=args.crop_height,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -246,6 +302,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_height=args.crop_height,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,
@@ -263,6 +320,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_height=args.crop_height,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,

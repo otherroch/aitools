@@ -24,9 +24,13 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from vicrop.crop import SUPPORTED_VIDEO_EXTS, DEFAULT_EVERY_N_FRAMES
+from vicrop.crop import (
+    SUPPORTED_VIDEO_EXTS,
+    _extract_frames_single,
+    DEFAULT_EVERY_N_FRAMES,
+)
 
-if TYPE_CHECKING:
+if \
     from face_ops.backend import FaceBackend
 
 logger = logging.getLogger(__name__)
@@ -62,7 +66,9 @@ class _Segment:
         self.end_frame = end_frame
         self.anchor_enc = anchor_enc
         self.person_id = person_id
-        self.sample_bboxes: list[tuple[int, _BBox]] = sample_bboxes if sample_bboxes is not None else []
+        self.sample_bboxes: list[tuple[int, _BBox]] = (
+            sample_bboxes if sample_bboxes is not None else []
+        )
 
 
 def _build_raw_segments(
@@ -74,10 +80,10 @@ def _build_raw_segments(
     """Convert per-sampled-frame records into contiguous single-person segments.
 
     Each entry in *frame_records* is ``(frame_idx, encoding_or_None, bbox_or_None)``
-    where *encoding_or_None* is ``None`` when the frame did not contain exactly
-    one face.  The function groups consecutive single-face records whose face
-    encodings match the segment's anchor within *tolerance* into a single
-    :class:`_Segment`.
+    where *encoding_or_None* is ``None`` when the frame did not contain
+    exactly one face.  The function groups consecutive single-face records
+    whose face encodings match the segment's anchor within *tolerance* into a
+    single :class:`_Segment`.
 
     The ``end_frame`` of each segment is set to
     ``last_good_sampled_frame + every_n - 1`` so that the unseen frames
@@ -101,9 +107,18 @@ def _build_raw_segments(
     seg_bboxes: list[tuple[int, _BBox]] = []
 
     def _close() -> None:
-        if seg_start is not None and seg_end is not None and anchor_enc is not None:
+        if (
+            seg_start is not None
+            and seg_end is not None
+            and anchor_enc is not None
+        ):
             segments.append(
-                _Segment(seg_start, seg_end, anchor_enc.copy(), sample_bboxes=list(seg_bboxes))
+                _Segment(
+                    seg_start,
+                    seg_end,
+                    anchor_enc.copy(),
+                    sample_bboxes=list(seg_bboxes),
+                )
             )
 
     for frame_idx, enc, bbox in frame_records:
@@ -174,8 +189,15 @@ def _filter_and_split_segments(
         while start <= end:
             chunk_end = min(start + max_frames - 1, end)
             if chunk_end - start + 1 >= min_frames:
-                chunk_bboxes = [(fi, b) for fi, b in bboxes if start <= fi <= chunk_end]
-                result.append(_Segment(start, chunk_end, enc, sample_bboxes=chunk_bboxes))
+                chunk_bboxes = [
+                    (fi, b) for fi, b in bboxes if start <= fi <= chunk_end
+                ]
+                result.append(
+                    _Segment(
+                        start, chunk_end, enc,
+                        sample_bboxes=chunk_bboxes,
+                    )
+                )
             start = chunk_end + 1
 
     return result
@@ -267,6 +289,7 @@ def segment_video(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_height: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -284,7 +307,7 @@ def segment_video(
     the person's detected face positions across the whole segment (with
     *margin_ratio* padding), so the final video contains only that person.
     When *crop_size* is given the cropped region is resized to a square
-    ``crop_size × crop_size`` frame.
+    ``crop_size x crop_size`` frame.
 
     Args:
         video_path:          Path to the input video file.
@@ -296,6 +319,9 @@ def segment_video(
         crop_size:           If given, each output frame is resized to this
                              square resolution in pixels (default: None, keep
                              the cropped rect dimensions).
+        crop_height:         If given, each output frame is resized to
+                             (crop_size, crop_size).  Overrides *crop_size*
+                             when both are provided.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds (default: 2).
         max_segment_length:  Maximum segment duration in seconds; longer
@@ -315,7 +341,9 @@ def segment_video(
     output_dir = output_dir.resolve()
     video_stem_dir = output_dir / video_path.stem
 
-    if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.mp4")):
+    if skip_existing and video_stem_dir.exists() and any(
+        video_stem_dir.rglob("*.mp4")
+    ):
         logger.info("Skipping (already processed): %s", video_path.name)
         return {"segments": 0, "persons": 0}
 
@@ -396,7 +424,9 @@ def segment_video(
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         for seg in segments:
             pid = seg.person_id
-            seg_count_per_person[pid] = seg_count_per_person.get(pid, 0) + 1
+            seg_count_per_person[pid] = (
+                seg_count_per_person.get(pid, 0) + 1
+            )
             seg_num = seg_count_per_person[pid]
 
             person_dir = video_stem_dir / f"person_{pid:02d}"
@@ -405,22 +435,32 @@ def segment_video(
 
             # Compute the crop rect that covers all detected face positions
             # across the segment, with margin padding.
-            crop_top, crop_left, crop_bottom, crop_right = _compute_crop_rect(
-                seg.sample_bboxes, margin_ratio, width, height
+            crop_top, crop_left, crop_bottom, crop_right = (
+                _compute_crop_rect(
+                    seg.sample_bboxes, margin_ratio, width, height
+                )
             )
             out_w = crop_size if crop_size else max(1, crop_right - crop_left)
-            out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
+            out_h = crop_height if crop_height else max(1, crop_bottom - crop_top)
 
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
-            writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w, out_h))
+            writer = cv2.VideoWriter(
+                str(out_path), fourcc, fps, (out_w, out_h)
+            )
             try:
                 for _ in range(seg.end_frame - seg.start_frame + 1):
                     ret, frame = cap2.read()
                     if not ret:
                         break
-                    cropped = frame[crop_top:crop_bottom, crop_left:crop_right]
+                    cropped = frame[
+                        crop_top:crop_bottom, crop_left:crop_right
+                    ]
                     if crop_size:
-                        cropped = cv2.resize(cropped, (crop_size, crop_size), interpolation=cv2.INTER_LANCZOS4)
+                        cropped = cv2.resize(
+                            cropped,
+                            (crop_size, crop_size),
+                            interpolation=cv2.INTER_LANCZOS4,
+                        )
                     writer.write(cropped)
             finally:
                 writer.release()
@@ -428,7 +468,8 @@ def segment_video(
             duration = (seg.end_frame - seg.start_frame + 1) / fps
             logger.info(
                 "Wrote segment: %s  frames %d–%d  (%.1fs)  person %d  %dx%d",
-                out_path.name, seg.start_frame, seg.end_frame, duration, pid, out_w, out_h,
+                out_path.name, seg.start_frame, seg.end_frame, duration,
+                pid, out_w, out_h,
             )
             written += 1
     finally:
@@ -443,6 +484,7 @@ def segment_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_height: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -458,6 +500,9 @@ def segment_folder(
         margin_ratio:        Fractional padding around the crop bounding box.
         crop_size:           If given, each output frame is resized to this
                              square resolution in pixels.
+        crop_height:         If given, each output frame is resized to
+                             (crop_size, crop_size).  Overrides *crop_size*
+                             when both are provided.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds.
         max_segment_length:  Maximum segment duration in seconds.
@@ -486,7 +531,11 @@ def segment_folder(
         logger.warning("No video files found in %s", input_dir)
         return {"videos_processed": 0, "segments": 0, "persons": 0}
 
-    total: dict[str, int] = {"videos_processed": 0, "segments": 0, "persons": 0}
+    total: dict[str, int] = {
+        "videos_processed": 0,
+        "segments": 0,
+        "persons": 0,
+    }
 
     for video_path in videos:
         logger.info("Processing video: %s", video_path.name)
@@ -496,6 +545,7 @@ def segment_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
+            crop_height=crop_height,
             tolerance=tolerance,
             min_segment_length=min_segment_length,
             max_segment_length=max_segment_length,
