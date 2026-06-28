@@ -205,8 +205,9 @@ def crop_video(
                     face_arr = frame_rgb[
                         crop_top:crop_bottom, crop_left:crop_right
                     ]
+                    resize_dim = crop_height if crop_height is not None else crop_size
                     pil_img = Image.fromarray(face_arr).resize(
-                        (crop_size, crop_size), Image.LANCZOS
+                        (resize_dim, resize_dim), Image.LANCZOS
                     )
 
                     out_name = (
@@ -289,23 +290,23 @@ def crop_video(
                 if ref_paths:
                     collect_ref_photos(ref_paths[0].parent, ref_paths)
                     total_refs += len(ref_paths)
-    elif not classify and do_ref and all_results:
-        ref_paths = []
-        for path, _ in all_results:
-            if (
-                path.name in ref_scores
-                and ref_scores[path.name] >= ref_thresh
-            ):
-                ref_paths.append(path)
-                logger.debug(
-                    "Selected reference photo: %s  "
-                    "score=%.3f",
-                    path.name, ref_scores[path.name],
-                )
+        elif not classify and do_ref and all_results:
+            ref_paths = []
+            for path, _ in all_results:
+                if (
+                    path.name in ref_scores
+                    and ref_scores[path.name] >= ref_thresh
+                ):
+                    ref_paths.append(path)
+                    logger.debug(
+                        "Selected reference photo: %s  "
+                        "score=%.3f",
+                        path.name, ref_scores[path.name],
+                    )
 
-        if ref_paths:
-            collect_ref_photos(video_stem_dir, ref_paths)
-            total_refs += len(ref_paths)
+            if ref_paths:
+                collect_ref_photos(video_stem_dir, ref_paths)
+                total_refs += len(ref_paths)
 
     return {
         "frames_processed": frames_processed,
@@ -319,12 +320,12 @@ def crop_folder(
     input_dir: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    crop_size: int = DEFAULT_CROP_SIZE,
+    margin_ratio: float = 0.4,
+    crop_size: int = 1024,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
-    ref_thresh: float = DEFAULT_REF_THRESH,
+    ref_thresh: float = 0.8,
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,

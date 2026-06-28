@@ -30,8 +30,7 @@ from vicrop.crop import (
     DEFAULT_EVERY_N_FRAMES,
 )
 
-if \
-    from face_ops.backend import FaceBackend
+from face_ops.backend import FaceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +363,7 @@ def segment_video(
 
     # ------------------------------------------------------------------ #
     # Analysis pass — sample every_n frames to build a face-presence      #
-    # timeline.  Each record is (frame_idx, encoding_or_None, bbox_or_None)#
+    # timeline.  Each record is (frame_idx, encoding_or_None, bbox_or_None) #
     # where both are None unless exactly one face was detected.            #
     # ------------------------------------------------------------------ #
     frame_records: list[tuple[int, np.ndarray | None, _BBox | None]] = []
