@@ -334,11 +334,15 @@ def segment_video(
         Summary dict with keys ``segments`` (number of MP4 files written)
         and ``persons`` (number of distinct person identities found).
     """
-    if backend is None:
-        backend = _default_backend()
-
     output_dir = output_dir.resolve()
     video_stem_dir = output_dir / video_path.stem
+
+    if not video_path or not video_path.name:
+        logger.warning("Empty video path")
+        return {"segments": 0, "persons": 0}
+
+    if backend is None:
+        backend = _default_backend()
 
     if skip_existing and video_stem_dir.exists() and any(
         video_stem_dir.rglob("*.mp4")
@@ -440,7 +444,7 @@ def segment_video(
                 )
             )
             out_w = crop_size if crop_size else max(1, crop_right - crop_left)
-            out_h = crop_height if crop_height else max(1, crop_bottom - crop_top)
+            out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
 
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
             writer = cv2.VideoWriter(

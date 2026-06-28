@@ -1464,11 +1464,13 @@ class TestSegmentEdgeCases:
     def test_empty_segment_list(self):
         """An empty segment list should produce no output."""
         video_path = Path()
-        stats = segment_video(video_path, Path() / "out", every_n=1, backend=None)
+        fr_mock = MagicMock()
+        backend = MockBackendShim(fr_mock)
+        stats = segment_video(video_path, Path() / "out", every_n=1, backend=backend)
         # Should not raise
         assert isinstance(stats, dict)
 
-    def test_segment_with_no_faces(self):
+    def test_segment_with_no_faces(self, tmp_path):
         """A video with no faces should produce no segments."""
         video_path = tmp_path / "clip.mp4"
         video_path.write_bytes(b"fake")
