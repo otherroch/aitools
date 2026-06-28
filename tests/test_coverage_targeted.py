@@ -131,6 +131,8 @@ class TestVicropCli:
             output_type="photo",
             max_segment_length=30.0,
             min_segment_length=2.0,
+            extract_only=False,
+            crop_height=None,
         )
         called = {}
 
@@ -174,6 +176,8 @@ class TestVicropCli:
             output_type="photo",
             max_segment_length=30.0,
             min_segment_length=2.0,
+            extract_only=False,
+            crop_height=None,
         )
         called = {}
 
