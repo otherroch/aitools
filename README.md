@@ -9,7 +9,7 @@
 | Portrait Prep | `portrait-prep` | End-to-end portrait image preparation (`convert → crop → caption → augment`) |
 | Video Crop | `vicrop` | Extract face-cropped PNG frames or per-person video segments (based on sampled-frame detection) from video files |
 | Video Description | `videsc` | Generate text descriptions for video files — fast WD14 tag-based captions (default) or rich natural-language descriptions via Qwen3-VL / Qwen3-omni / Qwen3.5   (`--vl`) or Gemma4 (`--gemma4`) or a remote vLLM server (`--vllm`) |
-| Character Replace | `chararep` | Replace character faces in a video using deep face-swapping models (inswapper, SimSwap, uniface, hyperswap, blendswap). Other tools like `vicrop` and `portrait-prep` can be used to create the portrait galleries required by `chararep` |
+| Character Replace | `chararep` | Replace character faces in a video using deep face-swapping models (inswapper, SimSwap, uniface, hyperswap, blendswap), or via SCAIL-2 for end-to-end character animation without intermediate pose representations. |
 
 ---
 

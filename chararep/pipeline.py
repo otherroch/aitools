@@ -62,6 +62,28 @@ class CharacterReplacementPipeline:
         self._swapper = FaceSwapper(cfg)
         self._enhancer = FaceEnhancer(cfg)
         self._blender = FaceBlender(cfg)
+# SCAIL-2 mode – only initialized when enabled
+        self._scail2_runner: Optional[SCAIL2Runner] = None
+        if cfg.scail2_enabled:
+            s_cfg = SCAIL2Config(
+                enabled=cfg.scail2_enabled,
+                model_path=cfg.scail2_model_path,
+                mode=cfg.scail2_mode,
+                resolution=cfg.scail2_resolution,
+                width=cfg.width,
+                height=cfg.height,
+                steps=cfg.scail2_steps,
+                cfg_scale=cfg.scail2_cfg_scale,
+                fps=cfg.scail2_fps,
+                seed=cfg.scail2_seed,
+                device="cuda",
+                device_id=cfg.scail2_device_id,
+                use_fp16=cfg.scail2_use_fp16,
+            )
+            self._scail2_runner = SCAIL2Runner(s_cfg)
+            if self._scail2_runner.load():
+                logger.info("SCAIL-2 enabled in %s mode at %s",
+                            cfg.scail2_mode, cfg.scail2_resolution)
 
         # Temporal smoothing state: for localized EMA on face regions
         self._prev_face_part: np.ndarray | None = None

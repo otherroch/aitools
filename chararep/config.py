@@ -52,6 +52,8 @@ class PipelineConfig:
     scail2_fps: float = 24.0
     scail2_seed: int = 42
     scail2_device_id: int = 0
+    scail2_use_fp16: bool = True  # Use fp16 for inference
+    scail2_env_mask_path: str = ""  # Environment mask for in-context conditioning
 
     # ── Enhancement ──────────────────────────────────────────────────────
     enable_face_enhancement: bool = True

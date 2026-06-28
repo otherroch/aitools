@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from chararep.config import CharacterMapping, PipelineConfig
+from chararep.scail2_runner import SCAIL2Config, SCAIL2Runner
 
 
 # ---------------------------------------------------------------------------

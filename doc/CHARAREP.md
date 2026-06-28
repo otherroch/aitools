@@ -397,3 +397,108 @@ This pipeline integrates several open-source components. Ensure you comply with 
 - InsightFace / inswapper: check the InsightFace license terms
 - GFPGAN: Apache 2.0
 - OpenCV: Apache 2.0
+
+## SCAIL-2 Character Replacement
+
+SCAIL-2 is an open-source model for end-to-end controlled character animation based on **Wan 2.1 (14B parameters, DiT architecture)**. It animates a reference character with a driving video, supporting single-character animation, character replacement, and multi-character modes without relying on intermediate pose representations.
+
+### What it does
+
+SCAIL-2 replaces faces in video by leveraging in-context conditioning:
+- **Environment switch** — swap background/environment via reference image
+- **Character binding slots** — bind character identity to driving motion
+- **Direct visual conditioning** — no skeleton maps needed; the model reads the reference image directly
+
+### Setup
+
+SCAIL-2 requires PyTorch with CUDA. Download the model files from the Hugging Face repository:
+
+```bash
+# Clone the repository
+pip install -e ".[scail2]"
+
+# Download the SCAIL-2 model files
+# See: https://huggingface.co/zai-org/SCAIL-2
+# See: https://huggingface.co/realrebelai/SCAIL-2_GGUF
+```
+
+Place the model files in a directory, e.g. `/path/to/scail2/`:
+
+```
+/path/to/scail2/
+  model/
+    latest  # or a .pt checkpoint
+  Wan21_VAE.pth  # (optional)
+  T5_encoder/     # (optional)
+```
+
+### Usage
+
+Enable SCAIL-2 mode via configuration or CLI:
+
+```bash
+chararep \
+    -i input_video.mp4 \
+    -o output_video.mp4 \
+    --scail2-enabled \
+    --scail2-model-path /path/to/scail2 \
+    --scail2-mode replacement \
+    --scail2-resolution 704p \
+    --scail2-fps 24.0
+```
+
+Or via Python API:
+
+```python
+from chararep.config import PipelineConfig
+from chararep.scail2_runner import SCAIL2Config, SCAIL2Runner
+
+cfg = PipelineConfig(
+    input_video="input.mp4",
+    output_video="output.mp4",
+    scail2_enabled=True,
+    scail2_model_path="/path/to/scail2",
+    scail2_mode="replacement",
+    scail2_resolution="704p",
+    scail2_steps=30,
+    scail2_cfg_scale=3.5,
+)
+
+# The pipeline automatically initializes SCAIL2Runner
+# and routes frames through SCAIL2Runner when enabled
+pipeline = CharacterReplacementPipeline(cfg)
+stats = pipeline.run()
+```
+
+### Configuration fields
+
+| Field | Default | Description |
+|---|---|---|
+| `scail2_enabled` | `False` | Enable SCAIL-2 mode |
+| `scail2_model_path` | `""` | Path to SCAIL-2 checkpoint directory |
+| `scail2_mode` | `"replacement"` | `"replacement"` or `"animation"` |
+| `scail2_resolution` | `"704p"` | `"512p"` or `"704p"` |
+| `scail2_steps` | `30` | Diffusion sampling steps |
+| `scail2_cfg_scale` | `3.5` | Classifier-free guidance scale |
+| `scail2_fps` | `24.0` | Output video FPS |
+| `scail2_seed` | `42` | Random seed |
+| `scail2_device_id` | `0` | CUDA device ordinal |
+| `scail2_use_fp16` | `True` | Use fp16 for inference |
+| `scail2_env_mask_path` | `""` | Environment mask for in-context conditioning |
+
+### Output
+
+SCAIL-2 produces full-frame outputs (not just face regions). The resulting frames replace the original video frames, with the swapped character identity applied consistently across all frames.
+
+### Performance
+
+SCAIL-2 requires significantly more VRAM than face-swap models:
+- 704p at 30 steps: ~12–16 GB VRAM
+- 512p at 30 steps: ~8–12 GB VRAM
+
+Use `--scail2-steps 15` to halve the time with a minor quality drop.
+
+This pipeline integrates several open-source components. Ensure you comply with their respective licenses:
+- InsightFace / inswapper: check the InsightFace license terms
+- GFPGAN: Apache 2.0
+- OpenCV: Apache 2.0
