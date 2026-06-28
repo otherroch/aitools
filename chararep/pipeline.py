@@ -30,6 +30,7 @@ from .face_enhancer import FaceEnhancer
 from .face_recognizer import FaceRecognizer
 from .face_swapper import FaceSwapper
 from .gpu_utils import gpu_mem_info, log_gpu_info, warmup_cuda
+from .scail2_runner import SCAIL2Config, SCAIL2Runner
 from .video_io import VideoReader, VideoWriter
 
 logger = logging.getLogger(__name__)

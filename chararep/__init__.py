@@ -19,6 +19,8 @@ __all__ = [
     "CharacterMapping",
     "PipelineConfig",
     "CharacterReplacementPipeline",
+    "SCAIL2Config",
+    "SCAIL2Runner",
 ]
 
 

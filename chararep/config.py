@@ -42,6 +42,17 @@ class PipelineConfig:
     # If None, the pipeline will attempt to auto-detect inswapper_128.onnx
     embedding_converter_path: Optional[str] = None  # optional crossface converter for simswap
 
+    # ── SCAIL-2 (end-to-end character animation) ──────────────────────
+    scail2_enabled: bool = False  # Use SCAIL-2 instead of face-swap
+    scail2_model_path: str = ""  # Path to SCAIL-2 model checkpoint dir
+    scail2_mode: str = "replacement"  # "replacement" or "animation"
+    scail2_resolution: str = "704p"  # "512p" or "704p"
+    scail2_steps: int = 30
+    scail2_cfg_scale: float = 3.5
+    scail2_fps: float = 24.0
+    scail2_seed: int = 42
+    scail2_device_id: int = 0
+
     # ── Enhancement ──────────────────────────────────────────────────────
     enable_face_enhancement: bool = True
     enhancement_model: str = "gfpgan"  # "gfpgan" or "codeformer_onnx"
