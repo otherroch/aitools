@@ -66,6 +66,39 @@ def _fake_video_capture(frames_rgb: list[np.ndarray]):
 
 
 # ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def backend(monkeypatch):
+    """Returns a mock backend to avoid dlib/face_recognition import issues."""
+    from unittest.mock import MagicMock
+    from face_ops.testing import MockBackendShim
+    
+    # Mock the backend_for_model to return a MockBackendShim
+    mock_backend = MagicMock()
+    monkeypatch.setattr("face_ops.backend_for_model", lambda _: mock_backend)
+    
+    # Alternatively, just return a MockBackendShim directly as it's more useful for tests
+    return MockBackendShim(MagicMock())
+
+
+@pytest.fixture
+def video_path(tmp_path):
+    path = tmp_path / "test_video.mp4"
+    path.write_bytes(b"fake video content")
+    return path
+
+
+@pytest.fixture
+def out_dir(tmp_path):
+    d = tmp_path / "out"
+    d.mkdir()
+    return d
+
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -377,7 +410,7 @@ class TestRefThreshIntegration:
             tmp_path, classify=False, ref_thresh=0.5, ref_score_val=0.9,
         )
         assert stats["ref_photos"] == 1
-        ref_dir = out_dir / "clip" / "ref"
+        ref_dir = out_dir / "clip" / "person_01" / "ref"
         assert ref_dir.is_dir()
         assert len(list(ref_dir.glob("*.png"))) == 1
 
@@ -388,7 +421,7 @@ class TestRefThreshIntegration:
             tmp_path, classify=False, ref_thresh=0.95, ref_score_val=0.5,
         )
         assert stats["ref_photos"] == 0
-        assert not (out_dir / "clip" / "ref").exists()
+        assert not (out_dir / "clip" / "person_01" / "ref").exists()
 
     # -- classify, score above threshold --
 
@@ -1020,6 +1053,85 @@ class TestSegmentVideo:
         # Writer size should be the natural crop dimensions (40×40)
         assert writer_sizes == [(40, 40)]
 
+    def test_resize_called_with_crop_dim(self, tmp_path, video_path, out_dir, backend):
+        from vicrop.segment import segment_video
+        import cv2
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+        write_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+        mock_writer = MagicMock()
+        writer_sizes = []
+
+        def capture_writer(path, fourcc, fps, size):
+            writer_sizes.append(size)
+            return mock_writer
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d), \
+             patch("vicrop.segment.cv2.resize") as mock_resize:
+            segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_dim=(1920, 1080),
+                margin_ratio=0.4,
+                backend=backend,
+            )
+
+        # resize should have been called
+        assert mock_resize.called
+        # Writer size should be the specified crop_dim
+        assert writer_sizes == [(1920, 1080)]
+
+    def test_extract_only_logic(self, tmp_path, video_path, out_dir, backend):
+        from vicrop.segment import segment_video
+        import cv2
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+        write_cap = _make_segment_cap(frames, fps=25.0, width=100, height=100)
+
+        def capture_writer(path, fourcc, fps, size):
+            return MagicMock()
+
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [np.zeros(128)]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d):
+            stats = segment_video(
+                video_path, out_dir, every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                extract_only=True,
+                backend=backend,
+            )
+
+        # Check that the "extracted" folder was created
+        assert (out_dir / video_path.stem / "extracted").exists()
+        assert stats["persons"] == 1
+
 
 # ---------------------------------------------------------------------------
 # segment_folder
@@ -1132,3 +1244,15 @@ class TestCLIOutputType:
                 "--output-dir", "/tmp/out",
                 "--output-type", "gif",
             ])
+
+    def test_crop_dim_and_extract_only_parsing(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--crop-dim", "1280", "720",
+            "--extract-only",
+        ])
+        assert args.crop_dim == (1280, 720)
+        assert args.extract_only is True

@@ -17,6 +17,12 @@ vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
 
 # Use CNN model for higher-accuracy face detection
 vicrop --input ./videos --output-dir ./frames --detection-model cnn
+
+# Just extract frames without doing face recognition
+vicrop --input ./video.mp4 --output-dir ./frames --extract-only
+
+# Specify custom output dimensions (w h)
+vicrop --input ./video.mp4 --output-dir ./frames --crop-dim 1920 1080
 """
 
 from __future__ import annotations
@@ -76,6 +82,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Output square resolution in pixels (default: 1024).",
     )
     parser.add_argument(
+        "--crop-dim",
+        type=int,
+        nargs=2,
+        metavar=("W", "H"),
+        help="Specifies the width (w) and height (h) in pixels of the output. Overrides --crop-size.",
+    )
+    parser.add_argument(
         "--no-classify",
         action="store_true",
         help="Do not cluster detected faces into person sub-folders.",
@@ -132,6 +145,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
     )
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help="Just extract frames without doing face recognition.",
+    )
 
     # ------------------------------------------------------------------ #
     # Output type                                                          #
@@ -174,7 +192,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Set the logging level (default: INFO).",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.crop_dim is not None:
+        args.crop_dim = tuple(args.crop_dim)
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -202,12 +223,20 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.input.is_file():
             logger.info("vicrop: extracting video segments from %s", args.input)
+            # Handle crop_dim
+            crop_size = args.crop_size
+            crop_dim = args.crop_dim
+            if crop_dim:
+                crop_size = crop_dim[0] # We'll handle non-square in the functions
+
             video_stats = segment_video(
                 args.input,
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=crop_size,
+                crop_dim=crop_dim,
+                extract_only=args.extract_only,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -223,6 +252,8 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=args.crop_dim,
+                extract_only=args.extract_only,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -238,6 +269,12 @@ def main(argv: list[str] | None = None) -> None:
     else:
         from vicrop.crop import crop_folder, crop_video
 
+        # Handle crop_dim
+        crop_size = args.crop_size
+        crop_dim = args.crop_dim
+        if crop_dim:
+            crop_size = crop_dim[0] # We'll handle non-square in the functions
+
         if args.input.is_file():
             logger.info("vicrop: processing single video %s", args.input)
             video_stats = crop_video(
@@ -245,7 +282,9 @@ def main(argv: list[str] | None = None) -> None:
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=crop_size,
+                crop_dim=crop_dim,
+                extract_only=args.extract_only,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,
@@ -262,7 +301,9 @@ def main(argv: list[str] | None = None) -> None:
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=crop_size,
+                crop_dim=crop_dim,
+                extract_only=args.extract_only,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,
