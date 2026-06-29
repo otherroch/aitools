@@ -40,6 +40,7 @@ class TestCharacterMapping:
 class TestPipelineConfigDefaults:
     def test_default_values(self):
         cfg = PipelineConfig()
+        assert cfg.backend == "classic"
         assert cfg.input_video == ""
         assert cfg.output_video == ""
         assert cfg.characters == []
@@ -209,3 +210,224 @@ class TestPipelineConfigValidate:
         )
         errors = cfg.validate()
         assert errors == []
+
+    def test_scail2_backend_requires_prepared_assets(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+        )
+        errors = cfg.validate()
+        assert any("scail2_repo_path" in e for e in errors)
+        assert any("scail2_ckpt_dir" in e for e in errors)
+        assert any("scail2_model_path" in e for e in errors)
+        assert any("scail2_reference_image or one character mapping" in e for e in errors)
+        assert any("scail2_prompt" in e for e in errors)
+        assert any("scail2_pose_repo_path" in e for e in errors)
+
+    def test_scail2_auto_prep_allows_one_character_mapping(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        pose_repo = repo / "SCAIL-Pose"
+        (pose_repo / "NLFPoseExtract").mkdir(parents=True)
+        (pose_repo / "NLFPoseExtract" / "process_replacement.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+        portrait = tmp_path / "portrait.jpg"
+        portrait.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            characters=[
+                CharacterMapping(
+                    source_label="hero",
+                    reference_paths=[str(ref)],
+                    portrait_paths=[str(portrait)],
+                )
+            ],
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_prompt="prompt",
+        )
+        assert cfg.validate() == []
+
+    def test_scail2_backend_rejects_multiple_character_mappings(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        pose_repo = repo / "SCAIL-Pose"
+        (pose_repo / "NLFPoseExtract").mkdir(parents=True)
+        (pose_repo / "NLFPoseExtract" / "process_replacement.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        portrait = tmp_path / "portrait.jpg"
+        portrait.touch()
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            characters=[
+                CharacterMapping(
+                    source_label="hero",
+                    reference_paths=[str(ref)],
+                    portrait_paths=[str(portrait)],
+                ),
+                CharacterMapping(
+                    source_label="villain",
+                    reference_paths=[str(ref)],
+                    portrait_paths=[str(portrait)],
+                ),
+            ],
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_prompt="prompt",
+        )
+        errors = cfg.validate()
+        assert any("at most one character mapping" in e for e in errors)
+
+    def test_scail2_prepared_assets_must_be_complete(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_prompt="prompt",
+        )
+        errors = cfg.validate()
+        assert any("prepared-assets mode requires" in e for e in errors)
+
+    def test_scail2_target_size_must_be_divisible_by_32(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_prompt="prompt",
+            scail2_target_width=705,
+            scail2_target_height=512,
+        )
+        errors = cfg.validate()
+        assert any("divisible by 32" in e for e in errors)
+
+    def test_valid_scail2_config(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_prompt="prompt",
+            scail2_target_width=704,
+            scail2_target_height=512,
+        )
+        assert cfg.validate() == []
+
+    def test_scail2_matchnearest_and_egocentric_are_mutually_exclusive(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        pose_repo = repo / "SCAIL-Pose"
+        (pose_repo / "NLFPoseExtract").mkdir(parents=True)
+        (pose_repo / "NLFPoseExtract" / "process_replacement.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_prompt="prompt",
+            scail2_matchnearest=True,
+            scail2_egocentric=True,
+        )
+        errors = cfg.validate()
+        assert any("cannot enable both" in e for e in errors)
