@@ -12,6 +12,12 @@ vicrop --input ./videos --output-dir ./frames
 # Process a single video file
 vicrop --input ./video.mp4 --output-dir ./frames
 
+# Extract raw frames only, without face detection
+vicrop --input ./video.mp4 --output-dir ./frames --extract-only --every-n 10
+
+# Write rectangular output instead of square output
+vicrop --input ./video.mp4 --output-dir ./frames --crop-dim 768 512
+
 # Faster sampling, no identity clustering
 vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
 
@@ -23,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 logging.basicConfig(
@@ -73,7 +78,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--crop-size",
         type=int,
         default=1024,
-        help="Output square resolution in pixels (default: 1024).",
+        help="Output square resolution in pixels (default: 1024). Overridden by --crop-dim.",
+    )
+    parser.add_argument(
+        "--crop-dim",
+        type=int,
+        nargs=2,
+        metavar=("W", "H"),
+        default=None,
+        help="Output width and height in pixels for photo or video output. Overrides --crop-size.",
+    )
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help="Photo mode only: extract every N-th frame without face detection or clustering.",
     )
     parser.add_argument(
         "--no-classify",
@@ -174,7 +192,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Set the logging level (default: INFO).",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.crop_dim is not None:
+        args.crop_dim = tuple(args.crop_dim)
+    if args.output_type == "video" and args.extract_only:
+        parser.error("--extract-only is only supported when --output-type is photo")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -208,6 +231,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=args.crop_dim,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -223,6 +247,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=args.crop_dim,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -246,6 +271,8 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=args.crop_dim,
+                extract_only=args.extract_only,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,
@@ -263,6 +290,8 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=args.crop_dim,
+                extract_only=args.extract_only,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,

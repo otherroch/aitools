@@ -1,6 +1,6 @@
 # vicrop
 
-Extract face-cropped PNG frames or per-person video segments from video files.
+Extract face-cropped PNG frames, raw sampled PNG frames, or per-person video segments from video files.
 
 Reads video files using OpenCV, samples frames at a configurable interval (`--every-n`), detects faces in each sampled frame, crops them with padding, and saves them as PNG files. Optionally clusters face crops by identity into `person_NN` sub-folders (same greedy nearest-neighbour algorithm as `portrait-prep crop`). Optionally scores each crop for reference-photo quality and writes a `reflist.txt` per identity.
 
@@ -20,6 +20,12 @@ vicrop --input ./video.mp4 --output-dir ./frames
 
 # Faster sampling, no identity clustering
 vicrop --input ./videos --output-dir ./frames --every-n 15 --no-classify
+
+# Extract every 10th frame without face detection
+vicrop --input ./video.mp4 --output-dir ./frames --every-n 10 --extract-only
+
+# Save non-square photo output
+vicrop --input ./videos --output-dir ./frames --crop-dim 768 512
 
 # Higher-accuracy face detection
 vicrop --input ./videos --output-dir ./frames --detection-model cnn
@@ -49,6 +55,9 @@ frames/
             └── frame000060_face1.png
 ```
 
+With `--extract-only`, sampled frames are written directly under `<video_stem>/`
+as `frame000000.png`, `frame000030.png`, and so on.
+
 ### Video segment mode
 
 ```bash
@@ -58,6 +67,10 @@ vicrop --input ./videos --output-dir ./segments --output-type video
 # Custom segment length limits
 vicrop --input ./videos --output-dir ./segments --output-type video \
     --max-segment-length 15 --min-segment-length 5
+
+# Save rectangular video segments
+vicrop --input ./videos --output-dir ./segments --output-type video \
+    --crop-dim 1280 720
 
 # Process a single file
 vicrop --input ./interview.mp4 --output-dir ./segments --output-type video
@@ -111,6 +124,8 @@ Lower values cast a wider net and produce a larger reference set; higher values 
 | `--every-n` | `30` | Process every N-th frame |
 | `--margin-ratio` | `0.4` | Fractional padding around each detected face bbox (see below) |
 | `--crop-size` | `1024` | Output square resolution (pixels) |
+| `--crop-dim` | — | Output width and height in pixels; overrides `--crop-size` |
+| `--extract-only` | — | Photo mode only: save every N-th frame without face detection or clustering |
 | `--no-classify` | — | Disable identity clustering |
 | `--tolerance` | `0.7` | Face-distance threshold for clustering (see below) |
 | `--detection-model` | `hog` | `hog` (fast) or `cnn` (more accurate) |
@@ -119,6 +134,19 @@ Lower values cast a wider net and produce a larger reference set; higher values 
 | `--output-type` | `photo` | `photo` (face-cropped PNGs) or `video` (single-person MP4 segments) |
 | `--max-segment-length` | `30` | Maximum segment duration in seconds; longer segments are split (video mode only) |
 | `--min-segment-length` | `2` | Minimum segment duration in seconds; shorter segments are discarded (video mode only) |
+
+### `--extract-only` — fast frame extraction
+
+`--extract-only` skips face detection, encoding, clustering, and reference-photo
+selection. It is available in photo mode only and writes every sampled frame as
+`frameNNNNNN.png` under the video's output directory.
+
+### `--crop-dim` — rectangular output sizing
+
+`--crop-dim W H` overrides `--crop-size`.
+
+- In photo mode, it resizes each saved PNG to `W × H`.
+- In video mode, it resizes each written segment frame to `W × H`.
 
 ### `--margin-ratio` — controlling how much context surrounds the face
 

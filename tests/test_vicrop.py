@@ -262,6 +262,75 @@ class TestCropVideo:
         # frames 0, 2, 4 → 3 processed
         assert stats["frames_processed"] == 3
 
+    def test_extract_only_saves_sampled_frames_without_detection(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame(size=(60, 80))
+        mock_cap = _fake_video_capture([frame] * 5)
+
+        fr_mock = MagicMock()
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
+             patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+            stats = crop_video(
+                video_path,
+                out_dir,
+                every_n=2,
+                crop_dim=(40, 20),
+                extract_only=True,
+                backend=backend,
+            )
+
+        assert stats["frames_processed"] == 3
+        assert stats["faces"] == 0
+        saved = sorted((out_dir / "clip").glob("*.png"))
+        assert [path.name for path in saved] == [
+            "frame000000.png",
+            "frame000002.png",
+            "frame000004.png",
+        ]
+        with Image.open(saved[0]) as image:
+            assert image.size == (40, 20)
+        fr_mock.face_locations.assert_not_called()
+        fr_mock.face_encodings.assert_not_called()
+
+    def test_crop_dim_overrides_crop_size_for_face_crops(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[10:40, 10:40] = 200
+        mock_cap = _fake_video_capture([frame])
+
+        face_location = (10, 40, 40, 10)
+        fake_encoding = np.zeros(128)
+
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [face_location]
+        fr_mock.face_encodings.return_value = [fake_encoding]
+
+        backend = MockBackendShim(fr_mock)
+        with patch("vicrop.crop.cv2.VideoCapture", return_value=mock_cap), \
+             patch("vicrop.crop.cv2.cvtColor", return_value=frame):
+            stats = crop_video(
+                video_path,
+                out_dir,
+                every_n=1,
+                classify=False,
+                crop_size=64,
+                crop_dim=(80, 40),
+                backend=backend,
+            )
+
+        assert stats["faces"] == 1
+        saved = list((out_dir / "clip").rglob("*.png"))
+        assert len(saved) == 1
+        with Image.open(saved[0]) as image:
+            assert image.size == (80, 40)
+
 
 # ---------------------------------------------------------------------------
 # crop_folder
@@ -314,6 +383,30 @@ class TestCropFolder:
                 stats = crop_folder(src, tmp_path / "out", every_n=1, classify=False, backend=backend)
 
         assert stats["videos_processed"] == 2
+
+    def test_forwards_extract_only_and_crop_dim(self, tmp_path):
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "a.mp4").write_bytes(b"fake")
+
+        backend = MockBackendShim(MagicMock())
+        with patch("vicrop.crop.crop_video", return_value={
+            "frames_processed": 1,
+            "faces": 0,
+            "persons": 0,
+            "ref_photos": 0,
+        }) as mock_crop_video:
+            stats = crop_folder(
+                src,
+                tmp_path / "out",
+                crop_dim=(320, 180),
+                extract_only=True,
+                backend=backend,
+            )
+
+        assert stats["videos_processed"] == 1
+        assert mock_crop_video.call_args.kwargs["crop_dim"] == (320, 180)
+        assert mock_crop_video.call_args.kwargs["extract_only"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -973,6 +1066,54 @@ class TestSegmentVideo:
         for call in mock_resize.call_args_list:
             assert call.args[1] == (512, 512)
 
+    def test_crop_dim_overrides_crop_size_for_segment_output(self, tmp_path):
+        video_path = tmp_path / "clip.mp4"
+        video_path.write_bytes(b"fake")
+        out_dir = tmp_path / "out"
+
+        frame = self._dummy_frame()
+        frames = [frame] * 5
+
+        analysis_cap = _make_segment_cap(frames, fps=25.0)
+        write_cap = _make_segment_cap(frames, fps=25.0)
+
+        enc = np.zeros(128)
+        fr_mock = MagicMock()
+        fr_mock.face_locations.return_value = [(10, 40, 40, 10)]
+        fr_mock.face_encodings.return_value = [enc]
+        fr_mock.face_distance.return_value = np.array([0.1])
+
+        backend = MockBackendShim(fr_mock)
+        mock_writer = MagicMock()
+        writer_sizes = []
+
+        def capture_writer(path, fourcc, fps, size):
+            writer_sizes.append(size)
+            return mock_writer
+
+        resized_frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+        with patch("vicrop.segment.cv2.VideoCapture", side_effect=[analysis_cap, write_cap]), \
+             patch("vicrop.segment.cv2.cvtColor", return_value=frame), \
+             patch("vicrop.segment.cv2.VideoWriter", side_effect=capture_writer), \
+             patch("vicrop.segment.cv2.VideoWriter_fourcc", return_value=0x7634706d), \
+             patch("vicrop.segment.cv2.resize", return_value=resized_frame) as mock_resize:
+            stats = segment_video(
+                video_path,
+                out_dir,
+                every_n=1,
+                min_segment_length=0.0,
+                max_segment_length=30.0,
+                crop_size=512,
+                crop_dim=(640, 360),
+                backend=backend,
+            )
+
+        assert stats["segments"] == 1
+        assert writer_sizes == [(640, 360)]
+        for call in mock_resize.call_args_list:
+            assert call.args[1] == (640, 360)
+
     def test_no_crop_size_uses_cropped_rect_dimensions(self, tmp_path):
         """Without crop_size, VideoWriter uses the natural cropped-rect size."""
         video_path = tmp_path / "clip.mp4"
@@ -1131,4 +1272,37 @@ class TestCLIOutputType:
                 "--input", "/tmp/v.mp4",
                 "--output-dir", "/tmp/out",
                 "--output-type", "gif",
+            ])
+
+
+class TestCLINewOptions:
+    def test_extract_only_parsed(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--extract-only",
+        ])
+        assert args.extract_only is True
+
+    def test_crop_dim_parsed(self):
+        from vicrop.cli import parse_args
+
+        args = parse_args([
+            "--input", "/tmp/v.mp4",
+            "--output-dir", "/tmp/out",
+            "--crop-dim", "320", "180",
+        ])
+        assert args.crop_dim == (320, 180)
+
+    def test_extract_only_rejected_for_video_output(self):
+        from vicrop.cli import parse_args
+
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--input", "/tmp/v.mp4",
+                "--output-dir", "/tmp/out",
+                "--output-type", "video",
+                "--extract-only",
             ])

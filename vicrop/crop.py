@@ -51,12 +51,39 @@ def _default_backend():
     return backend_for_model("dlib")
 
 
+def _resolve_output_dimensions(
+    crop_size: int | None,
+    crop_dim: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    """Resolve the target output size, preferring crop_dim over crop_size."""
+    if crop_dim is not None:
+        return crop_dim
+    if crop_size is not None:
+        return (crop_size, crop_size)
+    return None
+
+
+def _resize_rgb_image(
+    frame_rgb: np.ndarray,
+    crop_size: int | None,
+    crop_dim: tuple[int, int] | None,
+) -> Image.Image:
+    """Convert an RGB array into a PIL image resized to the configured output size."""
+    image = Image.fromarray(frame_rgb)
+    target_size = _resolve_output_dimensions(crop_size, crop_dim)
+    if target_size is None:
+        return image
+    return image.resize(target_size, Image.LANCZOS)
+
+
 def crop_video(
     video_path: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
+    crop_dim: tuple[int, int] | None = None,
+    extract_only: bool = False,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
@@ -77,6 +104,10 @@ def crop_video(
         every_n:         Process every N-th frame (default: 30).
         margin_ratio:    Fractional padding around each detected face bbox.
         crop_size:       Output square resolution in pixels (default: 1024).
+        crop_dim:        Optional ``(width, height)`` output size in pixels.
+                         Overrides *crop_size* when provided.
+        extract_only:    If True, save every N-th frame directly without face
+                         detection, encoding, clustering, or reference scoring.
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
@@ -104,15 +135,15 @@ def crop_video(
     video_stem_dir = output_dir / video_path.stem
 
     logger.debug(
-        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d classify=%s",
-        video_path.name, every_n, margin_ratio, crop_size, classify,
+        "crop_video: %s  every_n=%d margin_ratio=%.2f crop_size=%d crop_dim=%s extract_only=%s classify=%s",
+        video_path.name, every_n, margin_ratio, crop_size, crop_dim, extract_only, classify,
     )
 
     if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.png")):
         logger.info("Skipping (already processed): %s", video_path.name)
         return {"frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
 
-    staging_dir = video_stem_dir / "_staging" if classify else video_stem_dir
+    staging_dir = video_stem_dir / "_staging" if classify and not extract_only else video_stem_dir
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(str(video_path))
@@ -127,7 +158,7 @@ def crop_video(
         video_path.name, total_frames, every_n, frames_to_sample,
     )
 
-    do_ref = ref_thresh > 0
+    do_ref = ref_thresh > 0 and not extract_only
 
     frame_idx = 0
     frames_processed = 0
@@ -157,6 +188,16 @@ def crop_video(
 
             if frame_idx % every_n == 0:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+                if extract_only:
+                    out_name = f"frame{frame_idx:06d}.png"
+                    out_path = video_stem_dir / out_name
+                    _resize_rgb_image(frame_rgb, crop_size, crop_dim).save(out_path)
+                    logger.debug("Saved extracted frame: %s", out_path)
+                    frames_processed += 1
+                    frame_idx += 1
+                    continue
+
                 face_locations = backend.detect_faces(frame_rgb)
                 face_encodings = backend.encode_faces(frame_rgb, face_locations)
 
@@ -181,9 +222,7 @@ def crop_video(
                     crop_right = min(w_img, right + margin_w)
 
                     face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
-                    pil_img = Image.fromarray(face_arr).resize(
-                        (crop_size, crop_size), Image.LANCZOS
-                    )
+                    pil_img = _resize_rgb_image(face_arr, crop_size, crop_dim)
 
                     out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
                     out_path = staging_dir / out_name
@@ -282,6 +321,8 @@ def crop_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     crop_size: int = DEFAULT_CROP_SIZE,
+    crop_dim: tuple[int, int] | None = None,
+    extract_only: bool = False,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
@@ -298,6 +339,10 @@ def crop_folder(
         every_n:         Process every N-th frame from each video.
         margin_ratio:    Fractional margin around each detected face bbox.
         crop_size:       Output square resolution in pixels.
+        crop_dim:        Optional ``(width, height)`` output size in pixels.
+                         Overrides *crop_size* when provided.
+        extract_only:    If True, save every N-th frame directly without face
+                         detection, clustering, or reference scoring.
         classify:        If True, cluster faces by identity into
                          identity sub-folders.
         tolerance:       Face-distance threshold for identity clustering.
@@ -333,8 +378,8 @@ def crop_folder(
         return {"videos_processed": 0, "frames_processed": 0, "faces": 0, "persons": 0, "ref_photos": 0}
 
     logger.debug(
-        "crop_folder: found %d video(s) in %s  every_n=%d classify=%s",
-        len(videos), input_dir, every_n, classify,
+        "crop_folder: found %d video(s) in %s  every_n=%d extract_only=%s classify=%s",
+        len(videos), input_dir, every_n, extract_only, classify,
     )
 
     total: dict[str, int] = {
@@ -353,6 +398,8 @@ def crop_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
+            crop_dim=crop_dim,
+            extract_only=extract_only,
             classify=classify,
             tolerance=tolerance,
             skip_existing=skip_existing,
