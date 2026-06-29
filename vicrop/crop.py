@@ -55,8 +55,8 @@ def crop_video(
     video_path: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    crop_size: int = DEFAULT_CROP_SIZE,
+    margin_ratio: float = 0.4,
+    crop_size: int = 1024,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
@@ -64,6 +64,8 @@ def crop_video(
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
+    extract_only: bool = False,
+    crop_dim: tuple[int, int] | None = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
 
@@ -92,6 +94,13 @@ def crop_video(
         backend:         :class:`FaceBackend` instance for detection, encoding,
                          and clustering.  When *None*, a default dlib backend
                          is created.
+        extract_only:    If True, extract raw frames without running face
+                         detection, encoding, or clustering.  Each sampled
+                         frame is saved as a single PNG without face
+                         cropping.
+        crop_dim:        Optional ``(width, height)`` tuple specifying the
+                         output resolution in pixels.  When *None*,
+                         *crop_size* is used for both dimensions.
 
     Returns:
         Summary dict with keys ``frames_processed``, ``faces``,
@@ -129,6 +138,12 @@ def crop_video(
 
     do_ref = ref_thresh > 0
 
+    # Determine output dimensions
+    if crop_dim is not None:
+        out_w, out_h = crop_dim
+    else:
+        out_w, out_h = crop_size, crop_size
+
     frame_idx = 0
     frames_processed = 0
     faces_detected = 0
@@ -136,7 +151,7 @@ def crop_video(
     ref_scores: dict[str, float] = {}  # filename → quality score
 
     debug_logging = logger.isEnabledFor(logging.DEBUG)
-     
+
     try:
         while True:
             ret, frame_bgr = cap.read()
@@ -156,58 +171,69 @@ def crop_video(
                     )
 
             if frame_idx % every_n == 0:
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                face_locations = backend.detect_faces(frame_rgb)
-                face_encodings = backend.encode_faces(frame_rgb, face_locations)
+                if extract_only:
+                    # Extract-only mode: save raw frame without face detection
+                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(frame_rgb).resize(
+                        (out_w, out_h), Image.LANCZOS
+                    )
+                    out_name = f"frame{frame_idx:06d}.png"
+                    out_path = video_stem_dir / out_name
+                    pil_img.save(out_path)
+                    frames_processed += 1
+                else:
+                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                    face_locations = backend.detect_faces(frame_rgb)
+                    face_encodings = backend.encode_faces(frame_rgb, face_locations)
 
-                logger.debug(
-                    "crop_video: frame %d  detected %d face(s)",
-                    frame_idx, len(face_locations),
-                )
-
-                h_img, w_img = frame_rgb.shape[:2]
-
-                for i, ((top, right, bottom, left), encoding) in enumerate(
-                    zip(face_locations, face_encodings)
-                ):
-                    face_h = bottom - top
-                    face_w = right - left
-                    margin_h = int(face_h * margin_ratio)
-                    margin_w = int(face_w * margin_ratio)
-
-                    crop_top = max(0, top - margin_h)
-                    crop_bottom = min(h_img, bottom + margin_h)
-                    crop_left = max(0, left - margin_w)
-                    crop_right = min(w_img, right + margin_w)
-
-                    face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
-                    pil_img = Image.fromarray(face_arr).resize(
-                        (crop_size, crop_size), Image.LANCZOS
+                    logger.debug(
+                        "crop_video: frame %d  detected %d face(s)",
+                        frame_idx, len(face_locations),
                     )
 
-                    out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
-                    out_path = staging_dir / out_name
-                    pil_img.save(out_path)
-                    logger.debug("Saved face crop: %s", out_path)
-                    all_results.append((out_path, encoding))
+                    h_img, w_img = frame_rgb.shape[:2]
 
-                    faces_detected += 1
+                    for i, ((top, right, bottom, left), encoding) in enumerate(
+                        zip(face_locations, face_encodings)
+                    ):
+                        face_h = bottom - top
+                        face_w = right - left
+                        margin_h = int(face_h * margin_ratio)
+                        margin_w = int(face_w * margin_ratio)
 
-                    if do_ref:
-                        lm_list = backend.face_landmarks(
-                            frame_rgb, [(top, right, bottom, left)],
-                        )
-                        lm = lm_list[0] if lm_list else None
-                        ref_scores[out_name] = score_reference_quality(
-                            frame_rgb,
-                            (top, right, bottom, left),
-                            lm,
-                            face_arr,
-                            face_count=len(face_locations),
-                            name = out_name if debug_logging else None,
+                        crop_top = max(0, top - margin_h)
+                        crop_bottom = min(h_img, bottom + margin_h)
+                        crop_left = max(0, left - margin_w)
+                        crop_right = min(w_img, right + margin_w)
+
+                        face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
+                        pil_img = Image.fromarray(face_arr).resize(
+                            (out_w, out_h), Image.LANCZOS
                         )
 
-                frames_processed += 1
+                        out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
+                        out_path = staging_dir / out_name
+                        pil_img.save(out_path)
+                        logger.debug("Saved face crop: %s", out_path)
+                        all_results.append((out_path, encoding))
+
+                        faces_detected += 1
+
+                        if do_ref:
+                            lm_list = backend.face_landmarks(
+                                frame_rgb, [(top, right, bottom, left)],
+                            )
+                            lm = lm_list[0] if lm_list else None
+                            ref_scores[out_name] = score_reference_quality(
+                                frame_rgb,
+                                (top, right, bottom, left),
+                                lm,
+                                face_arr,
+                                face_count=len(face_locations),
+                                name=out_name if debug_logging else None,
+                            )
+
+                    frames_processed += 1
 
             frame_idx += 1
     finally:
@@ -280,8 +306,8 @@ def crop_folder(
     input_dir: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    crop_size: int = DEFAULT_CROP_SIZE,
+    margin_ratio: float = 0.4,
+    crop_size: int = 1024,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
@@ -289,6 +315,8 @@ def crop_folder(
     classified_path: Path | None = None,
     classified_max: int = 0,
     backend: FaceBackend | None = None,
+    extract_only: bool = False,
+    crop_dim: tuple[int, int] | None = None,
 ) -> dict[str, int]:
     """Process all video files in *input_dir*, extracting face-cropped frames.
 
@@ -360,6 +388,8 @@ def crop_folder(
             classified_path=classified_path,
             classified_max=classified_max,
             backend=backend,
+            extract_only=extract_only,
+            crop_dim=crop_dim,
         )
         total["videos_processed"] += 1
         total["frames_processed"] += stats["frames_processed"]

@@ -132,6 +132,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Re-process videos whose output directory already contains frames.",
     )
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help=(
+            "Extract frames without running face detection, encoding, or\n"
+            "clustering.  Each sampled frame is saved as a single PNG\n"
+            "without face cropping.  Useful for quick preview or manual\n"
+            "labeling workflows."
+        ),
+    )
+    parser.add_argument(
+        "--crop-dim",
+        type=int,
+        nargs=2,
+        metavar=("WIDTH", "HEIGHT"),
+        default=None,
+        help=(
+            "Width and height in pixels of the output photo or video\n"
+            "segment.  Overrides --crop-size for photo output and the\n"
+            "per-frame resize for video segments.\n"
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Output type                                                          #
@@ -197,6 +219,11 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(1)
 
+    # Resolve crop_dim from CLI args
+    crop_dim = None
+    if args.crop_dim is not None:
+        crop_dim = tuple(args.crop_dim)
+
     if args.output_type == "video":
         from vicrop.segment import segment_folder, segment_video
 
@@ -253,6 +280,8 @@ def main(argv: list[str] | None = None) -> None:
                 classified_path=args.classified_path,
                 classified_max=args.classified_max,
                 backend=backend,
+                extract_only=args.extract_only,
+                crop_dim=crop_dim,
             )
             stats = {**video_stats, "videos_processed": 1}
         else:
@@ -270,6 +299,8 @@ def main(argv: list[str] | None = None) -> None:
                 classified_path=args.classified_path,
                 classified_max=args.classified_max,
                 backend=backend,
+                extract_only=args.extract_only,
+                crop_dim=crop_dim,
             )
         logger.info(
             "vicrop: %d videos processed, %d frames sampled, %d faces saved, "

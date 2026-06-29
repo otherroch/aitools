@@ -119,6 +119,8 @@ Lower values cast a wider net and produce a larger reference set; higher values 
 | `--output-type` | `photo` | `photo` (face-cropped PNGs) or `video` (single-person MP4 segments) |
 | `--max-segment-length` | `30` | Maximum segment duration in seconds; longer segments are split (video mode only) |
 | `--min-segment-length` | `2` | Minimum segment duration in seconds; shorter segments are discarded (video mode only) |
+| `--extract-only` | — | Extract raw frames without face detection, encoding, or clustering |
+| `--crop-dim` | — | Width and height in pixels for the output photo or video segment (two integer arguments) |
 
 ### `--margin-ratio` — controlling how much context surrounds the face
 
@@ -143,3 +145,29 @@ After all face crops from a video are collected, `vicrop` groups them by identit
 | `0.8–0.9` | Permissive — merges more crops into each cluster. Good for footage where the subject's appearance varies widely (different lighting, head angles, partial occlusion), but risks merging distinct people who look somewhat similar. |
 
 > **Tip:** if you find one person split across `person_01` and `person_03`, increase tolerance slightly. If two distinct people are being merged into the same folder, decrease it.
+
+### `--extract-only` — fast frame extraction without face detection
+
+Use `--extract-only` to save raw frames without running face detection, encoding, or clustering. Each sampled frame is saved as a single PNG without face cropping. This is useful for quick preview or manual labeling workflows.
+
+```bash
+# Extract every 10th frame without face detection
+vicrop --input ./video.mp4 --output-dir ./frames --every-n 10 --extract-only
+
+# Extract all frames (every-n 1) for manual labeling
+vicrop --input ./video.mp4 --output-dir ./frames --every-n 1 --extract-only
+```
+
+### `--crop-dim` — custom output dimensions
+
+Use `--crop-dim` to specify the width and height in pixels of the output photo or video segment. This overrides `--crop-size` for photo output and the per-frame resize for video segments.
+
+```bash
+# Non-square output dimensions
+vicrop --input ./videos --output-dir ./frames --crop-dim 512 384
+
+# Rectangular crop for widescreen training data
+vicrop --input ./videos --output-dir ./frames --crop-dim 1920 1080
+```
+
+When `--crop-dim` is not specified, `--crop-size` is used for both dimensions, producing square outputs.
