@@ -26,7 +26,7 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"invalid int value: {value!r}")
     if n < 1:
         raise argparse.ArgumentTypeError(
-            f"--batch must be a positive integer (>= 1), got {n}"
+            f"expected a positive integer (>= 1), got {n}"
         )
     return n
 
@@ -228,6 +228,26 @@ Config JSON format
         "--scail2-mask-video",
         default=None,
         help="Prepared SCAIL-2 driving mask video.",
+    )
+    p.add_argument(
+        "--scail2-additional-reference-image",
+        dest="scail2_additional_reference_images",
+        nargs="+",
+        default=[],
+        help=(
+            "Optional extra SCAIL-2 reference images for multi-reference "
+            "replacement. Pass a space-separated list."
+        ),
+    )
+    p.add_argument(
+        "--scail2-additional-reference-mask",
+        dest="scail2_additional_reference_masks",
+        nargs="+",
+        default=[],
+        help=(
+            "Optional extra SCAIL-2 masks paired positionally with "
+            "--scail2-additional-reference-image. Pass a space-separated list."
+        ),
     )
     p.add_argument(
         "--scail2-prompt",
@@ -565,6 +585,12 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         scail2_reference_image=_arg_get(args, "scail2_reference_image", None),
         scail2_reference_mask=_arg_get(args, "scail2_reference_mask", None),
         scail2_mask_video=_arg_get(args, "scail2_mask_video", None),
+        scail2_additional_reference_images=list(
+            _arg_get(args, "scail2_additional_reference_images", []) or []
+        ),
+        scail2_additional_reference_masks=list(
+            _arg_get(args, "scail2_additional_reference_masks", []) or []
+        ),
         scail2_prompt=_arg_get(args, "scail2_prompt", None),
         scail2_prompt_file=_arg_get(args, "scail2_prompt_file", None),
         scail2_target_width=int(

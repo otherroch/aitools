@@ -92,6 +92,46 @@ class TestScail2PreparedAssetsRunner:
         runner = Scail2PreparedAssetsRunner(cfg)
         assert runner._resolve_prompt() == "Prompt from file"
 
+    def test_run_includes_additional_references_when_provided(self, tmp_path):
+        cfg = _make_scail2_cfg(tmp_path)
+        extra_ref_a = tmp_path / "extra_ref_a.png"
+        extra_ref_b = tmp_path / "extra_ref_b.png"
+        extra_mask_a = tmp_path / "extra_mask_a.png"
+        extra_mask_b = tmp_path / "extra_mask_b.png"
+        for path in [extra_ref_a, extra_ref_b, extra_mask_a, extra_mask_b]:
+            _write_valid_png(path)
+
+        cfg.scail2_additional_reference_images = [
+            str(extra_ref_a),
+            str(extra_ref_b),
+        ]
+        cfg.scail2_additional_reference_masks = [
+            str(extra_mask_a),
+            str(extra_mask_b),
+        ]
+
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        def _run_side_effect(cmd, cwd, capture_output, text):
+            output_path = Path(cmd[cmd.index("--save_file") + 1])
+            output_path.write_bytes(b"generated")
+            return MagicMock(returncode=0, stdout="ok", stderr="")
+
+        with patch.object(runner, "_probe_video", return_value=(12, 24.0)), \
+             patch("chararep.scail2_runner.subprocess.run", side_effect=_run_side_effect) as mock_run, \
+             patch("chararep.scail2_runner.finalize_video_output"):
+            runner.run()
+
+        cmd = mock_run.call_args[0][0]
+        image_flag_index = cmd.index("--additional_ref_image")
+        mask_flag_index = cmd.index("--additional_ref_mask_image")
+        prompt_flag_index = cmd.index("--prompt")
+
+        staged_image_names = [Path(path).name for path in cmd[image_flag_index + 1:mask_flag_index]]
+        staged_mask_names = [Path(path).name for path in cmd[mask_flag_index + 1:prompt_flag_index]]
+        assert staged_image_names == ["additional_ref_0.png", "additional_ref_1.png"]
+        assert staged_mask_names == ["additional_ref_mask_0.png", "additional_ref_mask_1.png"]
+
     def test_run_raises_on_subprocess_failure(self, tmp_path):
         cfg = _make_scail2_cfg(tmp_path)
         runner = Scail2PreparedAssetsRunner(cfg)

@@ -101,6 +101,8 @@ class PipelineConfig:
     scail2_reference_image: Optional[str] = None
     scail2_reference_mask: Optional[str] = None
     scail2_mask_video: Optional[str] = None
+    scail2_additional_reference_images: list[str] = field(default_factory=list)
+    scail2_additional_reference_masks: list[str] = field(default_factory=list)
     scail2_prompt: Optional[str] = None
     scail2_prompt_file: Optional[str] = None
     scail2_target_width: int = 896
@@ -196,6 +198,7 @@ class PipelineConfig:
             self._require_file(errors, "scail2_sam3_model", self.scail2_sam3_model)
         if not self.scail2_sam_text:
             errors.append("SCAIL-2 auto-prep requires at least one SAM text prompt")
+        errors.extend(self._validate_scail2_additional_references())
 
         prepared_assets = self.scail2_has_prepared_assets()
         any_prepared_asset = any(
@@ -268,6 +271,37 @@ class PipelineConfig:
             if work_dir.exists() and not work_dir.is_dir():
                 errors.append(
                     f"scail2_work_dir must be a directory when provided: {self.scail2_work_dir}"
+                )
+
+        return errors
+
+    def _validate_scail2_additional_references(self) -> list[str]:
+        """Validate optional multi-reference inputs for SCAIL-2."""
+        errors: list[str] = []
+        images = list(self.scail2_additional_reference_images)
+        masks = list(self.scail2_additional_reference_masks)
+
+        if not images and not masks:
+            return errors
+
+        if len(images) != len(masks):
+            errors.append(
+                "SCAIL-2 additional references require matching "
+                "scail2_additional_reference_images and "
+                "scail2_additional_reference_masks lists of equal length"
+            )
+
+        for index, path in enumerate(images):
+            if not Path(path).is_file():
+                errors.append(
+                    "SCAIL-2 additional reference image not found "
+                    f"at index {index}: {path}"
+                )
+        for index, path in enumerate(masks):
+            if not Path(path).is_file():
+                errors.append(
+                    "SCAIL-2 additional reference mask not found "
+                    f"at index {index}: {path}"
                 )
 
         return errors

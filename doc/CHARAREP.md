@@ -179,6 +179,11 @@ In this mode, chararep stages the driving clip and the first portrait image from
 `REPLACE` folder, runs `SCAIL-Pose/NLFPoseExtract/process_replacement.py`, then feeds
 the generated `ref_mask.png` and `replace_mask.mp4` into `generate.py`.
 
+Optional multi-reference inputs can still be supplied in this mode with
+`--scail2-additional-reference-image` and
+`--scail2-additional-reference-mask`. Those extra images and masks are passed
+through directly to SCAIL-2 after auto-prep finishes.
+
 Current limitation: the SCAIL-2 auto-prep path only supports one `--char` mapping per run.
 The `FIND` images are now used by chararep's own detector/recognizer stack to sample the
 driving clip before SCAIL-Pose runs. If that preflight sees exactly one matched target in a
@@ -203,6 +208,28 @@ chararep \
 
 Prepared-assets mode skips SCAIL-Pose and passes the supplied assets straight into
 SCAIL-2 inference.
+
+### CLI (SCAIL-2 multi-reference prepared assets)
+
+```bash
+chararep \
+  --backend scail2 \
+  -i input_video.mp4 \
+  -o output_scail2.mp4 \
+  --scail2-repo-path C:/models/SCAIL-2 \
+  --scail2-ckpt-dir C:/models/SCAIL-2 \
+  --scail2-model-path C:/models/SCAIL-2.safetensors \
+  --scail2-reference-image prepared/ref.png \
+  --scail2-reference-mask prepared/ref_mask.png \
+  --scail2-mask-video prepared/replace_mask.mp4 \
+  --scail2-additional-reference-image prepared/back_view.png prepared/closeup.png \
+  --scail2-additional-reference-mask prepared/back_view_mask.png prepared/closeup_mask.png \
+  --scail2-prompt-file prompts/replacement.txt
+```
+
+The additional reference image and mask lists are paired positionally and must have
+the same length. Use them when one main reference frame does not capture enough of
+the replacement character's appearance.
 
 ### Key CLI options
 
@@ -241,6 +268,8 @@ SCAIL-2 inference.
 | `--scail2-reference-image` | SCAIL-2 reference image; also used for auto-prep when masks are omitted | none |
 | `--scail2-reference-mask` | Prepared reference mask image for SCAIL-2 | none |
 | `--scail2-mask-video` | Prepared replacement mask video for SCAIL-2 | none |
+| `--scail2-additional-reference-image` | Space-separated extra SCAIL-2 reference images for multi-reference runs | none |
+| `--scail2-additional-reference-mask` | Space-separated masks paired with `--scail2-additional-reference-image` | none |
 | `--scail2-prompt` | Inline SCAIL-2 positive prompt | none |
 | `--scail2-prompt-file` | Text file containing the SCAIL-2 positive prompt | none |
 | `--scail2-matchnearest` | SCAIL-Pose auto-prep: choose one of two driving tracks by IoU with the reference mask | false |

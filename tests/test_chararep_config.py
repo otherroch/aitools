@@ -334,6 +334,78 @@ class TestPipelineConfigValidate:
         errors = cfg.validate()
         assert any("prepared-assets mode requires" in e for e in errors)
 
+    def test_scail2_additional_references_require_equal_length_lists(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+        extra_ref = tmp_path / "extra_ref.png"
+        extra_ref.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_additional_reference_images=[str(extra_ref)],
+            scail2_prompt="prompt",
+        )
+        errors = cfg.validate()
+        assert any("additional references require matching" in e for e in errors)
+
+    def test_valid_scail2_config_allows_multi_reference_inputs(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+        extra_ref = tmp_path / "extra_ref.png"
+        extra_ref.touch()
+        extra_mask = tmp_path / "extra_mask.png"
+        extra_mask.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_additional_reference_images=[str(extra_ref)],
+            scail2_additional_reference_masks=[str(extra_mask)],
+            scail2_prompt="prompt",
+        )
+        assert cfg.validate() == []
+
     def test_scail2_target_size_must_be_divisible_by_32(self, tmp_path):
         video = tmp_path / "video.mp4"
         video.touch()

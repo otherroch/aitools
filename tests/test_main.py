@@ -48,6 +48,8 @@ class TestParseArgs:
         assert args.timers is False
         assert args.dump_config is False
         assert args.scail2_offload_model is True
+        assert args.scail2_additional_reference_images == []
+        assert args.scail2_additional_reference_masks == []
         assert args.scail2_pose_repo_path is None
 
     def test_scail2_backend_flag(self):
@@ -65,6 +67,29 @@ class TestParseArgs:
     def test_scail2_sam_text_flag(self):
         args = self._parse(["--scail2-sam-text", "human", "bear"])
         assert args.scail2_sam_text == ["human", "bear"]
+
+    def test_scail2_additional_reference_flags(self):
+        args = self._parse(
+            [
+                "--scail2-additional-reference-image",
+                "ref_a.png",
+                "ref_b.png",
+                "--scail2-additional-reference-mask",
+                "mask_a.png",
+                "mask_b.png",
+            ]
+        )
+        assert args.scail2_additional_reference_images == ["ref_a.png", "ref_b.png"]
+        assert args.scail2_additional_reference_masks == ["mask_a.png", "mask_b.png"]
+
+    def test_scail2_target_width_uses_generic_positive_int_error(self, capsys):
+        with pytest.raises(SystemExit):
+            self._parse(["--scail2-target-width", "0"])
+
+        captured = capsys.readouterr()
+        error_line = captured.err.strip().splitlines()[-1]
+        assert "expected a positive integer" in error_line
+        assert "--batch" not in error_line
 
     def test_temporal_smooth_alpha_nan_rejected(self):
         with pytest.raises(SystemExit):
@@ -211,6 +236,8 @@ class TestBuildConfigFromArgs:
             scail2_reference_image=None,
             scail2_reference_mask=None,
             scail2_mask_video=None,
+            scail2_additional_reference_images=[],
+            scail2_additional_reference_masks=[],
             scail2_prompt=None,
             scail2_prompt_file=None,
             scail2_target_width=PipelineConfig.scail2_target_width,
@@ -304,6 +331,8 @@ class TestBuildConfigFromArgs:
             scail2_reference_image="ref.png",
             scail2_reference_mask="ref_mask.png",
             scail2_mask_video="mask.mp4",
+            scail2_additional_reference_images=["ref_a.png", "ref_b.png"],
+            scail2_additional_reference_masks=["mask_a.png", "mask_b.png"],
             scail2_prompt="prompt",
             scail2_target_width=704,
             scail2_target_height=512,
@@ -322,6 +351,8 @@ class TestBuildConfigFromArgs:
         assert cfg.scail2_reference_image == "ref.png"
         assert cfg.scail2_reference_mask == "ref_mask.png"
         assert cfg.scail2_mask_video == "mask.mp4"
+        assert cfg.scail2_additional_reference_images == ["ref_a.png", "ref_b.png"]
+        assert cfg.scail2_additional_reference_masks == ["mask_a.png", "mask_b.png"]
         assert cfg.scail2_prompt == "prompt"
         assert cfg.scail2_target_width == 704
         assert cfg.scail2_target_height == 512

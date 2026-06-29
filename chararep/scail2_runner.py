@@ -1,5 +1,6 @@
 """SCAIL-2 prepared-assets runner for whole-video character replacement."""
 
+from dataclasses import dataclass
 import logging
 import shutil
 import subprocess
@@ -15,6 +16,16 @@ from .config import PipelineConfig
 from .video_io import finalize_video_output
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _StagedInputs:
+    image: Path
+    mask_image: Path
+    pose: Path
+    mask_video: Path
+    additional_images: tuple[Path, ...] = ()
+    additional_masks: tuple[Path, ...] = ()
 
 
 class Scail2PreparedAssetsRunner:
@@ -89,7 +100,7 @@ class Scail2PreparedAssetsRunner:
         job_dir: Path,
         total_frames: int,
         input_fps: float,
-    ) -> dict[str, Path]:
+    ) -> _StagedInputs:
         """Return generate.py inputs, either from explicit assets or auto-prep."""
         if self._cfg.scail2_has_prepared_assets():
             return self._stage_prepared_assets(job_dir)
@@ -117,24 +128,27 @@ class Scail2PreparedAssetsRunner:
             )
         )
 
-    def _stage_prepared_assets(self, job_dir: Path) -> dict[str, Path]:
-        staged = {
-            "image": self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_image, "ref"),
-            "mask_image": self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_mask, "ref_mask"),
-            "pose": self._copy_to_job_dir(job_dir, self._cfg.input_video, "rendered_v2"),
-            "mask_video": self._copy_to_job_dir(job_dir, self._cfg.scail2_mask_video, "rendered_mask_v2"),
-        }
-        return staged
+    def _stage_prepared_assets(self, job_dir: Path) -> _StagedInputs:
+        additional_images, additional_masks = self._stage_additional_references(job_dir)
+        return _StagedInputs(
+            image=self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_image, "ref"),
+            mask_image=self._copy_to_job_dir(job_dir, self._cfg.scail2_reference_mask, "ref_mask"),
+            pose=self._copy_to_job_dir(job_dir, self._cfg.input_video, "rendered_v2"),
+            mask_video=self._copy_to_job_dir(job_dir, self._cfg.scail2_mask_video, "rendered_mask_v2"),
+            additional_images=additional_images,
+            additional_masks=additional_masks,
+        )
 
     def _stage_inputs_from_scail_pose(
         self,
         job_dir: Path,
         total_frames: int,
         input_fps: float,
-    ) -> dict[str, Path]:
+    ) -> _StagedInputs:
         """Derive SCAIL-2 masks and intermediates from SCAIL-Pose."""
         ref_image = self._stage_auto_reference_image(job_dir)
-        driving_video = self._stage_driving_video(job_dir)
+        self._stage_driving_video(job_dir)
+        additional_images, additional_masks = self._stage_additional_references(job_dir)
 
         matchnearest, egocentric = self._resolve_pose_preprocess_flags(
             total_frames,
@@ -164,13 +178,14 @@ class Scail2PreparedAssetsRunner:
                     f"SCAIL-Pose auto-prep did not produce expected output: {path}"
                 )
 
-        return {
-            "image": ref_image,
-            "mask_image": mask_image,
-            "pose": pose_video,
-            "mask_video": mask_video,
-            "driving_input": driving_video,
-        }
+        return _StagedInputs(
+            image=ref_image,
+            mask_image=mask_image,
+            pose=pose_video,
+            mask_video=mask_video,
+            additional_images=additional_images,
+            additional_masks=additional_masks,
+        )
 
     @staticmethod
     def _copy_to_job_dir(job_dir: Path, source_path: str, stem: str) -> Path:
@@ -178,6 +193,25 @@ class Scail2PreparedAssetsRunner:
         target = job_dir / f"{stem}{source.suffix}"
         shutil.copy2(source, target)
         return target
+
+    def _stage_additional_references(
+        self,
+        job_dir: Path,
+    ) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+        """Stage optional multi-reference inputs into the isolated job dir."""
+        additional_images = tuple(
+            self._copy_to_job_dir(job_dir, source_path, f"additional_ref_{index}")
+            for index, source_path in enumerate(
+                self._cfg.scail2_additional_reference_images
+            )
+        )
+        additional_masks = tuple(
+            self._copy_to_job_dir(job_dir, source_path, f"additional_ref_mask_{index}")
+            for index, source_path in enumerate(
+                self._cfg.scail2_additional_reference_masks
+            )
+        )
+        return additional_images, additional_masks
 
     def _stage_auto_reference_image(self, job_dir: Path) -> Path:
         """Write a PNG ref image for SCAIL-Pose auto-prep."""
@@ -417,7 +451,7 @@ class Scail2PreparedAssetsRunner:
         pil = Image.open(image_path).convert("RGB")
         return np.array(pil)[:, :, ::-1].copy()
 
-    def _build_command(self, staged: dict[str, Path], prompt: str, output_path: Path) -> list[str]:
+    def _build_command(self, staged: _StagedInputs, prompt: str, output_path: Path) -> list[str]:
         generate_script = Path(self._cfg.scail2_repo_path) / "generate.py"
         cmd = [
             sys.executable,
@@ -433,27 +467,37 @@ class Scail2PreparedAssetsRunner:
             "--target_h",
             str(self._cfg.scail2_target_height),
             "--image",
-            str(staged["image"]),
+            str(staged.image),
             "--mask_image",
-            str(staged["mask_image"]),
+            str(staged.mask_image),
             "--pose",
-            str(staged["pose"]),
+            str(staged.pose),
             "--mask_video",
-            str(staged["mask_video"]),
-            "--prompt",
-            prompt,
-            "--save_file",
-            str(output_path),
-            "--replace_flag",
-            "--sample_steps",
-            str(self._cfg.scail2_sample_steps),
-            "--sample_shift",
-            str(self._cfg.scail2_sample_shift),
-            "--sample_guide_scale",
-            str(self._cfg.scail2_sample_guide_scale),
-            "--sample_solver",
-            self._cfg.scail2_sample_solver,
+            str(staged.mask_video),
         ]
+        if staged.additional_images:
+            cmd.append("--additional_ref_image")
+            cmd.extend(str(path) for path in staged.additional_images)
+        if staged.additional_masks:
+            cmd.append("--additional_ref_mask_image")
+            cmd.extend(str(path) for path in staged.additional_masks)
+        cmd.extend(
+            [
+                "--prompt",
+                prompt,
+                "--save_file",
+                str(output_path),
+                "--replace_flag",
+                "--sample_steps",
+                str(self._cfg.scail2_sample_steps),
+                "--sample_shift",
+                str(self._cfg.scail2_sample_shift),
+                "--sample_guide_scale",
+                str(self._cfg.scail2_sample_guide_scale),
+                "--sample_solver",
+                self._cfg.scail2_sample_solver,
+            ]
+        )
         if self._cfg.scail2_offload_model:
             cmd.append("--offload_model")
         return cmd
