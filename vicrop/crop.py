@@ -54,15 +54,16 @@ def crop_video(
     video_path: Path,
     output_dir: Path,
     every_n: int = DEFAULT_EVERY_N_FRAMES,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+    margin_ratio: float = 0.4,
     crop_size: int = DEFAULT_CROP_SIZE,
+    crop_width: int | None = None,
+    crop_height: int | None = None,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,
     ref_thresh: float = DEFAULT_REF_THRESH,
     classified_path: Path | None = None,
     classified_max: int = 0,
-    crop_height: int | None = None,
     backend: "FaceBackend | None" = None,
 ) -> dict[str, int]:
     """Extract face-cropped frames from a single video file.
@@ -184,10 +185,17 @@ def crop_video(
                     crop_right = min(w_img, right + margin_w)
 
                     face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
-                    if crop_height is not None:
-                        out_w = crop_size if crop_size is not None else face_arr.shape[1]
+                    if crop_width is not None and crop_height is not None:
                         pil_img = Image.fromarray(face_arr).resize(
-                            (out_w, crop_height), Image.LANCZOS
+                            (crop_width, crop_height), Image.LANCZOS
+                        )
+                    elif crop_height is not None:
+                        pil_img = Image.fromarray(face_arr).resize(
+                            (crop_height, crop_height), Image.LANCZOS
+                        )
+                    elif crop_width is not None:
+                        pil_img = Image.fromarray(face_arr).resize(
+                            (crop_width, crop_width), Image.LANCZOS
                         )
                     else:
                         out_s = crop_size if crop_size is not None else face_arr.shape[0]
@@ -291,6 +299,8 @@ def crop_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int = 1024,
+    crop_width: int | None = None,
+    crop_height: int | None = None,
     classify: bool = True,
     tolerance: float = 0.6,
     skip_existing: bool = True,

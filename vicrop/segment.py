@@ -288,6 +288,7 @@ def segment_video(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_width: int | None = None,
     crop_height: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
@@ -443,8 +444,18 @@ def segment_video(
                     seg.sample_bboxes, margin_ratio, width, height
                 )
             )
-            out_w = crop_size if crop_size else max(1, crop_right - crop_left)
-            out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
+            if crop_width is not None and crop_height is not None:
+                out_w = crop_width
+                out_h = crop_height
+            elif crop_height is not None:
+                out_w = crop_height
+                out_h = crop_height
+            elif crop_width is not None:
+                out_w = crop_width
+                out_h = crop_width
+            else:
+                out_w = crop_size if crop_size else max(1, crop_right - crop_left)
+                out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
 
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
             writer = cv2.VideoWriter(
@@ -487,6 +498,7 @@ def segment_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_width: int | None = None,
     crop_height: int | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
@@ -548,6 +560,7 @@ def segment_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
+            crop_width=crop_width,
             crop_height=crop_height,
             tolerance=tolerance,
             min_segment_length=min_segment_length,

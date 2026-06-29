@@ -1337,6 +1337,7 @@ class TestCropHeight:
                     every_n=1,
                     classify=False,
                     crop_size=512,
+                    crop_width=512,
                     crop_height=256,
                     backend=backend,
                 )
