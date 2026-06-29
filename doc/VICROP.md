@@ -32,6 +32,12 @@ vicrop --input ./videos --output-dir ./frames --ref-thresh 0.75
 
 # Disable reference-photo selection entirely
 vicrop --input ./videos --output-dir ./frames --ref-thresh 0
+
+# Extract frames without face detection (raw frame extraction)
+vicrop --input ./videos --output-dir ./frames --extract-only --every-n 30
+
+# Extract frames with custom output dimensions (640×480)
+vicrop --input ./videos --output-dir ./frames --extract-only --crop-dim 640 480
 ```
 
 Photo output is organised as:
@@ -111,6 +117,8 @@ Lower values cast a wider net and produce a larger reference set; higher values 
 | `--every-n` | `30` | Process every N-th frame |
 | `--margin-ratio` | `0.4` | Fractional padding around each detected face bbox (see below) |
 | `--crop-size` | `1024` | Output square resolution (pixels) |
+| `--crop-dim W H` | `None` | Output rectangular resolution in pixels (width W, height H). Overrides `--crop-size` |
+| `--extract-only` | `false` | Extract frames without face detection. Saves every N-th frame as-is (see below) |
 | `--no-classify` | — | Disable identity clustering |
 | `--tolerance` | `0.7` | Face-distance threshold for clustering (see below) |
 | `--detection-model` | `hog` | `hog` (fast) or `cnn` (more accurate) |
@@ -143,3 +151,52 @@ After all face crops from a video are collected, `vicrop` groups them by identit
 | `0.8–0.9` | Permissive — merges more crops into each cluster. Good for footage where the subject's appearance varies widely (different lighting, head angles, partial occlusion), but risks merging distinct people who look somewhat similar. |
 
 > **Tip:** if you find one person split across `person_01` and `person_03`, increase tolerance slightly. If two distinct people are being merged into the same folder, decrease it.
+
+## `--extract-only` — raw frame extraction without face detection
+
+When `--extract-only` is specified, `vicrop` skips face detection entirely and simply copies every N-th frame from the input video to the output directory as a raw PNG. This is useful for:
+
+- Creating frame-level indexes of videos
+- Extracting keyframes for thumbnails or previews
+- Quickly sampling video content without the overhead of face detection and clustering
+- Preparing frames for downstream processing by other tools
+
+```bash
+# Extract every 30th frame from a video
+vicrop --input ./video.mp4 --output-dir ./frames --extract-only
+
+# Extract every 10th frame (higher resolution sampling)
+vicrop --input ./videos --output-dir ./frames --extract-only --every-n 10
+
+# Extract every 60th frame (lower resolution sampling)
+vicrop --input ./videos --output-dir ./frames --extract-only --every-n 60
+```
+
+The extracted frames are saved with the naming pattern `frame<N>.png` inside the `<video_stem>` sub-directory under `--output-dir`.
+
+## `--crop-dim W H` — custom output dimensions
+
+By default, `vicrop` resizes face crops to a square of `--crop-size` × `--crop-size` pixels (default 1024×1024). The `--crop-dim` flag allows specifying a rectangular output resolution with separate width and height values:
+
+```bash
+# Output 640×480 portraits (4:3 aspect ratio)
+vicrop --input ./videos --output-dir ./frames --crop-dim 640 480
+
+# Output 1920×1080 portraits (16:9 widescreen)
+vicrop --input ./videos --output-dir ./frames --crop-dim 1920 1080
+
+# Extract-only with custom dimensions
+vicrop --input ./video.mp4 --output-dir ./frames --extract-only --crop-dim 800 600
+```
+
+The output directory for `--crop-dim` uses the same structure as `--crop-size` (with a `.dim_<W>x<H>` suffix appended to the video stem directory):
+
+```
+frames/
+└── <video_stem>.dim_640x480/
+    └── frame000000_face1.png
+```
+
+When used together with `--extract-only`, the frames are saved at the specified dimensions without any face detection overhead.
+
+> **Note:** `--crop-dim` overrides `--crop-size` when both are specified. The width (W) must come first, followed by the height (H), separated by a space. Exactly two values are required.
