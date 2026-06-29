@@ -13,6 +13,11 @@ person, and writes each qualifying run as a separate MP4 file under
 Segments shorter than *min_segment_length* seconds are discarded.
 Segments longer than *max_segment_length* seconds are split into
 consecutive chunks at that boundary.
+
+New in v0.2.0
+--------------
+* **--crop-dim W H** support: output segments can use rectangular dimensions
+  instead of the default square resize.
 """
 
 from __future__ import annotations
@@ -181,6 +186,31 @@ def _filter_and_split_segments(
     return result
 
 
+def _resize_frame(
+    frame_arr: np.ndarray,
+    crop_size: int | None,
+    crop_dim: tuple[int, int] | None,
+) -> np.ndarray:
+    """Resize a cropped frame numpy array to the target output size.
+
+    Args:
+        frame_arr:   Frame as BGR numpy array (OpenCV format).
+        crop_size:   Legacy square output size.  Ignored when *crop_dim* set.
+        crop_dim:    ``(width, height)`` target pixel dimensions.
+
+    Returns:
+        Resized frame as numpy array, or original if no target size given.
+    """
+    if crop_dim is not None:
+        target_w, target_h = crop_dim
+    elif crop_size is not None:
+        target_w = target_h = crop_size
+    else:
+        return frame_arr
+
+    return cv2.resize(frame_arr, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+
+
 def _compute_crop_rect(
     sample_bboxes: list[tuple[int, "_BBox"]],
     margin_ratio: float,
@@ -267,6 +297,7 @@ def segment_video(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_dim: tuple[int, int] | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -284,7 +315,8 @@ def segment_video(
     the person's detected face positions across the whole segment (with
     *margin_ratio* padding), so the final video contains only that person.
     When *crop_size* is given the cropped region is resized to a square
-    ``crop_size × crop_size`` frame.
+    ``crop_size × crop_size`` frame.  When *crop_dim* is given the output
+    uses the specified ``(width, height)`` dimensions instead.
 
     Args:
         video_path:          Path to the input video file.
@@ -295,7 +327,10 @@ def segment_video(
                              (default: 0.4).
         crop_size:           If given, each output frame is resized to this
                              square resolution in pixels (default: None, keep
-                             the cropped rect dimensions).
+                             the cropped rect dimensions).  Ignored when
+                             *crop_dim* is specified.
+        crop_dim:            ``(width, height)`` output dimensions in pixels.
+                             Overrides *crop_size* when provided.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds (default: 2).
         max_segment_length:  Maximum segment duration in seconds; longer
@@ -314,6 +349,11 @@ def segment_video(
 
     output_dir = output_dir.resolve()
     video_stem_dir = output_dir / video_path.stem
+
+    logger.debug(
+        "segment_video: %s  crop_size=%s crop_dim=%s",
+        video_path.name, crop_size, crop_dim,
+    )
 
     if skip_existing and video_stem_dir.exists() and any(video_stem_dir.rglob("*.mp4")):
         logger.info("Skipping (already processed): %s", video_path.name)
@@ -408,10 +448,18 @@ def segment_video(
             crop_top, crop_left, crop_bottom, crop_right = _compute_crop_rect(
                 seg.sample_bboxes, margin_ratio, width, height
             )
-            out_w = crop_size if crop_size else max(1, crop_right - crop_left)
-            out_h = crop_size if crop_size else max(1, crop_bottom - crop_top)
 
             cap2.set(cv2.CAP_PROP_POS_FRAMES, seg.start_frame)
+
+            # Determine output dimensions: crop_dim > crop_size > raw crop
+            if crop_dim is not None:
+                out_w, out_h = crop_dim
+            elif crop_size is not None:
+                out_w = out_h = crop_size
+            else:
+                out_w = max(1, crop_right - crop_left)
+                out_h = max(1, crop_bottom - crop_top)
+
             writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w, out_h))
             try:
                 for _ in range(seg.end_frame - seg.start_frame + 1):
@@ -419,8 +467,7 @@ def segment_video(
                     if not ret:
                         break
                     cropped = frame[crop_top:crop_bottom, crop_left:crop_right]
-                    if crop_size:
-                        cropped = cv2.resize(cropped, (crop_size, crop_size), interpolation=cv2.INTER_LANCZOS4)
+                    cropped = _resize_frame(cropped, crop_size, crop_dim)
                     writer.write(cropped)
             finally:
                 writer.release()
@@ -443,6 +490,7 @@ def segment_folder(
     every_n: int = DEFAULT_EVERY_N_FRAMES,
     margin_ratio: float = 0.4,
     crop_size: int | None = None,
+    crop_dim: tuple[int, int] | None = None,
     tolerance: float = 0.6,
     min_segment_length: float = DEFAULT_MIN_SEGMENT_LENGTH,
     max_segment_length: float = DEFAULT_MAX_SEGMENT_LENGTH,
@@ -457,7 +505,10 @@ def segment_folder(
         every_n:             Frame sampling interval for face detection.
         margin_ratio:        Fractional padding around the crop bounding box.
         crop_size:           If given, each output frame is resized to this
-                             square resolution in pixels.
+                             square resolution in pixels.  Ignored when
+                             *crop_dim* is specified.
+        crop_dim:            ``(width, height)`` output dimensions in pixels.
+                             Overrides *crop_size* when provided.
         tolerance:           Face-distance threshold for same-person matching.
         min_segment_length:  Minimum segment duration in seconds.
         max_segment_length:  Maximum segment duration in seconds.
@@ -496,6 +547,7 @@ def segment_folder(
             every_n=every_n,
             margin_ratio=margin_ratio,
             crop_size=crop_size,
+            crop_dim=crop_dim,
             tolerance=tolerance,
             min_segment_length=min_segment_length,
             max_segment_length=max_segment_length,

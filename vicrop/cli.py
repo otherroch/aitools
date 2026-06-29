@@ -64,6 +64,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Process every N-th frame from each video (default: 30).",
     )
     parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help=(
+            "Extract frames only, without face detection or recognition. "
+            "Simply extracts every N-th frame as a PNG image.  Combines "
+            "well with --crop-dim to produce uniformly-sized output frames."
+        ),
+    )
+    parser.add_argument(
         "--margin-ratio",
         type=float,
         default=0.4,
@@ -73,7 +82,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--crop-size",
         type=int,
         default=1024,
-        help="Output square resolution in pixels (default: 1024).",
+        help="Output square resolution in pixels (default: 1024).  Ignored when --crop-dim is used.",
+    )
+    parser.add_argument(
+        "--crop-dim",
+        type=int,
+        nargs=2,
+        metavar=("W", "H"),
+        default=None,
+        help=(
+            "Width and height in pixels for the output frame or video segment. "
+            "Example: --crop-dim 512 768.  This overrides --crop-size when "
+            "specified.  Only used with --extract-only or --output-type video."
+        ),
     )
     parser.add_argument(
         "--no-classify",
@@ -200,6 +221,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.output_type == "video":
         from vicrop.segment import segment_folder, segment_video
 
+        # Resolve crop_dim for video output
+        crop_dim: tuple[int, int] | None = None
+        if args.crop_dim is not None:
+            crop_dim = (int(args.crop_dim[0]), int(args.crop_dim[1]))
+
         if args.input.is_file():
             logger.info("vicrop: extracting video segments from %s", args.input)
             video_stats = segment_video(
@@ -208,6 +234,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=crop_dim,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -223,6 +250,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
+                crop_dim=crop_dim,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -237,6 +265,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     else:
         from vicrop.crop import crop_folder, crop_video
+
+        # Resolve crop_dim: None → use crop_size, else (W, H) tuple
+        crop_dim: tuple[int, int] | None = None
+        if args.crop_dim is not None:
+            crop_dim = (int(args.crop_dim[0]), int(args.crop_dim[1]))
 
         if args.input.is_file():
             logger.info("vicrop: processing single video %s", args.input)
@@ -253,6 +286,8 @@ def main(argv: list[str] | None = None) -> None:
                 classified_path=args.classified_path,
                 classified_max=args.classified_max,
                 backend=backend,
+                extract_only=args.extract_only,
+                crop_dim=crop_dim,
             )
             stats = {**video_stats, "videos_processed": 1}
         else:
@@ -270,6 +305,8 @@ def main(argv: list[str] | None = None) -> None:
                 classified_path=args.classified_path,
                 classified_max=args.classified_max,
                 backend=backend,
+                extract_only=args.extract_only,
+                crop_dim=crop_dim,
             )
         logger.info(
             "vicrop: %d videos processed, %d frames sampled, %d faces saved, "
