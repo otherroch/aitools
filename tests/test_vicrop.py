@@ -1325,7 +1325,7 @@ class TestCropHeight:
         fake_encoding = np.zeros(128)
 
         fr_mock = MagicMock()
-        fr_mock.faceLocations.return_value = [face_location]
+        fr_mock.face_locations.return_value = [face_location]
         fr_mock.face_encodings.return_value = [fake_encoding]
 
         backend = MockBackendShim(fr_mock)
