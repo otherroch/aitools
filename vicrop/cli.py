@@ -210,6 +210,8 @@ def main(argv: list[str] | None = None) -> None:
     from vicrop.crop import SUPPORTED_VIDEO_EXTS
 
     backend = backend_for_model(args.detection_model)
+    crop_dim = getattr(args, "crop_dim", None)
+    extract_only = getattr(args, "extract_only", False)
 
     if args.input.is_file() and args.input.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
         logger.error(
@@ -231,7 +233,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
-                crop_dim=args.crop_dim,
+                crop_dim=crop_dim,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -247,7 +249,7 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
-                crop_dim=args.crop_dim,
+                crop_dim=crop_dim,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
                 max_segment_length=args.max_segment_length,
@@ -271,8 +273,8 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
-                crop_dim=args.crop_dim,
-                extract_only=args.extract_only,
+                crop_dim=crop_dim,
+                extract_only=extract_only,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,
@@ -290,8 +292,8 @@ def main(argv: list[str] | None = None) -> None:
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
                 crop_size=args.crop_size,
-                crop_dim=args.crop_dim,
-                extract_only=args.extract_only,
+                crop_dim=crop_dim,
+                extract_only=extract_only,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
                 skip_existing=not args.no_skip_existing,
