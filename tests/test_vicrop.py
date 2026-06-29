@@ -1376,10 +1376,10 @@ class TestCLIExtractOnly:
             "--input", "/tmp/v.mp4",
             "--output-dir", "/tmp/out",
             "--extract-only",
-            "--crop-size", "256",
+            "--crop-width", "256",
         ])
         assert args.extract_only is True
-        assert args.crop_size == 256
+        assert args.crop_width == 256
 
     def test_extract_only_with_crop_height(self):
         from vicrop.cli import parse_args
@@ -1400,11 +1400,11 @@ class TestCLIExtractOnly:
             "--input", "/tmp/v.mp4",
             "--output-dir", "/tmp/out",
             "--extract-only",
-            "--crop-size", "256",
+            "--crop-width", "256",
             "--crop-height", "512",
         ])
         assert args.extract_only is True
-        assert args.crop_size == 256
+        assert args.crop_width == 256
         assert args.crop_height == 512
 
     def test_extract_only_with_every_n(self):

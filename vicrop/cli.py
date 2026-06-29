@@ -70,10 +70,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fractional margin to add around each detected face bbox (default: 0.4).",
     )
     parser.add_argument(
-        "--crop-size",
+        "--crop-width",
         type=int,
         default=1024,
-        help="Output square resolution in pixels (default: 1024).",
+        help=(
+            "Width (in pixels) of the output photo or video segment. "
+            "When specified together with --crop-height, the output is "
+            "resized to (crop-width × crop-height). "
+            "When only --crop-width is specified, the output is "
+            "resized to (crop-width × crop-width) for the width."
+        ),
     )
     parser.add_argument(
         "--no-classify",
@@ -231,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.input,
                 args.output_dir,
                 every_n=args.every_n,
-                crop_size=args.crop_size,
+                crop_size=args.crop_width,
                 crop_height=args.crop_height,
                 skip_existing=not args.no_skip_existing,
             )
@@ -242,7 +248,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.input,
                 args.output_dir,
                 every_n=args.every_n,
-                crop_size=args.crop_size,
+                crop_size=args.crop_width,
                 crop_height=args.crop_height,
                 skip_existing=not args.no_skip_existing,
             )
@@ -261,7 +267,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=args.crop_width,
                 crop_height=args.crop_height,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
@@ -277,7 +283,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=args.crop_width,
                 crop_height=args.crop_height,
                 tolerance=args.tolerance,
                 min_segment_length=args.min_segment_length,
@@ -301,7 +307,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=args.crop_width,
                 crop_height=args.crop_height,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
@@ -319,7 +325,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.output_dir,
                 every_n=args.every_n,
                 margin_ratio=args.margin_ratio,
-                crop_size=args.crop_size,
+                crop_size=args.crop_width,
                 crop_height=args.crop_height,
                 classify=not args.no_classify,
                 tolerance=args.tolerance,
