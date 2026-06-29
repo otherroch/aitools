@@ -184,10 +184,16 @@ def crop_video(
                     crop_right = min(w_img, right + margin_w)
 
                     face_arr = frame_rgb[crop_top:crop_bottom, crop_left:crop_right]
-                    out_size = crop_height if crop_height else crop_size
-                    pil_img = Image.fromarray(face_arr).resize(
-                        (out_size, out_size), Image.LANCZOS
-                    )
+                    if crop_height is not None:
+                        out_w = crop_size if crop_size is not None else face_arr.shape[1]
+                        pil_img = Image.fromarray(face_arr).resize(
+                            (out_w, crop_height), Image.LANCZOS
+                        )
+                    else:
+                        out_s = crop_size if crop_size is not None else face_arr.shape[0]
+                        pil_img = Image.fromarray(face_arr).resize(
+                            (out_s, out_s), Image.LANCZOS
+                        )
 
                     out_name = f"frame{frame_idx:06d}_face{i + 1}.png"
                     out_path = staging_dir / out_name

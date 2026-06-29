@@ -1313,7 +1313,7 @@ class TestCropHeight:
     """Tests for the --crop-height option in crop_video."""
 
     def test_crop_height_sets_output_height(self, tmp_path):
-        """crop_height should resize each frame to (crop_height x crop_height)."""
+        """crop_height should resize each frame to (crop_width x crop_height)."""
         video_path = tmp_path / "clip.mp4"
         video_path.write_bytes(b"fake")
         out_dir = tmp_path / "out"
@@ -1325,7 +1325,7 @@ class TestCropHeight:
         fake_encoding = np.zeros(128)
 
         fr_mock = MagicMock()
-        fr_mock.face_locations.return_value = [face_location]
+        fr_mock.faceLocations.return_value = [face_location]
         fr_mock.face_encodings.return_value = [fake_encoding]
 
         backend = MockBackendShim(fr_mock)
@@ -1336,18 +1336,18 @@ class TestCropHeight:
                     out_dir,
                     every_n=1,
                     classify=False,
-                    crop_size=None,
+                    crop_size=512,
                     crop_height=256,
                     backend=backend,
                 )
 
         assert stats["faces"] == 1
-        # Check that output image is 256x256
+        # Check that output image is 512x256 (crop_width x crop_height)
         saved = list((out_dir / "clip").rglob("*.png"))
         assert len(saved) == 1
         # Verify the image size
         img = Image.open(saved[0])
-        assert img.size == (256, 256)
+        assert img.size == (512, 256)
 
 
 class TestCLIExtractOnly:
