@@ -133,6 +133,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Re-process videos whose output directory already contains frames.",
     )
 
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help="Extract raw video frames without performing face detection or clustering.",
+    )
+    parser.add_argument(
+        "--crop-dim",
+        nargs=2,
+        type=int,
+        metavar=("W", "H"),
+        help=(
+            "Output width and height in pixels for extracted frames.  "
+            "Overrides the square --crop-size (which is used as a fallback).  "
+            "Only used with --extract-only."
+        ),
+    )
+
     # ------------------------------------------------------------------ #
     # Output type                                                          #
     # ------------------------------------------------------------------ #
