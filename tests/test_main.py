@@ -93,8 +93,7 @@ class TestParseArgs:
     def test_scail2_extra_arg_and_env_flags(self):
         args = self._parse(
             [
-                "--scail2-extra-arg",
-                "--quantize",
+                "--scail2-extra-arg=--quantize",
                 "--scail2-extra-arg",
                 "fp8",
                 "--scail2-env",
@@ -362,7 +361,7 @@ class TestBuildConfigFromArgs:
             scail2_pose_repo_path="pose-repo",
             scail2_ckpt_dir="ckpt",
             scail2_model_path="model.safetensors",
-            scail2_memory_preset="low-vram",
+            scail2_memory_preset="default",
             scail2_reference_image="ref.png",
             scail2_reference_mask="ref_mask.png",
             scail2_mask_video="mask.mp4",
@@ -386,7 +385,7 @@ class TestBuildConfigFromArgs:
         assert cfg.scail2_pose_repo_path == "pose-repo"
         assert cfg.scail2_ckpt_dir == "ckpt"
         assert cfg.scail2_model_path == "model.safetensors"
-        assert cfg.scail2_memory_preset == "low-vram"
+        assert cfg.scail2_memory_preset == "default"
         assert cfg.scail2_reference_image == "ref.png"
         assert cfg.scail2_reference_mask == "ref_mask.png"
         assert cfg.scail2_mask_video == "mask.mp4"

@@ -504,7 +504,8 @@ To replace more than 3 characters, run the pipeline in multiple passes.
 - Start with `--scail2-memory-preset low-vram` before increasing target size.
 - Keep model offload enabled unless you know the upstream stack fits without it.
 - If upstream SCAIL-2 adds quantized loading or other memory flags, forward them
-  with repeated `--scail2-extra-arg` and `--scail2-env` options.
+  with repeated `--scail2-extra-arg` and `--scail2-env` options. For flag-shaped
+  values, prefer `--scail2-extra-arg=--flag`.
 
 ## How it works
 

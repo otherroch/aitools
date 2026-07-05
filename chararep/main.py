@@ -362,7 +362,8 @@ Config JSON format
         default=[],
         help=(
             "Extra argument to append to the upstream SCAIL-2 generate.py "
-            "command. Repeat for each additional flag or value."
+            "command. Repeat for each additional flag or value; use "
+            "--scail2-extra-arg=--flag for values that start with '-'."
         ),
     )
     p.add_argument(
