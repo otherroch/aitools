@@ -107,11 +107,11 @@ class TestParseArgs:
         ]
         assert args.scail2_fail_on_vram_risk is True
 
-    def test_scail2_env_requires_key_value_format(self, capsys):
+    def test_scail2_env_requires_key_equals_value_format(self, capsys):
         with pytest.raises(SystemExit):
             self._parse(["--scail2-env", "BROKEN"])
         captured = capsys.readouterr()
-        assert "expected KEY=VALUE assignment" in captured.err
+        assert "KEY=VALUE" in captured.err
 
     def test_scail2_target_width_uses_generic_positive_int_error(self, capsys):
         with pytest.raises(SystemExit):
@@ -415,6 +415,7 @@ class TestBuildConfigFromArgs:
             scail2_memory_preset="low-vram",
         )
         cfg = _build_config_from_args(args)
+        cfg.apply_runtime_overrides()
 
         assert cfg.scail2_target_width == 672
         assert cfg.scail2_target_height == 384
@@ -431,6 +432,7 @@ class TestBuildConfigFromArgs:
             scail2_sample_steps=20,
         )
         cfg = _build_config_from_args(args)
+        cfg.apply_runtime_overrides()
 
         assert cfg.scail2_target_width == 640
         assert cfg.scail2_target_height == 352
@@ -543,6 +545,7 @@ class TestBuildConfigFromJson:
         config_file.write_text(json.dumps(data))
 
         cfg = _build_config_from_json(str(config_file))
+        cfg.apply_runtime_overrides()
         assert cfg.scail2_memory_preset == "low-vram"
         assert cfg.scail2_target_width == 672
         assert cfg.scail2_target_height == 384

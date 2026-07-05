@@ -247,6 +247,7 @@ class TestScail2PreparedAssetsRunner:
 
         cmd = mock_run.call_args[0][0]
         assert cmd[-2:] == ["--quantize", "fp8"]
+        assert cmd[cmd.index("--offload_model") + 1:] == ["--quantize", "fp8"]
 
     def test_run_fails_fast_on_vram_risk_when_requested(self, tmp_path):
         cfg = _make_scail2_cfg(tmp_path)

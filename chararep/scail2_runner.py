@@ -17,7 +17,7 @@ from .config import PipelineConfig
 from .video_io import finalize_video_output
 
 logger = logging.getLogger(__name__)
-_BYTES_PER_GIB = 1024 ** 3
+_BYTES_PER_GIBIBYTE = 1024 ** 3
 
 
 @dataclass(frozen=True)
@@ -542,7 +542,7 @@ class Scail2PreparedAssetsRunner:
         except OSError:
             return None
 
-        model_gib = model_size_bytes / _BYTES_PER_GIB
+        model_gib = model_size_bytes / _BYTES_PER_GIBIBYTE
         target_pixels = self._cfg.scail2_target_width * self._cfg.scail2_target_height
         risk_label: str | None = None
         risk_text = ""
@@ -570,15 +570,10 @@ class Scail2PreparedAssetsRunner:
         if not self._cfg.scail2_offload_model:
             hint += " Re-enable offload if upstream supports it."
         return (
-            "SCAIL-2 VRAM preflight (%s risk): %.1f GiB checkpoint at %dx%d %s %s"
-            % (
-                risk_label,
-                model_gib,
-                self._cfg.scail2_target_width,
-                self._cfg.scail2_target_height,
-                risk_text,
-                hint,
-            )
+            f"SCAIL-2 VRAM preflight ({risk_label} risk): "
+            f"{model_gib:.1f} GiB checkpoint at "
+            f"{self._cfg.scail2_target_width}x{self._cfg.scail2_target_height} "
+            f"{risk_text}. {hint}"
         )
 
     @staticmethod

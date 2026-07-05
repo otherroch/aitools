@@ -128,7 +128,7 @@ class PipelineConfig:
     scail2_keep_intermediates: bool = False
 
     def apply_runtime_overrides(self) -> None:
-        """Apply backend-specific runtime presets in-place."""
+        """Apply backend-specific runtime presets in-place after construction."""
         if str(self.backend).strip().lower() == "scail2":
             self._apply_scail2_memory_preset()
 
@@ -349,7 +349,11 @@ class PipelineConfig:
         )
 
     def _apply_scail2_memory_preset(self) -> None:
-        """Adjust SCAIL-2 defaults for named memory presets."""
+        """Adjust SCAIL-2 defaults for named memory presets.
+
+        This only rewrites fields that still match the class defaults so that
+        explicit per-run overrides win over the preset.
+        """
         preset = self._normalized_scail2_memory_preset()
         self.scail2_memory_preset = preset
         if preset != "low-vram":

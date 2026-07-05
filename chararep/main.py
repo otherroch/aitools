@@ -60,23 +60,25 @@ def _parse_key_value_assignments(values: list[str], *, label: str) -> dict[str, 
     """Parse repeated KEY=VALUE CLI assignments into a mapping."""
     parsed: dict[str, str] = {}
     for raw in values:
-        key, sep, value = str(raw).partition("=")
-        key = key.strip()
-        if not sep or not key:
-            raise argparse.ArgumentTypeError(
-                f"{label} entries must be in KEY=VALUE form, got: {raw!r}"
-            )
+        key, value = _parse_key_value_assignment(raw, label=label)
         parsed[key] = value
     return parsed
 
 
+def _parse_key_value_assignment(raw: str, *, label: str) -> tuple[str, str]:
+    """Parse one KEY=VALUE assignment."""
+    key, sep, value = str(raw).partition("=")
+    key = key.strip()
+    if not sep or not key:
+        raise argparse.ArgumentTypeError(
+            f"{label} entries must be in KEY=VALUE form, got: {raw!r}"
+        )
+    return key, value
+
+
 def _key_value_assignment(value: str) -> str:
     """Argparse type for KEY=VALUE environment assignments."""
-    key, sep, _rest = value.partition("=")
-    if not sep or not key.strip():
-        raise argparse.ArgumentTypeError(
-            f"expected KEY=VALUE assignment, got: {value!r}"
-        )
+    _parse_key_value_assignment(value, label="environment variable")
     return value
 
 
@@ -703,7 +705,6 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
             _arg_get(args, "scail2_keep_intermediates", False)
         ),
     )
-    cfg.apply_runtime_overrides()
     return cfg
 
 
@@ -736,7 +737,6 @@ def _build_config_from_json(path: str) -> PipelineConfig:
             characters.append(CharacterMapping(**ch))
 
     cfg = PipelineConfig(characters=characters, **data)
-    cfg.apply_runtime_overrides()
     return cfg
 
 
