@@ -97,6 +97,9 @@ an upstream SCAIL-Pose checkout with SAM3 weights.
 4. For auto-prep, install SCAIL-Pose dependencies and place `sam3.pt` under `pretrained_weights/`.
 
 The SCAIL-2 docs currently recommend Python 3.10-3.12 for that stack.
+This wrapper does **not** load SCAIL-2 weights itself, so native quantization is
+only possible when upstream `generate.py` already supports it. Forward those
+upstream flags with `--scail2-extra-arg` / `--scail2-env`.
 
 ## Usage
 
@@ -209,6 +212,29 @@ chararep \
 Prepared-assets mode skips SCAIL-Pose and passes the supplied assets straight into
 SCAIL-2 inference.
 
+### CLI (SCAIL-2 low-VRAM preset)
+
+```bash
+chararep \
+  --backend scail2 \
+  -i input_video.mp4 \
+  -o output_scail2.mp4 \
+  --scail2-repo-path C:/models/SCAIL-2 \
+  --scail2-ckpt-dir C:/models/SCAIL-2 \
+  --scail2-model-path C:/models/SCAIL-2.safetensors \
+  --scail2-reference-image prepared/ref.png \
+  --scail2-reference-mask prepared/ref_mask.png \
+  --scail2-mask-video prepared/replace_mask.mp4 \
+  --scail2-prompt-file prompts/replacement.txt \
+  --scail2-memory-preset low-vram \
+  --scail2-env PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128 \
+  --scail2-fail-on-vram-risk
+```
+
+The `low-vram` preset lowers the default SCAIL-2 target size to `672x384` and
+reduces default denoising steps to `28`. Explicit target-size or step flags still
+override the preset.
+
 ### CLI (SCAIL-2 multi-reference prepared assets)
 
 ```bash
@@ -272,6 +298,10 @@ the replacement character's appearance.
 | `--scail2-additional-reference-mask` | Space-separated masks paired with `--scail2-additional-reference-image` | none |
 | `--scail2-prompt` | Inline SCAIL-2 positive prompt | none |
 | `--scail2-prompt-file` | Text file containing the SCAIL-2 positive prompt | none |
+| `--scail2-memory-preset` | Named SCAIL-2 memory preset: `default` or `low-vram` | `default` |
+| `--scail2-extra-arg` | Extra argument appended to upstream `generate.py` (repeatable) | none |
+| `--scail2-env` | Environment override for upstream `generate.py` as `KEY=VALUE` (repeatable) | none |
+| `--scail2-fail-on-vram-risk` | Fail fast instead of warning when the wrapper detects a risky VRAM combination | false |
 | `--scail2-matchnearest` | SCAIL-Pose auto-prep: choose one of two driving tracks by IoU with the reference mask | false |
 | `--scail2-egocentric` | SCAIL-Pose auto-prep: union disconnected actor parts for first-person footage | false |
 | `--scail2-sam-text` | Extra SAM3 prompts used during SCAIL-Pose auto-prep | `human character` |
@@ -464,6 +494,17 @@ To replace more than 3 characters, run the pipeline in multiple passes.
 | Detection + swap only (no GFPGAN) | ~3–4 GB |
 | Detection + swap + GFPGAN v1.4 | ~6–8 GB |
 | 4K video, 3 characters, GFPGAN | ~12–16 GB |
+
+### SCAIL-2 VRAM notes
+
+- SCAIL-2 memory use is dominated by the upstream checkpoint size and the chosen
+  `--scail2-target-width` / `--scail2-target-height`.
+- Large FP16 SCAIL-2 checkpoints can OOM even on 24-32 GB GPUs, especially under
+  WSL2.
+- Start with `--scail2-memory-preset low-vram` before increasing target size.
+- Keep model offload enabled unless you know the upstream stack fits without it.
+- If upstream SCAIL-2 adds quantized loading or other memory flags, forward them
+  with repeated `--scail2-extra-arg` and `--scail2-env` options.
 
 ## How it works
 

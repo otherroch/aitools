@@ -6,6 +6,10 @@ from typing import Optional
 
 
 _SUPPORTED_BACKENDS = frozenset({"classic", "scail2"})
+_SCAIL2_MEMORY_PRESETS = frozenset({"default", "low-vram"})
+_SCAIL2_LOW_VRAM_TARGET_WIDTH = 672
+_SCAIL2_LOW_VRAM_TARGET_HEIGHT = 384
+_SCAIL2_LOW_VRAM_SAMPLE_STEPS = 28
 
 
 @dataclass
@@ -98,6 +102,7 @@ class PipelineConfig:
     scail2_ckpt_dir: Optional[str] = None
     scail2_model_path: Optional[str] = None
     scail2_model_name: str = "SCAIL-14B"
+    scail2_memory_preset: str = "default"
     scail2_reference_image: Optional[str] = None
     scail2_reference_mask: Optional[str] = None
     scail2_mask_video: Optional[str] = None
@@ -116,8 +121,16 @@ class PipelineConfig:
     scail2_sam_text: list[str] = field(default_factory=lambda: ["human", "character"])
     scail2_sam3_model: Optional[str] = None
     scail2_offload_model: bool = True
+    scail2_extra_args: list[str] = field(default_factory=list)
+    scail2_env: dict[str, str] = field(default_factory=dict)
+    scail2_fail_on_vram_risk: bool = False
     scail2_work_dir: Optional[str] = None
     scail2_keep_intermediates: bool = False
+
+    def apply_runtime_overrides(self) -> None:
+        """Apply backend-specific runtime presets in-place."""
+        if str(self.backend).strip().lower() == "scail2":
+            self._apply_scail2_memory_preset()
 
     def validate(self) -> list[str]:
         """Return a list of validation error messages (empty = OK)."""
@@ -128,6 +141,9 @@ class PipelineConfig:
                 f"backend must be one of {sorted(_SUPPORTED_BACKENDS)}, got: {self.backend!r}"
             )
             return errors
+
+        self.backend = backend
+        self.apply_runtime_overrides()
 
         if not self.input_video:
             errors.append("input_video is required")
@@ -176,6 +192,14 @@ class PipelineConfig:
     def _validate_scail2_backend(self) -> list[str]:
         """Validate prepared-assets and auto-prep SCAIL-2 modes."""
         errors: list[str] = []
+        preset = self._normalized_scail2_memory_preset()
+        if preset not in _SCAIL2_MEMORY_PRESETS:
+            errors.append(
+                "SCAIL-2 memory preset must be one of "
+                f"{sorted(_SCAIL2_MEMORY_PRESETS)}, got: {self.scail2_memory_preset!r}"
+            )
+        else:
+            self.scail2_memory_preset = preset
 
         self._require_dir(
             errors,
@@ -265,6 +289,22 @@ class PipelineConfig:
             errors.append(
                 "SCAIL-2 sample solver must be 'unipc' or 'dpm++'"
             )
+        for arg in self.scail2_extra_args:
+            if not str(arg).strip():
+                errors.append("SCAIL-2 extra args must not contain empty values")
+                break
+        if not isinstance(self.scail2_env, dict):
+            errors.append("SCAIL-2 env overrides must be a mapping of KEY to VALUE")
+        else:
+            for key, value in self.scail2_env.items():
+                if not str(key).strip():
+                    errors.append("SCAIL-2 env overrides require non-empty variable names")
+                    break
+                if value is None:
+                    errors.append(
+                        f"SCAIL-2 env override '{key}' must have a non-null value"
+                    )
+                    break
 
         if self.scail2_work_dir:
             work_dir = Path(self.scail2_work_dir)
@@ -313,6 +353,25 @@ class PipelineConfig:
             and self.scail2_reference_mask
             and self.scail2_mask_video
         )
+
+    def _apply_scail2_memory_preset(self) -> None:
+        """Adjust SCAIL-2 defaults for named memory presets."""
+        preset = self._normalized_scail2_memory_preset()
+        self.scail2_memory_preset = preset
+        if preset != "low-vram":
+            return
+
+        if self.scail2_target_width == PipelineConfig.scail2_target_width:
+            self.scail2_target_width = _SCAIL2_LOW_VRAM_TARGET_WIDTH
+        if self.scail2_target_height == PipelineConfig.scail2_target_height:
+            self.scail2_target_height = _SCAIL2_LOW_VRAM_TARGET_HEIGHT
+        if self.scail2_sample_steps == PipelineConfig.scail2_sample_steps:
+            self.scail2_sample_steps = _SCAIL2_LOW_VRAM_SAMPLE_STEPS
+
+    def _normalized_scail2_memory_preset(self) -> str:
+        """Return the lowercase preset name, defaulting empty values."""
+        preset = str(self.scail2_memory_preset or "default").strip().lower()
+        return preset or "default"
 
     def _resolved_scail2_pose_repo_path(self) -> Optional[str]:
         """Return the configured or default SCAIL-Pose checkout path."""

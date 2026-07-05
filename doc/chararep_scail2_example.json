@@ -11,6 +11,7 @@
   "scail2_repo_path": "C:/models/SCAIL-2",
   "scail2_ckpt_dir": "C:/models/SCAIL-2",
   "scail2_model_path": "C:/models/SCAIL-2.safetensors",
+  "scail2_memory_preset": "low-vram",
   "scail2_additional_reference_images": [
     "prepared/back_view.png",
     "prepared/closeup.png"
@@ -28,6 +29,7 @@
   "scail2_sample_solver": "unipc",
   "scail2_matchnearest": false,
   "scail2_egocentric": false,
+  "scail2_fail_on_vram_risk": true,
   "scail2_sam_text": [
     "human",
     "character"

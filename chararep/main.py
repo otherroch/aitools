@@ -56,6 +56,30 @@ def _arg_get(args: argparse.Namespace, name: str, default):
     return default
 
 
+def _parse_key_value_assignments(values: list[str], *, label: str) -> dict[str, str]:
+    """Parse repeated KEY=VALUE CLI assignments into a mapping."""
+    parsed: dict[str, str] = {}
+    for raw in values:
+        key, sep, value = str(raw).partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise argparse.ArgumentTypeError(
+                f"{label} entries must be in KEY=VALUE form, got: {raw!r}"
+            )
+        parsed[key] = value
+    return parsed
+
+
+def _key_value_assignment(value: str) -> str:
+    """Argparse type for KEY=VALUE environment assignments."""
+    key, sep, _rest = value.partition("=")
+    if not sep or not key.strip():
+        raise argparse.ArgumentTypeError(
+            f"expected KEY=VALUE assignment, got: {value!r}"
+        )
+    return value
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="chararep",
@@ -215,6 +239,15 @@ Config JSON format
         help=f"SCAIL-2 model name argument for generate.py (default: {PipelineConfig.scail2_model_name}).",
     )
     p.add_argument(
+        "--scail2-memory-preset",
+        choices=["default", "low-vram"],
+        default=PipelineConfig.scail2_memory_preset,
+        help=(
+            "Named SCAIL-2 memory preset. 'low-vram' lowers default target "
+            "resolution and steps while keeping explicit overrides intact."
+        ),
+    )
+    p.add_argument(
         "--scail2-reference-image",
         default=None,
         help="SCAIL-2 reference image. When masks are omitted, this image is also used as the SCAIL-Pose auto-prep reference.",
@@ -323,6 +356,31 @@ Config JSON format
         help="Disable SCAIL-2 model offload during generate.py execution.",
     )
     p.set_defaults(scail2_offload_model=PipelineConfig.scail2_offload_model)
+    p.add_argument(
+        "--scail2-extra-arg",
+        action="append",
+        default=[],
+        help=(
+            "Extra argument to append to the upstream SCAIL-2 generate.py "
+            "command. Repeat for each additional flag or value."
+        ),
+    )
+    p.add_argument(
+        "--scail2-env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        type=_key_value_assignment,
+        help=(
+            "Environment variable override for upstream SCAIL-2 execution. "
+            "Repeat for multiple assignments."
+        ),
+    )
+    p.add_argument(
+        "--scail2-fail-on-vram-risk",
+        action="store_true",
+        help="Fail fast instead of only warning when the SCAIL-2 VRAM preflight sees a risky model/target-size combination.",
+    )
     p.add_argument(
         "--scail2-work-dir",
         default=None,
@@ -548,7 +606,7 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
             )
         )
 
-    return PipelineConfig(
+    cfg = PipelineConfig(
         backend=backend,
         input_video=args.input_video or "",
         output_video=args.output_video or "",
@@ -581,6 +639,9 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
         scail2_model_path=_arg_get(args, "scail2_model_path", None),
         scail2_model_name=_arg_get(
             args, "scail2_model_name", PipelineConfig.scail2_model_name
+        ),
+        scail2_memory_preset=_arg_get(
+            args, "scail2_memory_preset", PipelineConfig.scail2_memory_preset
         ),
         scail2_reference_image=_arg_get(args, "scail2_reference_image", None),
         scail2_reference_mask=_arg_get(args, "scail2_reference_mask", None),
@@ -628,11 +689,21 @@ def _build_config_from_args(args: argparse.Namespace) -> PipelineConfig:
                 PipelineConfig.scail2_offload_model,
             )
         ),
+        scail2_extra_args=list(_arg_get(args, "scail2_extra_arg", []) or []),
+        scail2_env=_parse_key_value_assignments(
+            list(_arg_get(args, "scail2_env", []) or []),
+            label="--scail2-env",
+        ),
+        scail2_fail_on_vram_risk=bool(
+            _arg_get(args, "scail2_fail_on_vram_risk", False)
+        ),
         scail2_work_dir=_arg_get(args, "scail2_work_dir", None),
         scail2_keep_intermediates=bool(
             _arg_get(args, "scail2_keep_intermediates", False)
         ),
     )
+    cfg.apply_runtime_overrides()
+    return cfg
 
 
 def _build_config_from_json(path: str) -> PipelineConfig:
@@ -663,7 +734,9 @@ def _build_config_from_json(path: str) -> PipelineConfig:
                 ch.setdefault("source_label", ch.pop("label"))
             characters.append(CharacterMapping(**ch))
 
-    return PipelineConfig(characters=characters, **data)
+    cfg = PipelineConfig(characters=characters, **data)
+    cfg.apply_runtime_overrides()
+    return cfg
 
 
 def _setup_logging(cfg: PipelineConfig) -> None:

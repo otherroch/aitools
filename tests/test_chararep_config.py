@@ -67,6 +67,10 @@ class TestPipelineConfigDefaults:
         assert cfg.mask_erode_pixels == 2
         assert cfg.log_level == "INFO"
         assert cfg.log_file is None
+        assert cfg.scail2_memory_preset == "default"
+        assert cfg.scail2_extra_args == []
+        assert cfg.scail2_env == {}
+        assert cfg.scail2_fail_on_vram_risk is False
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +476,107 @@ class TestPipelineConfigValidate:
             scail2_target_height=512,
         )
         assert cfg.validate() == []
+
+    def test_scail2_low_vram_preset_adjusts_defaults(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_prompt="prompt",
+            scail2_memory_preset="low-vram",
+        )
+        assert cfg.validate() == []
+        assert cfg.scail2_target_width == 672
+        assert cfg.scail2_target_height == 384
+        assert cfg.scail2_sample_steps == 28
+
+    def test_scail2_memory_preset_must_be_known(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_prompt="prompt",
+            scail2_memory_preset="tiny",
+        )
+        errors = cfg.validate()
+        assert any("memory preset must be one of" in e for e in errors)
+
+    def test_scail2_env_must_be_mapping(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
+        ref = tmp_path / "ref.png"
+        ref.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+        mask_video = tmp_path / "mask.mp4"
+        mask_video.touch()
+
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_image=str(ref),
+            scail2_reference_mask=str(ref_mask),
+            scail2_mask_video=str(mask_video),
+            scail2_prompt="prompt",
+            scail2_env=["NOT_A_MAPPING"],
+        )
+        errors = cfg.validate()
+        assert any("env overrides must be a mapping" in e for e in errors)
 
     def test_scail2_matchnearest_and_egocentric_are_mutually_exclusive(self, tmp_path):
         video = tmp_path / "video.mp4"

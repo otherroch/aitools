@@ -48,6 +48,10 @@ class TestParseArgs:
         assert args.timers is False
         assert args.dump_config is False
         assert args.scail2_offload_model is True
+        assert args.scail2_memory_preset == "default"
+        assert args.scail2_extra_arg == []
+        assert args.scail2_env == []
+        assert args.scail2_fail_on_vram_risk is False
         assert args.scail2_additional_reference_images == []
         assert args.scail2_additional_reference_masks == []
         assert args.scail2_pose_repo_path is None
@@ -63,6 +67,10 @@ class TestParseArgs:
     def test_scail2_matchnearest_flag(self):
         args = self._parse(["--scail2-matchnearest"])
         assert args.scail2_matchnearest is True
+
+    def test_scail2_memory_preset_flag(self):
+        args = self._parse(["--scail2-memory-preset", "low-vram"])
+        assert args.scail2_memory_preset == "low-vram"
 
     def test_scail2_sam_text_flag(self):
         args = self._parse(["--scail2-sam-text", "human", "bear"])
@@ -81,6 +89,28 @@ class TestParseArgs:
         )
         assert args.scail2_additional_reference_images == ["ref_a.png", "ref_b.png"]
         assert args.scail2_additional_reference_masks == ["mask_a.png", "mask_b.png"]
+
+    def test_scail2_extra_arg_and_env_flags(self):
+        args = self._parse(
+            [
+                "--scail2-extra-arg",
+                "--quantize",
+                "--scail2-extra-arg",
+                "fp8",
+                "--scail2-env",
+                "PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128",
+                "--scail2-fail-on-vram-risk",
+            ]
+        )
+        assert args.scail2_extra_arg == ["--quantize", "fp8"]
+        assert args.scail2_env == [
+            "PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128"
+        ]
+        assert args.scail2_fail_on_vram_risk is True
+
+    def test_scail2_env_requires_key_value_format(self):
+        with pytest.raises(SystemExit):
+            self._parse(["--scail2-env", "BROKEN"])
 
     def test_scail2_target_width_uses_generic_positive_int_error(self, capsys):
         with pytest.raises(SystemExit):
@@ -233,6 +263,7 @@ class TestBuildConfigFromArgs:
             scail2_pose_repo_path=None,
             scail2_model_path=None,
             scail2_model_name=PipelineConfig.scail2_model_name,
+            scail2_memory_preset=PipelineConfig.scail2_memory_preset,
             scail2_reference_image=None,
             scail2_reference_mask=None,
             scail2_mask_video=None,
@@ -251,6 +282,9 @@ class TestBuildConfigFromArgs:
             scail2_sam_text=list(PipelineConfig().scail2_sam_text),
             scail2_sam3_model=None,
             scail2_offload_model=PipelineConfig.scail2_offload_model,
+            scail2_extra_arg=[],
+            scail2_env=[],
+            scail2_fail_on_vram_risk=False,
             scail2_work_dir=None,
             scail2_keep_intermediates=False,
         )
@@ -328,6 +362,7 @@ class TestBuildConfigFromArgs:
             scail2_pose_repo_path="pose-repo",
             scail2_ckpt_dir="ckpt",
             scail2_model_path="model.safetensors",
+            scail2_memory_preset="low-vram",
             scail2_reference_image="ref.png",
             scail2_reference_mask="ref_mask.png",
             scail2_mask_video="mask.mp4",
@@ -341,6 +376,9 @@ class TestBuildConfigFromArgs:
             scail2_matchnearest=True,
             scail2_sam_text=["human", "bear"],
             scail2_offload_model=False,
+            scail2_extra_arg=["--quantize", "fp8"],
+            scail2_env=["PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128"],
+            scail2_fail_on_vram_risk=True,
         )
         cfg = _build_config_from_args(args)
         assert cfg.backend == "scail2"
@@ -348,6 +386,7 @@ class TestBuildConfigFromArgs:
         assert cfg.scail2_pose_repo_path == "pose-repo"
         assert cfg.scail2_ckpt_dir == "ckpt"
         assert cfg.scail2_model_path == "model.safetensors"
+        assert cfg.scail2_memory_preset == "low-vram"
         assert cfg.scail2_reference_image == "ref.png"
         assert cfg.scail2_reference_mask == "ref_mask.png"
         assert cfg.scail2_mask_video == "mask.mp4"
@@ -361,6 +400,40 @@ class TestBuildConfigFromArgs:
         assert cfg.scail2_matchnearest is True
         assert cfg.scail2_sam_text == ["human", "bear"]
         assert cfg.scail2_offload_model is False
+        assert cfg.scail2_extra_args == ["--quantize", "fp8"]
+        assert cfg.scail2_env == {
+            "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128"
+        }
+        assert cfg.scail2_fail_on_vram_risk is True
+
+    def test_scail2_low_vram_preset_applies_defaults(self):
+        from chararep.main import _build_config_from_args
+
+        args = self._make_args(
+            backend="scail2",
+            scail2_memory_preset="low-vram",
+        )
+        cfg = _build_config_from_args(args)
+
+        assert cfg.scail2_target_width == 672
+        assert cfg.scail2_target_height == 384
+        assert cfg.scail2_sample_steps == 28
+
+    def test_scail2_low_vram_preset_preserves_explicit_target_overrides(self):
+        from chararep.main import _build_config_from_args
+
+        args = self._make_args(
+            backend="scail2",
+            scail2_memory_preset="low-vram",
+            scail2_target_width=640,
+            scail2_target_height=352,
+            scail2_sample_steps=20,
+        )
+        cfg = _build_config_from_args(args)
+
+        assert cfg.scail2_target_width == 640
+        assert cfg.scail2_target_height == 352
+        assert cfg.scail2_sample_steps == 20
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +528,24 @@ class TestBuildConfigFromJson:
 
         cfg = _build_config_from_json(str(config_file))
         assert cfg.characters[0].source_label == "custom_label"
+
+    def test_scail2_low_vram_preset_from_json(self, tmp_path):
+        from chararep.main import _build_config_from_json
+
+        data = {
+            "backend": "scail2",
+            "input_video": "in.mp4",
+            "output_video": "out.mp4",
+            "scail2_memory_preset": "low-vram",
+        }
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps(data))
+
+        cfg = _build_config_from_json(str(config_file))
+        assert cfg.scail2_memory_preset == "low-vram"
+        assert cfg.scail2_target_width == 672
+        assert cfg.scail2_target_height == 384
+        assert cfg.scail2_sample_steps == 28
 
     def test_label_key_remapped_to_source_label(self, tmp_path):
         """'label' key in explicit-paths mode is mapped to source_label."""

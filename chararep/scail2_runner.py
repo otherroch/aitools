@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -44,11 +45,16 @@ class Scail2PreparedAssetsRunner:
     _PREFLIGHT_WINDOW_SECONDS: float = 8.0
     _PREFLIGHT_MIN_SAMPLED_FRAMES: int = 8
     _PREFLIGHT_MAX_SAMPLED_FRAMES: int = 24
+    _HIGH_RISK_MODEL_GIB: float = 28.0
+    _WARN_RISK_MODEL_GIB: float = 24.0
+    _HIGH_RISK_TARGET_PIXELS: int = 896 * 512
+    _WARN_RISK_TARGET_PIXELS: int = 672 * 384
 
     def run(self) -> dict:
         start = time.perf_counter()
         prompt = self._resolve_prompt()
         total_frames, _input_fps = self._probe_video(self._cfg.input_video)
+        self._warn_or_raise_vram_risk()
 
         job_dir = self._create_job_dir()
         cleanup_job_dir = not self._cfg.scail2_keep_intermediates
@@ -57,14 +63,17 @@ class Scail2PreparedAssetsRunner:
             staged = self._prepare_inputs(job_dir, total_frames, _input_fps)
             output_path = job_dir / "output.mp4"
             cmd = self._build_command(staged, prompt, output_path)
+            env = self._build_generate_env()
 
             logger.info("Running SCAIL-2 generate job in %s", job_dir)
-            result = subprocess.run(
-                cmd,
-                cwd=self._cfg.scail2_repo_path,
-                capture_output=True,
-                text=True,
-            )
+            run_kwargs = {
+                "cwd": self._cfg.scail2_repo_path,
+                "capture_output": True,
+                "text": True,
+            }
+            if env is not None:
+                run_kwargs["env"] = env
+            result = subprocess.run(cmd, **run_kwargs)
 
             if result.returncode != 0:
                 raise RuntimeError(self._format_subprocess_failure(result))
@@ -500,7 +509,76 @@ class Scail2PreparedAssetsRunner:
         )
         if self._cfg.scail2_offload_model:
             cmd.append("--offload_model")
+        if self._cfg.scail2_extra_args:
+            cmd.extend(str(arg) for arg in self._cfg.scail2_extra_args)
         return cmd
+
+    def _build_generate_env(self) -> dict[str, str] | None:
+        """Return a subprocess environment for generate.py when overrides exist."""
+        if not self._cfg.scail2_env:
+            return None
+        env = os.environ.copy()
+        env.update({str(key): str(value) for key, value in self._cfg.scail2_env.items()})
+        return env
+
+    def _warn_or_raise_vram_risk(self) -> None:
+        """Warn or fail fast for obviously risky model-size/resolution pairs."""
+        risk_message = self._describe_vram_risk()
+        if not risk_message:
+            return
+        if self._cfg.scail2_fail_on_vram_risk:
+            raise RuntimeError(risk_message)
+        logger.warning(risk_message)
+
+    def _describe_vram_risk(self) -> str | None:
+        """Return a warning message for high-risk VRAM combinations."""
+        model_path = self._cfg.scail2_model_path
+        if not model_path:
+            return None
+
+        try:
+            model_size_bytes = Path(model_path).stat().st_size
+        except OSError:
+            return None
+
+        model_gib = model_size_bytes / float(1024 ** 3)
+        target_pixels = self._cfg.scail2_target_width * self._cfg.scail2_target_height
+        risk_label: str | None = None
+        risk_text = ""
+        if (
+            model_gib >= self._HIGH_RISK_MODEL_GIB
+            and target_pixels >= self._HIGH_RISK_TARGET_PIXELS
+        ):
+            risk_label = "high"
+            risk_text = "is likely to exceed available VRAM on many 24-32 GB class GPUs"
+        elif (
+            model_gib >= self._WARN_RISK_MODEL_GIB
+            and target_pixels > self._WARN_RISK_TARGET_PIXELS
+        ):
+            risk_label = "elevated"
+            risk_text = "may exceed available VRAM on some GPUs"
+
+        if not risk_label:
+            return None
+
+        hint = (
+            "Try --scail2-memory-preset low-vram, lower "
+            "--scail2-target-width/--scail2-target-height, keep model offload "
+            "enabled, or pass upstream memory flags via --scail2-extra-arg/--scail2-env."
+        )
+        if not self._cfg.scail2_offload_model:
+            hint += " Re-enable offload if upstream supports it."
+        return (
+            "SCAIL-2 VRAM preflight (%s risk): %.1f GiB checkpoint at %dx%d %s %s"
+            % (
+                risk_label,
+                model_gib,
+                self._cfg.scail2_target_width,
+                self._cfg.scail2_target_height,
+                risk_text,
+                hint,
+            )
+        )
 
     @staticmethod
     def _probe_video(path: str) -> tuple[int, float]:

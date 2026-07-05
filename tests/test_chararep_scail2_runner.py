@@ -60,7 +60,7 @@ class TestScail2PreparedAssetsRunner:
         cfg = _make_scail2_cfg(tmp_path)
         runner = Scail2PreparedAssetsRunner(cfg)
 
-        def _run_side_effect(cmd, cwd, capture_output, text):
+        def _run_side_effect(cmd, cwd, capture_output, text, **kwargs):
             output_path = Path(cmd[cmd.index("--save_file") + 1])
             output_path.write_bytes(b"generated")
             return MagicMock(returncode=0, stdout="ok", stderr="")
@@ -112,7 +112,7 @@ class TestScail2PreparedAssetsRunner:
 
         runner = Scail2PreparedAssetsRunner(cfg)
 
-        def _run_side_effect(cmd, cwd, capture_output, text):
+        def _run_side_effect(cmd, cwd, capture_output, text, **kwargs):
             output_path = Path(cmd[cmd.index("--save_file") + 1])
             output_path.write_bytes(b"generated")
             return MagicMock(returncode=0, stdout="ok", stderr="")
@@ -188,7 +188,7 @@ class TestScail2PreparedAssetsRunner:
         )
         runner = Scail2PreparedAssetsRunner(cfg)
 
-        def _run_side_effect(cmd, cwd, capture_output, text):
+        def _run_side_effect(cmd, cwd, capture_output, text, **kwargs):
             if "process_replacement.py" in cmd[1]:
                 subdir = Path(cmd[cmd.index("--subdir") + 1])
                 (subdir / "ref_mask.png").write_bytes(b"mask")
@@ -226,6 +226,36 @@ class TestScail2PreparedAssetsRunner:
         assert "--matchnearest" in pose_cmd
         mock_finalize.assert_called_once()
         assert stats["frames_total"] == 6
+
+    def test_run_passes_extra_generate_args_and_env(self, tmp_path):
+        cfg = _make_scail2_cfg(tmp_path)
+        cfg.scail2_extra_args = ["--quantize", "fp8"]
+        cfg.scail2_env = {"PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128"}
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        def _run_side_effect(cmd, cwd, capture_output, text, **kwargs):
+            output_path = Path(cmd[cmd.index("--save_file") + 1])
+            output_path.write_bytes(b"generated")
+            assert kwargs["env"]["PYTORCH_CUDA_ALLOC_CONF"] == "max_split_size_mb:128"
+            return MagicMock(returncode=0, stdout="ok", stderr="")
+
+        with patch.object(runner, "_probe_video", return_value=(12, 24.0)), \
+             patch("chararep.scail2_runner.subprocess.run", side_effect=_run_side_effect) as mock_run, \
+             patch("chararep.scail2_runner.finalize_video_output"):
+            runner.run()
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[-2:] == ["--quantize", "fp8"]
+
+    def test_run_fails_fast_on_vram_risk_when_requested(self, tmp_path):
+        cfg = _make_scail2_cfg(tmp_path)
+        cfg.scail2_fail_on_vram_risk = True
+        runner = Scail2PreparedAssetsRunner(cfg)
+
+        with patch.object(runner, "_probe_video", return_value=(12, 24.0)), \
+             patch.object(runner, "_describe_vram_risk", return_value="oom risk"):
+            with pytest.raises(RuntimeError, match="oom risk"):
+                runner.run()
 
     def test_read_image_bgr_falls_back_to_pil(self, tmp_path, monkeypatch):
         image_path = tmp_path / "portrait.png"
