@@ -142,7 +142,6 @@ class PipelineConfig:
             )
             return errors
 
-        self.backend = backend
         self.apply_runtime_overrides()
 
         if not self.input_video:

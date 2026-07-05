@@ -237,6 +237,7 @@ class TestScail2PreparedAssetsRunner:
             output_path = Path(cmd[cmd.index("--save_file") + 1])
             output_path.write_bytes(b"generated")
             assert kwargs["env"]["PYTORCH_CUDA_ALLOC_CONF"] == "max_split_size_mb:128"
+            assert "PATH" in kwargs["env"]
             return MagicMock(returncode=0, stdout="ok", stderr="")
 
         with patch.object(runner, "_probe_video", return_value=(12, 24.0)), \

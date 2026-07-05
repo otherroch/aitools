@@ -107,9 +107,11 @@ class TestParseArgs:
         ]
         assert args.scail2_fail_on_vram_risk is True
 
-    def test_scail2_env_requires_key_value_format(self):
+    def test_scail2_env_requires_key_value_format(self, capsys):
         with pytest.raises(SystemExit):
             self._parse(["--scail2-env", "BROKEN"])
+        captured = capsys.readouterr()
+        assert "expected KEY=VALUE assignment" in captured.err
 
     def test_scail2_target_width_uses_generic_positive_int_error(self, capsys):
         with pytest.raises(SystemExit):
