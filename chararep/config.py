@@ -295,14 +295,9 @@ class PipelineConfig:
         if not isinstance(self.scail2_env, dict):
             errors.append("SCAIL-2 env overrides must be a mapping of KEY to VALUE")
         else:
-            for key, value in self.scail2_env.items():
+            for key in self.scail2_env:
                 if not str(key).strip():
                     errors.append("SCAIL-2 env overrides require non-empty variable names")
-                    break
-                if value is None:
-                    errors.append(
-                        f"SCAIL-2 env override '{key}' must have a non-null value"
-                    )
                     break
 
         if self.scail2_work_dir:

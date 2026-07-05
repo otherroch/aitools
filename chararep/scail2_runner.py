@@ -17,6 +17,7 @@ from .config import PipelineConfig
 from .video_io import finalize_video_output
 
 logger = logging.getLogger(__name__)
+_BYTES_PER_GIB = 1024 ** 3
 
 
 @dataclass(frozen=True)
@@ -541,7 +542,7 @@ class Scail2PreparedAssetsRunner:
         except OSError:
             return None
 
-        model_gib = model_size_bytes / (1024 ** 3)
+        model_gib = model_size_bytes / _BYTES_PER_GIB
         target_pixels = self._cfg.scail2_target_width * self._cfg.scail2_target_height
         risk_label: str | None = None
         risk_text = ""
