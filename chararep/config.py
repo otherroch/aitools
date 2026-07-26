@@ -192,18 +192,14 @@ class PipelineConfig:
         if not prompt and not self.scail2_prompt_file:
             errors.append("SCAIL-2 backend requires scail2_prompt or scail2_prompt_file")
 
-        if self.scail2_matchnearest and self.scail2_egocentric:
-            errors.append("SCAIL-2 auto-prep cannot enable both scail2_matchnearest and scail2_egocentric")
-        if self.scail2_sam3_model:
-            self._require_file(errors, "scail2_sam3_model", self.scail2_sam3_model)
-        if not self.scail2_sam_text:
-            errors.append("SCAIL-2 auto-prep requires at least one SAM text prompt")
         errors.extend(self._validate_scail2_additional_references())
 
         prepared_assets = self.scail2_has_prepared_assets()
-        any_prepared_asset = any(
+        # Only reference_mask or mask_video (without all three assets) signals
+        # a mis-configured prepared-assets attempt; reference_image alone is
+        # valid for auto-prep with an explicit reference.
+        any_mask_asset = any(
             [
-                self.scail2_reference_image,
                 self.scail2_reference_mask,
                 self.scail2_mask_video,
             ]
@@ -222,10 +218,17 @@ class PipelineConfig:
             )
             self._require_file(errors, "scail2_mask_video", self.scail2_mask_video)
         else:
-            if any_prepared_asset:
+            if any_mask_asset:
                 errors.append(
-                    "SCAIL-2 prepared-assets mode requires scail2_reference_image, scail2_reference_mask, and scail2_mask_video together"
+                    "SCAIL-2 prepared-assets mode requires all three of scail2_reference_image, scail2_reference_mask, and scail2_mask_video"
                 )
+
+            if self.scail2_matchnearest and self.scail2_egocentric:
+                errors.append("SCAIL-2 auto-prep cannot enable both scail2_matchnearest and scail2_egocentric")
+            if self.scail2_sam3_model:
+                self._require_file(errors, "scail2_sam3_model", self.scail2_sam3_model)
+            if not self.scail2_sam_text:
+                errors.append("SCAIL-2 auto-prep requires at least one SAM text prompt")
 
             if self.scail2_reference_image:
                 self._require_file(

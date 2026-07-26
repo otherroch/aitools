@@ -318,6 +318,35 @@ class TestPipelineConfigValidate:
         ckpt_dir.mkdir()
         model = tmp_path / "model.safetensors"
         model.touch()
+        ref_mask = tmp_path / "ref_mask.png"
+        ref_mask.touch()
+
+        # Providing reference_mask (or mask_video) without the full set signals a
+        # mis-configured prepared-assets attempt and must be rejected.
+        cfg = PipelineConfig(
+            backend="scail2",
+            input_video=str(video),
+            output_video="out.mp4",
+            scail2_repo_path=str(repo),
+            scail2_ckpt_dir=str(ckpt_dir),
+            scail2_model_path=str(model),
+            scail2_reference_mask=str(ref_mask),
+            scail2_prompt="prompt",
+        )
+        errors = cfg.validate()
+        assert any("prepared-assets mode requires" in e for e in errors)
+
+    def test_scail2_reference_image_alone_is_valid_for_auto_prep(self, tmp_path):
+        """Supplying only scail2_reference_image must not trigger a prepared-assets error."""
+        video = tmp_path / "video.mp4"
+        video.touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "generate.py").write_text("print('ok')\n", encoding="utf-8")
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir()
+        model = tmp_path / "model.safetensors"
+        model.touch()
         ref = tmp_path / "ref.png"
         ref.touch()
 
@@ -332,7 +361,7 @@ class TestPipelineConfigValidate:
             scail2_prompt="prompt",
         )
         errors = cfg.validate()
-        assert any("prepared-assets mode requires" in e for e in errors)
+        assert not any("prepared-assets mode requires" in e for e in errors)
 
     def test_scail2_additional_references_require_equal_length_lists(self, tmp_path):
         video = tmp_path / "video.mp4"

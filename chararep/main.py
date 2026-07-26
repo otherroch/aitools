@@ -680,7 +680,7 @@ def _setup_logging(cfg: PipelineConfig) -> None:
 
 def _build_runner(cfg: PipelineConfig):
     """Return the execution backend selected by configuration."""
-    if cfg.backend == "scail2":
+    if str(cfg.backend).strip().lower() == "scail2":
         return Scail2PreparedAssetsRunner(cfg)
     return CharacterReplacementPipeline(cfg)
 

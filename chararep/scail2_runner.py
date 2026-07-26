@@ -44,6 +44,8 @@ class Scail2PreparedAssetsRunner:
     _PREFLIGHT_WINDOW_SECONDS: float = 8.0
     _PREFLIGHT_MIN_SAMPLED_FRAMES: int = 8
     _PREFLIGHT_MAX_SAMPLED_FRAMES: int = 24
+    _GENERATE_TIMEOUT: float = 7200.0  # 2 hours – GPU inference on long videos
+    _POSE_TIMEOUT: float = 3600.0  # 1 hour – SCAIL-Pose auto-prep
 
     def run(self) -> dict:
         start = time.perf_counter()
@@ -59,12 +61,18 @@ class Scail2PreparedAssetsRunner:
             cmd = self._build_command(staged, prompt, output_path)
 
             logger.info("Running SCAIL-2 generate job in %s", job_dir)
-            result = subprocess.run(
-                cmd,
-                cwd=self._cfg.scail2_repo_path,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=self._cfg.scail2_repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._GENERATE_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(
+                    f"SCAIL-2 generate.py timed out after {self._GENERATE_TIMEOUT:.0f} s"
+                )
 
             if result.returncode != 0:
                 raise RuntimeError(self._format_subprocess_failure(result))
@@ -121,10 +129,13 @@ class Scail2PreparedAssetsRunner:
         return text
 
     def _create_job_dir(self) -> Path:
+        work_dir = self._cfg.scail2_work_dir
+        if work_dir:
+            Path(work_dir).resolve().mkdir(parents=True, exist_ok=True)
         return Path(
             tempfile.mkdtemp(
                 prefix="chararep_scail2_",
-                dir=self._cfg.scail2_work_dir,
+                dir=work_dir,
             )
         )
 
@@ -160,12 +171,18 @@ class Scail2PreparedAssetsRunner:
             egocentric=egocentric,
         )
         logger.info("Running SCAIL-Pose replacement preprocessing in %s", job_dir)
-        result = subprocess.run(
-            cmd,
-            cwd=self._resolve_pose_repo_path(),
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self._resolve_pose_repo_path(),
+                capture_output=True,
+                text=True,
+                timeout=self._POSE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"SCAIL-Pose process_replacement.py timed out after {self._POSE_TIMEOUT:.0f} s"
+            )
         if result.returncode != 0:
             raise RuntimeError(self._format_pose_failure(result))
 
@@ -441,7 +458,7 @@ class Scail2PreparedAssetsRunner:
         return cmd
 
     @staticmethod
-    def _read_image_bgr(image_path: str) -> cv2.typing.MatLike:
+    def _read_image_bgr(image_path: str) -> np.ndarray:
         """Read an image as BGR uint8, using PIL as a fallback when needed."""
         img = cv2.imread(str(image_path))
         if img is not None:
