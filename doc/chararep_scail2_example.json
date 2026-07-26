@@ -1,0 +1,36 @@
+{
+  "backend": "scail2",
+  "input_video": "input_video.mp4",
+  "output_video": "output_scail2.mp4",
+  "characters": [
+    {
+      "find": "originals/villain",
+      "replace": "replacements/villain"
+    }
+  ],
+  "scail2_repo_path": "C:/models/SCAIL-2",
+  "scail2_ckpt_dir": "C:/models/SCAIL-2",
+  "scail2_model_path": "C:/models/SCAIL-2.safetensors",
+  "scail2_additional_reference_images": [
+    "prepared/back_view.png",
+    "prepared/closeup.png"
+  ],
+  "scail2_additional_reference_masks": [
+    "prepared/back_view_mask.png",
+    "prepared/closeup_mask.png"
+  ],
+  "scail2_prompt_file": "prompts/villain_replacement.txt",
+  "scail2_target_width": 896,
+  "scail2_target_height": 512,
+  "scail2_sample_steps": 40,
+  "scail2_sample_shift": 3.0,
+  "scail2_sample_guide_scale": 5.0,
+  "scail2_sample_solver": "unipc",
+  "scail2_matchnearest": false,
+  "scail2_egocentric": false,
+  "scail2_sam_text": [
+    "human",
+    "character"
+  ],
+  "copy_audio": true
+}

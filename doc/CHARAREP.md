@@ -85,6 +85,19 @@ python scripts/install_basicsr.py
 pip install -e ".[chararep]"
 ```
 
+### SCAIL-2 prerequisites
+
+To use `backend="scail2"`, you need an upstream SCAIL-2 checkout with
+`generate.py`, converted SCAIL-2 safetensors weights, and, for auto-prep,
+an upstream SCAIL-Pose checkout with SAM3 weights.
+
+1. Clone SCAIL-2 and initialize its `SCAIL-Pose` submodule.
+2. Install the SCAIL-2 environment recommended by the upstream project.
+3. Convert the downloaded checkpoint to `.safetensors` if you are using the `wan` branch flow.
+4. For auto-prep, install SCAIL-Pose dependencies and place `sam3.pt` under `pretrained_weights/`.
+
+The SCAIL-2 docs currently recommend Python 3.10-3.12 for that stack.
+
 ## Usage
 
 ### CLI (direct arguments)
@@ -148,6 +161,76 @@ Example `swap_config.json`:
 }
 ```
 
+### CLI (SCAIL-2 auto-prep from `--char`)
+
+```bash
+chararep \
+  --backend scail2 \
+  -i input_video.mp4 \
+  -o output_scail2.mp4 \
+  --char originals/villain replacements/villain \
+  --scail2-repo-path C:/models/SCAIL-2 \
+  --scail2-ckpt-dir C:/models/SCAIL-2 \
+  --scail2-model-path C:/models/SCAIL-2.safetensors \
+  --scail2-prompt-file prompts/villain_replacement.txt
+```
+
+In this mode, chararep stages the driving clip and the first portrait image from the
+`REPLACE` folder, runs `SCAIL-Pose/NLFPoseExtract/process_replacement.py`, then feeds
+the generated `ref_mask.png` and `replace_mask.mp4` into `generate.py`.
+
+Optional multi-reference inputs can still be supplied in this mode with
+`--scail2-additional-reference-image` and
+`--scail2-additional-reference-mask`. Those extra images and masks are passed
+through directly to SCAIL-2 after auto-prep finishes.
+
+Current limitation: the SCAIL-2 auto-prep path only supports one `--char` mapping per run.
+The `FIND` images are now used by chararep's own detector/recognizer stack to sample the
+driving clip before SCAIL-Pose runs. If that preflight sees exactly one matched target in a
+two-person clip, chararep auto-enables `--scail2-matchnearest`. If it sees multiple matched
+targets or more than two simultaneous faces, it rejects the clip early instead of guessing.
+
+### CLI (SCAIL-2 prepared assets)
+
+```bash
+chararep \
+  --backend scail2 \
+  -i input_video.mp4 \
+  -o output_scail2.mp4 \
+  --scail2-repo-path C:/models/SCAIL-2 \
+  --scail2-ckpt-dir C:/models/SCAIL-2 \
+  --scail2-model-path C:/models/SCAIL-2.safetensors \
+  --scail2-reference-image prepared/ref.png \
+  --scail2-reference-mask prepared/ref_mask.png \
+  --scail2-mask-video prepared/replace_mask.mp4 \
+  --scail2-prompt-file prompts/replacement.txt
+```
+
+Prepared-assets mode skips SCAIL-Pose and passes the supplied assets straight into
+SCAIL-2 inference.
+
+### CLI (SCAIL-2 multi-reference prepared assets)
+
+```bash
+chararep \
+  --backend scail2 \
+  -i input_video.mp4 \
+  -o output_scail2.mp4 \
+  --scail2-repo-path C:/models/SCAIL-2 \
+  --scail2-ckpt-dir C:/models/SCAIL-2 \
+  --scail2-model-path C:/models/SCAIL-2.safetensors \
+  --scail2-reference-image prepared/ref.png \
+  --scail2-reference-mask prepared/ref_mask.png \
+  --scail2-mask-video prepared/replace_mask.mp4 \
+  --scail2-additional-reference-image prepared/back_view.png prepared/closeup.png \
+  --scail2-additional-reference-mask prepared/back_view_mask.png prepared/closeup_mask.png \
+  --scail2-prompt-file prompts/replacement.txt
+```
+
+The additional reference image and mask lists are paired positionally and must have
+the same length. Use them when one main reference frame does not capture enough of
+the replacement character's appearance.
+
 ### Key CLI options
 
 | Flag | Description | Default |
@@ -178,6 +261,21 @@ Example `swap_config.json`:
 | `--log-file` | Write logs to file in addition to stderr | none |
 | `--timers` | Print cumulative per-stage pipeline timing report | false |
 | `--dump-config` | Print resolved pipeline config as JSON before run | false |
+| `--backend` | Execution backend: `classic` or `scail2` | `classic` |
+| `--scail2-repo-path` | Path to upstream SCAIL-2 checkout containing `generate.py` | none |
+| `--scail2-pose-repo-path` | Optional override for upstream SCAIL-Pose checkout | `<scail2-repo-path>/SCAIL-Pose` |
+| `--scail2-model-path` | Converted SCAIL-2 `.safetensors` checkpoint | none |
+| `--scail2-reference-image` | SCAIL-2 reference image; also used for auto-prep when masks are omitted | none |
+| `--scail2-reference-mask` | Prepared reference mask image for SCAIL-2 | none |
+| `--scail2-mask-video` | Prepared replacement mask video for SCAIL-2 | none |
+| `--scail2-additional-reference-image` | Space-separated extra SCAIL-2 reference images for multi-reference runs | none |
+| `--scail2-additional-reference-mask` | Space-separated masks paired with `--scail2-additional-reference-image` | none |
+| `--scail2-prompt` | Inline SCAIL-2 positive prompt | none |
+| `--scail2-prompt-file` | Text file containing the SCAIL-2 positive prompt | none |
+| `--scail2-matchnearest` | SCAIL-Pose auto-prep: choose one of two driving tracks by IoU with the reference mask | false |
+| `--scail2-egocentric` | SCAIL-Pose auto-prep: union disconnected actor parts for first-person footage | false |
+| `--scail2-sam-text` | Extra SAM3 prompts used during SCAIL-Pose auto-prep | `human character` |
+| `--scail2-sam3-model` | Optional override for the SAM3 weights path | none |
 
 ### Common command recipes
 
@@ -227,6 +325,12 @@ Run from JSON config:
 chararep --config swap_config.json
 ```
 
+SCAIL-2 auto-prep from a JSON config:
+
+```bash
+chararep --config doc/chararep_scail2_example.json
+```
+
 Debug and diagnostics (verbose logs, timing report, config dump):
 
 ```bash
@@ -260,6 +364,12 @@ pipeline = CharacterReplacementPipeline(cfg)
 stats = pipeline.run()
 print(stats)  # {'frames_total': 1200, 'frames_swapped': 450, ...}
 ```
+
+## SCAIL-2 JSON example
+
+See `doc/chararep_scail2_example.json` for a complete `backend="scail2"` example
+that uses the current `--char`-style mapping as the source of the replacement
+portrait while SCAIL-Pose derives `ref_mask.png` and `replace_mask.mp4` automatically.
 
 ## Input requirements and restrictions
 
