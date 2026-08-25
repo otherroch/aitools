@@ -12,7 +12,8 @@ Supports two description modes:
 
   VL mode (--vl):
     Rich, natural-language descriptions using a Qwen3-VL vision-language
-    model (or its Qwen3-Omni multimodal variant, Qwen3.5 model, or Gemma 4).
+    model (or its Qwen3-Omni multimodal variant, Qwen3.8 model, Qwen3.5 model,
+    or Gemma 4).
     Requires --video, --videos, --indir, or --filelist.
 """
 
@@ -105,6 +106,7 @@ def _run_vl(args) -> int:
     from videsc.model.loader import (
         load_model_and_processor,
         load_omni_model_and_processor,
+        load_qwen38_model_and_processor,
         load_qwen35_model_and_processor,
         load_gemma4_model_and_processor,
     )
@@ -113,9 +115,9 @@ def _run_vl(args) -> int:
     print("args: ", str(args))
     is_batch = bool(args.videos or args.indir or getattr(args, "filelist", None))
 
-    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen35=%s  gemma4=%s",
-                 is_batch, getattr(args, "omni", None), getattr(args, "qwen35", None),
-                 getattr(args, "gemma4", None))
+    logger.debug("_run_vl: is_batch=%s  omni=%s  qwen38=%s  qwen35=%s  gemma4=%s",
+                 is_batch, getattr(args, "omni", None), getattr(args, "qwen38", None),
+                 getattr(args, "qwen35", None), getattr(args, "gemma4", None))
 
     if is_batch:
         return run_batch(args)
@@ -155,6 +157,8 @@ def _run_vl(args) -> int:
     try:
         if args.omni:
             model, processor = load_omni_model_and_processor(args)
+        elif args.qwen38:
+            model, processor = load_qwen38_model_and_processor(args)
         elif args.qwen35:
             model, processor = load_qwen35_model_and_processor(args)
         elif getattr(args, "gemma4", False):

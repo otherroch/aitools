@@ -20,7 +20,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--vl",
         action="store_true",
-        help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, or Qwen3.5) instead of the WD14 tagger.",
+        help="Use a vision-language model (Qwen3-VL, Qwen3-Omni, Qwen3.8, Qwen3.5, or Gemma 4) instead of the WD14 tagger.",
     )
     p.add_argument(
         "--vllm",
@@ -160,6 +160,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Model / runtime
     model_group = vl.add_mutually_exclusive_group()
     model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
+    model_group.add_argument("--qwen38", action="store_true", help="model is Qwen3.8 (default: Inferact/Qwen3.8-27B-NVFP4)")
     model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
     model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4eb-it)")
     vl.add_argument(
@@ -424,6 +425,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _VL_DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 
     args = p.parse_args(argv)
+
+    # When --qwen38 is set and the user didn't explicitly change --model,
+    # default to the Qwen3.8 NVFP4 model on HuggingFace so the loader resolves correctly.
+    if args.qwen38 and args.model == _VL_DEFAULT_MODEL:
+        args.model = "Inferact/Qwen3.8-27B-NVFP4"
+        args.model_hf = True
 
     # When --qwen35 is set and the user didn't explicitly change --model,
     # default to the Qwen3.5 HuggingFace model so the loader resolves correctly.
