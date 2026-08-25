@@ -161,6 +161,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     model_group = vl.add_mutually_exclusive_group()
     model_group.add_argument("--omni", action="store_true", help="model is qwen3-omni")
     model_group.add_argument("--qwen35", action="store_true", help="model is Qwen3.5 (e.g. Qwen/Qwen3.5-4B)")
+    model_group.add_argument("--qwen38", action="store_true", help="model is Qwen3.8 (e.g. Inferact/qwen3.8-27b-nvfp4)")
     model_group.add_argument("--gemma4", action="store_true", help="model is Gemma 4 (e.g. google/gemma-4-4eb-it)")
     vl.add_argument(
         "--gemma4-chunk-duration",
@@ -429,6 +430,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # default to the Qwen3.5 HuggingFace model so the loader resolves correctly.
     if args.qwen35 and args.model == _VL_DEFAULT_MODEL:
         args.model = "Qwen/Qwen3.5-4B"
+        args.model_hf = True
+
+    # When --qwen38 is set and the user didn't explicitly change --model,
+    # default to the Qwen3.8 HuggingFace model so the loader resolves correctly.
+    if args.qwen38 and args.model == _VL_DEFAULT_MODEL:
+        args.model = "Inferact/qwen3.8-27b-nvfp4"
         args.model_hf = True
 
     # When --gemma4 is set and the user didn't explicitly change --model,

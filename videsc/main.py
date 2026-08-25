@@ -106,6 +106,7 @@ def _run_vl(args) -> int:
         load_model_and_processor,
         load_omni_model_and_processor,
         load_qwen35_model_and_processor,
+        load_qwen38_model_and_processor,
         load_gemma4_model_and_processor,
     )
     from videsc.pipeline.runner import run_batch, run_single_video, run_single_video_gemma4
@@ -157,6 +158,8 @@ def _run_vl(args) -> int:
             model, processor = load_omni_model_and_processor(args)
         elif args.qwen35:
             model, processor = load_qwen35_model_and_processor(args)
+        elif args.qwen38:
+            model, processor = load_qwen38_model_and_processor(args)
         elif getattr(args, "gemma4", False):
             model, processor = load_gemma4_model_and_processor(args)
             return run_single_video_gemma4(args, model, processor)
